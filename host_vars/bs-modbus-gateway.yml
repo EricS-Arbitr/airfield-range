@@ -1,0 +1,31 @@
+---
+# host_vars/bs-modbus-gateway.yml — VyOS router
+# Image:   RC-VyOS-Router:1.1.0
+# Mgmt:    10.255.240.109/20 (position LAST → eth4; managed by SimSpace,
+#          not by the vyos role; ansible_host resolves over it)
+ansible_host: "10.255.240.109"
+
+network_interfaces:
+  - name: "eth0"                     # switch-5 [BGPPEER]
+    ipv4:
+      address: "172.31.1.18"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+  - name: "eth1"                     # Fuel-PLC [GATEWAY]
+    ipv4:
+      address: "172.16.45.9"
+      netmask: "255.255.255.248"
+      type: "ethernet"
+  - name: "eth2"                     # mtu [GATEWAY]
+    ipv4:
+      address: "172.16.45.1"
+      netmask: "255.255.255.248"
+      type: "ethernet"
+  - name: "eth3"                     # Fuel-Sim [GATEWAY]
+    ipv4:
+      address: "172.16.46.16"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+
+# Routing protocol (BGP / OSPF / static) — populate when site.yml's
+# network play wires the IGP/eBGP intent. See group_vars/net.yml.

@@ -1,0 +1,54 @@
+---
+# ============================================================
+# flightops.yml — flightops.lan domain configuration
+# ============================================================
+# Applies to: [flightops] (workstations + services).
+# Trust direction (CLAUDE.md §4): vcab.lan TRUSTS flightops.lan (one-way,
+# outgoing on vcab). flightops users access vcab resources by default;
+# vcab users default-denied into flightops.
+# ============================================================
+domain_name: "flightops.lan"
+short_domain_name: "flightops"
+domain_tld_name: "lan"
+
+# --- Domain controllers (PDC emulator listed first) ----------
+domain_controllers_flightops:
+  - { name: "fops-dc01", ip: "172.31.3.11" }    # PDC emulator
+  - { name: "fops-dc02", ip: "172.31.3.12" }
+
+# --- File share ----------------------------------------------
+file_server_alias: "fops-file"
+file_server_ip: "172.31.3.15"                   # fops-file01
+map_drive_letter: "F"
+map_drive_path: "\\\\fops-file01.flightops.lan\\Share"
+
+# --- DNS records (skeleton) ---------------------------------
+internal_dns_records:
+  - { name: "fops-file",  type: "A", value: "172.31.3.15", zone: "{{ domain_name }}" }
+  - { name: "fops-file01", type: "A", value: "172.31.3.15", zone: "{{ domain_name }}" }
+  - { name: "fops-file02", type: "A", value: "172.31.3.16", zone: "{{ domain_name }}" }
+  - { name: "fops-wec",    type: "A", value: "172.31.3.20", zone: "{{ domain_name }}" }
+  # ATC + weather services
+  - { name: "atc-radar",   type: "A", value: "172.31.5.10", zone: "{{ domain_name }}" }
+  - { name: "atc-weather", type: "A", value: "172.31.5.11", zone: "{{ domain_name }}" }
+  - { name: "atc-station", type: "A", value: "172.31.5.12", zone: "{{ domain_name }}" }
+  # App tier
+  - { name: "fops-app01",  type: "A", value: "172.31.3.30", zone: "{{ domain_name }}" }
+  - { name: "fops-app02",  type: "A", value: "172.31.3.31", zone: "{{ domain_name }}" }
+  - { name: "fops-app03",  type: "A", value: "172.31.3.32", zone: "{{ domain_name }}" }
+
+# --- Cross-forest trust to vcab.lan -------------------------
+# Implementation: external, one-way, outgoing trust on vcab → incoming on
+# flightops. Wired by the trust-setup play; vault holds the trust secret.
+ad_trust:
+  partner_domain: "vcab.lan"
+  type: "external"
+  direction: "incoming"             # flightops is the TRUSTED domain
+  trust_secret: "{{ vault_ad_trust_secret }}"
+
+# --- Domain users (skeleton — fill from vault.yml) ---------
+DomainUsers:
+  - name: "simspace"
+    fullname: "SimSpace Admin"
+    password: "{{ vault_simspace_password }}"
+    groups: [ "Domain Admins" ]

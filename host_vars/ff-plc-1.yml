@@ -1,0 +1,18 @@
+---
+# host_vars/ff-plc-1.yml — Linux (Ubuntu)
+# Image:   global/RDP_Ubuntu_Server_24.04:1.1.0
+# Mgmt:    10.255.245.10/20 (position FIRST → eth0)
+ansible_host: "10.255.245.10"
+network_interfaces:
+  - name: "eth0"                     # mgmt (position FIRST)
+    ipv4:
+      type: "ethernet"
+      address: "10.255.245.10"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "eth1"                     # production — Fuel-PLC
+    ipv4:
+      type: "ethernet"
+      address: "172.16.45.10"
+      netmask: "255.255.255.248"
+      gateway: "172.16.45.9"

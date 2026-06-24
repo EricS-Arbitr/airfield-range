@@ -1,0 +1,20 @@
+---
+# host_vars/bs-dc01.yml — Windows
+# Image:   global/RDP_Windows_Server_2025:1.1.0
+# Prod:    Services 172.31.2.7/24 → gw 172.31.2.1
+# Mgmt:    10.255.240.132/20 (position FIRST → Ethernet0)
+ansible_host: "10.255.240.132"
+network_interfaces:
+  - name: "Ethernet0"               # mgmt (position FIRST)
+    ipv4:
+      address: "10.255.240.132"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "Ethernet1"               # production — Services
+    ipv4:
+      address: "172.31.2.7"
+      netmask: "255.255.255.0"
+      gateway: "172.31.2.1"
+    dns:
+      - "172.31.2.8"
+      - "172.31.2.7"

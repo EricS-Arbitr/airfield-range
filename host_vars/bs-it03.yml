@@ -1,0 +1,20 @@
+---
+# host_vars/bs-it03.yml — Windows
+# Image:   global/RC_NG_Windows_11:1.0.0
+# Prod:    IT 172.31.15.13/24 → gw 172.31.15.1
+# Mgmt:    10.255.240.110/20 (position FIRST → Ethernet0)
+ansible_host: "10.255.240.110"
+network_interfaces:
+  - name: "Ethernet0"               # mgmt (position FIRST)
+    ipv4:
+      address: "10.255.240.110"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "Ethernet1"               # production — IT
+    ipv4:
+      address: "172.31.15.13"
+      netmask: "255.255.255.0"
+      gateway: "172.31.15.1"
+    dns:
+      - "172.31.2.7"
+      - "172.31.2.8"

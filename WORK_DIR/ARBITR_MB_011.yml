@@ -1,0 +1,1233 @@
+---
+name: "ARBITR_MB"
+description: "Military Base"
+resources:
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Flight-Ops-Users"
+  properties:
+    cidr: "172.31.6.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-ops-rtr"
+  properties:
+    image: "RC-VyOS-Router:1.1.0"
+    networkInterfaces:
+    - name: "switch-2"
+      ipAddress: "172.31.1.10"
+      prefix: 30
+      role: "BGPPEER"
+    - name: "Flight-Ops-Services"
+      ipAddress: "172.31.3.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "Flight-Control-Center"
+      ipAddress: "172.31.5.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "Flight-Ops-Users"
+      ipAddress: "172.31.6.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "switch-3"
+      ipAddress: "172.31.1.13"
+      prefix: 30
+      role: "BGPPEER"
+    managementInterface:
+      ipAddress: "10.255.240.100"
+      position: "LAST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-eng04"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Engineering-Control-Center"
+      ipAddress: "172.31.8.14"
+      prefix: 24
+    hostname: "bs-eng04"
+    managementInterface:
+      ipAddress: "10.255.240.104"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "IT"
+  properties:
+    cidr: "172.31.15.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-wec"
+  metadata: {}
+  properties:
+    image: "global/packer-windows-2025-server-datacenter:1.0.0"
+    networkInterfaces:
+    - name: "Services"
+      ipAddress: "172.31.2.17"
+      prefix: 24
+    hostname: "bs-wec"
+    managementInterface:
+      ipAddress: "10.255.240.105"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-www"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_22.04.5:1.1.0"
+    networkInterfaces:
+    - name: "DMZ"
+      ipAddress: "172.31.12.3"
+      prefix: 24
+    hostname: "bs-www"
+    managementInterface:
+      ipAddress: "10.255.240.145"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-hq06"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Headquarters"
+      ipAddress: "172.31.14.16"
+      prefix: 24
+    hostname: "bs-hq06"
+    managementInterface:
+      ipAddress: "10.255.240.106"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Physical-Security"
+  properties:
+    cidr: "172.31.11.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-supply05"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Supply"
+      ipAddress: "172.31.16.15"
+      prefix: 24
+    hostname: "bs-supply05"
+    managementInterface:
+      ipAddress: "10.255.240.107"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "mtu"
+  properties:
+    cidr: "172.16.45.0/29"
+- type: "range.resource.configuration.ScriptDefinition::1.0.0"
+  name: "deploy-script"
+  properties:
+    cwd: "/etc/ansible"
+    user: "root"
+    content: "./deploy.sh | tee /var/log/playbook_run.log\n"
+    timeout: 7200
+    scriptType: "BASH"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-flare"
+  metadata: {}
+  properties:
+    image: "RDP_Windows_Flare:1.1.1"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.18"
+      prefix: 24
+    hostname: "soc-flare"
+    managementInterface:
+      ipAddress: "10.255.240.108"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-modbus-gateway"
+  properties:
+    image: "RC-VyOS-Router:1.1.0"
+    networkInterfaces:
+    - name: "switch-5"
+      ipAddress: "172.31.1.18"
+      prefix: 30
+      role: "BGPPEER"
+    - name: "Fuel-PLC"
+      ipAddress: "172.16.45.9"
+      prefix: 29
+      role: "GATEWAY"
+    - name: "mtu"
+      ipAddress: "172.16.45.1"
+      prefix: 29
+      role: "GATEWAY"
+    - name: "Fuel-Sim"
+      ipAddress: "172.16.46.16"
+      prefix: 24
+      role: "GATEWAY"
+    managementInterface:
+      ipAddress: "10.255.240.109"
+      position: "LAST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-it03"
+  metadata: {}
+  properties:
+    image: "global/RC_NG_Windows_11:1.0.0"
+    networkInterfaces:
+    - name: "IT"
+      ipAddress: "172.31.15.13"
+      prefix: 24
+    hostname: "bs-it03"
+    managementInterface:
+      ipAddress: "10.255.240.110"
+      position: "FIRST"
+- type: "range.resource.primitive.Switch::1.0.0"
+  name: "switch-0"
+  properties: {}
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "atc-station"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    networkInterfaces:
+    - name: "Flight-Control-Center"
+      ipAddress: "172.31.5.12"
+      prefix: 24
+    hostname: "atc-station"
+    managementInterface:
+      ipAddress: "10.255.240.111"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-app02"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_22.04.5:1.1.0"
+    networkInterfaces:
+    - name: "Flight-Ops-Services"
+      ipAddress: "172.31.3.31"
+      prefix: 24
+    hostname: "fops-app02"
+    managementInterface:
+      ipAddress: "10.255.240.112"
+      position: "FIRST"
+- type: "range.resource.primitive.Switch::1.0.0"
+  name: "switch-1"
+  properties: {}
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-supply04"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Supply"
+      ipAddress: "172.31.16.14"
+      prefix: 24
+    hostname: "bs-supply04"
+    managementInterface:
+      ipAddress: "10.255.240.113"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-openvas"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_24.04:1.1.0"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.16"
+      prefix: 24
+    hostname: "soc-openvas"
+    managementInterface:
+      ipAddress: "10.255.240.114"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fuel-farm-sim"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_24.04:1.1.0"
+    networkInterfaces:
+    - name: "Fuel-Sim"
+      ipAddress: "172.16.46.17"
+      prefix: 24
+    hostname: "fuel-farm-sim"
+    managementInterface:
+      ipAddress: "10.255.245.17"
+      position: "FIRST"
+- type: "range.resource.primitive.Switch::1.0.0"
+  name: "switch-4"
+  properties: {}
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-hq01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Headquarters"
+      ipAddress: "172.31.14.11"
+      prefix: 24
+    hostname: "bs-hq01"
+    managementInterface:
+      ipAddress: "10.255.240.116"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-ops08"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Ops-Users"
+      ipAddress: "172.31.6.18"
+      prefix: 24
+    hostname: "fops-ops08"
+    managementInterface:
+      ipAddress: "10.255.240.103"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "control-10"
+  properties:
+    cidr: "10.10.0.0/16"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fuel-hist"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_24.04:1.1.0"
+    networkInterfaces:
+    - name: "Fuel-Sim"
+      ipAddress: "172.16.46.18"
+      prefix: 24
+    hostname: "fuel-hist"
+    managementInterface:
+      ipAddress: "10.255.245.18"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-eng02"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Engineering-Control-Center"
+      ipAddress: "172.31.8.12"
+      prefix: 24
+    hostname: "bs-eng02"
+    managementInterface:
+      ipAddress: "10.255.240.117"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-dc01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_Server_2022:1.1.0"
+    networkInterfaces:
+    - name: "Flight-Ops-Services"
+      ipAddress: "172.31.3.11"
+      prefix: 24
+    hostname: "fops-dc01"
+    managementInterface:
+      ipAddress: "10.255.240.118"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-eng05"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_25:1.1.0"
+    networkInterfaces:
+    - name: "Engineering-Control-Center"
+      ipAddress: "172.31.8.15"
+      prefix: 24
+    hostname: "bs-eng05"
+    managementInterface:
+      ipAddress: "10.255.240.119"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "elgg"
+  properties:
+    image: "global/RC_NG_Ubuntu_16_Elgg:1.1.0"
+    networkInterfaces:
+    - name: "Internet"
+      ipAddress: "200.200.200.205"
+      prefix: 24
+    hostname: "elgg"
+    managementInterface:
+      ipAddress: "10.255.240.120"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-hq03"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Headquarters"
+      ipAddress: "172.31.14.13"
+      prefix: 24
+    hostname: "bs-hq03"
+    managementInterface:
+      ipAddress: "10.255.240.121"
+      position: "FIRST"
+- type: "range.resource.primitive.Switch::1.0.0"
+  name: "switch-2"
+  properties: {}
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Headquarters"
+  properties:
+    cidr: "172.31.14.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-analyst01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.31"
+      prefix: 24
+    hostname: "soc-analyst01"
+    managementInterface:
+      ipAddress: "10.255.240.122"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "is-inet"
+  properties:
+    image: "RC-IS-INET:1.1.0"
+    networkInterfaces:
+    - name: "Internet"
+      ipAddress: "200.200.200.2"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.123"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-sec-rtr"
+  properties:
+    image: "RC-VyOS-Router:1.1.0"
+    networkInterfaces:
+    - name: "switch-4"
+      ipAddress: "172.31.1.22"
+      prefix: 30
+      role: "BGPPEER"
+    - name: "Physical-Security"
+      ipAddress: "172.31.11.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "SOC"
+      ipAddress: "172.31.7.1"
+      prefix: 24
+      role: "GATEWAY"
+    managementInterface:
+      ipAddress: "10.255.240.124"
+      position: "LAST"
+- type: "range.resource.configuration.VmConfiguration::1.0.0"
+  name: "download-range-vars"
+  properties:
+    selector:
+      matchInstances:
+      - "ansible"
+    configurationResources:
+    - name: "download-range-vars-script"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-eng03"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Engineering-Control-Center"
+      ipAddress: "172.31.8.13"
+      prefix: 24
+    hostname: "bs-eng03"
+    managementInterface:
+      ipAddress: "10.255.240.125"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Power-PLC"
+  properties:
+    cidr: "172.16.47.8/29"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-it02"
+  metadata: {}
+  properties:
+    image: "global/RC_NG_Windows_11:1.0.0"
+    networkInterfaces:
+    - name: "IT"
+      ipAddress: "172.31.15.12"
+      prefix: 24
+    hostname: "bs-it02"
+    managementInterface:
+      ipAddress: "10.255.240.126"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-it05"
+  metadata: {}
+  properties:
+    image: "global/RC_NG_Windows_11:1.0.0"
+    networkInterfaces:
+    - name: "IT"
+      ipAddress: "172.31.15.15"
+      prefix: 24
+    hostname: "bs-it05"
+    managementInterface:
+      ipAddress: "10.255.240.127"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-it01"
+  metadata: {}
+  properties:
+    image: "global/RC_NG_Windows_11:1.0.0"
+    networkInterfaces:
+    - name: "IT"
+      ipAddress: "172.31.15.11"
+      prefix: 24
+    hostname: "bs-it01"
+    managementInterface:
+      ipAddress: "10.255.240.128"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-elastic"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_24.04:1.1.0"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.15"
+      prefix: 24
+    hostname: "soc-elastic"
+    managementInterface:
+      ipAddress: "10.255.240.129"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-edge-fw"
+  properties:
+    image: "RC_pfSense:1.0.0"
+    networkInterfaces:
+    - name: "switch-0"
+      ipAddress: "199.252.163.1"
+      prefix: 30
+      role: "BGPPEER"
+    - name: "DMZ"
+      ipAddress: "172.31.12.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "switch-1"
+      ipAddress: "172.31.1.5"
+      prefix: 30
+      role: "BGPPEER"
+    managementInterface:
+      ipAddress: "10.255.240.191"
+      position: "LAST"
+- type: "range.resource.primitive.Switch::1.0.0"
+  name: "switch-5"
+  properties: {}
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "SOC"
+  properties:
+    cidr: "172.31.7.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-edge-rtr"
+  properties:
+    image: "RC-VyOS-Router:1.1.0"
+    networkInterfaces:
+    - name: "Internet"
+      ipAddress: "200.200.200.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "switch-0"
+      ipAddress: "199.252.163.2"
+      prefix: 30
+      role: "BGPPEER"
+    managementInterface:
+      ipAddress: "10.255.240.172"
+      position: "LAST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-ops07"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Ops-Users"
+      ipAddress: "172.31.6.17"
+      prefix: 24
+    hostname: "fops-ops07"
+    managementInterface:
+      ipAddress: "10.255.240.130"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-wec01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_Server_2022:1.1.0"
+    networkInterfaces:
+    - name: "Flight-Ops-Services"
+      ipAddress: "172.31.3.20"
+      prefix: 24
+    hostname: "fops-wec01"
+    managementInterface:
+      ipAddress: "10.255.240.131"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-dc01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_Server_2025:1.1.0"
+    networkInterfaces:
+    - name: "Services"
+      ipAddress: "172.31.2.7"
+      prefix: 24
+    hostname: "bs-dc01"
+    managementInterface:
+      ipAddress: "10.255.240.132"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-supply01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Supply"
+      ipAddress: "172.31.16.11"
+      prefix: 24
+    hostname: "bs-supply01"
+    managementInterface:
+      ipAddress: "10.255.240.133"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-file02"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_Server_2022:1.1.0"
+    networkInterfaces:
+    - name: "Flight-Ops-Services"
+      ipAddress: "172.31.3.16"
+      prefix: 24
+    hostname: "fops-file02"
+    managementInterface:
+      ipAddress: "10.255.240.134"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-hq02"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Headquarters"
+      ipAddress: "172.31.14.12"
+      prefix: 24
+    hostname: "bs-hq02"
+    managementInterface:
+      ipAddress: "10.255.240.135"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-app01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_22.04.5:1.1.0"
+    networkInterfaces:
+    - name: "Flight-Ops-Services"
+      ipAddress: "172.31.3.30"
+      prefix: 24
+    hostname: "fops-app01"
+    managementInterface:
+      ipAddress: "10.255.240.136"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-analyst04"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.34"
+      prefix: 24
+    hostname: "soc-analyst04"
+    managementInterface:
+      ipAddress: "10.255.240.137"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-app03"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_22.04.5:1.1.0"
+    networkInterfaces:
+    - name: "Flight-Ops-Services"
+      ipAddress: "172.31.3.32"
+      prefix: 24
+    hostname: "fops-app03"
+    managementInterface:
+      ipAddress: "10.255.240.138"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-file02"
+  metadata: {}
+  properties:
+    image: "global/packer-windows-2025-server-datacenter:1.0.0"
+    networkInterfaces:
+    - name: "Services"
+      ipAddress: "172.31.2.11"
+      prefix: 24
+    hostname: "bs-file02"
+    managementInterface:
+      ipAddress: "10.255.240.139"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-flight02"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Control-Center"
+      ipAddress: "172.31.5.82"
+      prefix: 24
+    hostname: "fops-flight02"
+    managementInterface:
+      ipAddress: "10.255.240.140"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "atc-radar"
+  properties:
+    image: "global/RDP_Ubuntu_Server_22.04.5:1.1.0"
+    networkInterfaces:
+    - name: "Flight-Control-Center"
+      ipAddress: "172.31.5.10"
+      prefix: 24
+    hostname: "atc-radar"
+    managementInterface:
+      ipAddress: "10.255.240.141"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-analyst03"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.33"
+      prefix: 24
+    hostname: "soc-analyst03"
+    managementInterface:
+      ipAddress: "10.255.240.142"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-ops04"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Ops-Users"
+      ipAddress: "172.31.6.14"
+      prefix: 24
+    hostname: "fops-ops04"
+    managementInterface:
+      ipAddress: "10.255.240.143"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-supply03"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Supply"
+      ipAddress: "172.31.16.13"
+      prefix: 24
+    hostname: "bs-supply03"
+    managementInterface:
+      ipAddress: "10.255.240.144"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Flight-Ops-Services"
+  properties:
+    cidr: "172.31.3.0/24"
+- type: "range.resource.primitive.Switch::1.0.0"
+  name: "switch-3"
+  properties: {}
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-analyst02"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.32"
+      prefix: 24
+    hostname: "soc-analyst02"
+    managementInterface:
+      ipAddress: "10.255.240.146"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Services"
+  properties:
+    cidr: "172.31.2.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-flight01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Control-Center"
+      ipAddress: "172.31.5.81"
+      prefix: 24
+    hostname: "fops-flight01"
+    managementInterface:
+      ipAddress: "10.255.240.147"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-flight03"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Control-Center"
+      ipAddress: "172.31.5.83"
+      prefix: 24
+    hostname: "fops-flight03"
+    managementInterface:
+      ipAddress: "10.255.240.148"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Engineering-Control-Center"
+  properties:
+    cidr: "172.31.8.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-dc02"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_Server_2022:1.1.0"
+    networkInterfaces:
+    - name: "Flight-Ops-Services"
+      ipAddress: "172.31.3.12"
+      prefix: 24
+    hostname: "fops-dc02"
+    managementInterface:
+      ipAddress: "10.255.240.149"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-analyst06"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.36"
+      prefix: 24
+    hostname: "soc-analyst06"
+    managementInterface:
+      ipAddress: "10.255.240.150"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-analyst05"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.35"
+      prefix: 24
+    hostname: "soc-analyst05"
+    managementInterface:
+      ipAddress: "10.255.240.151"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Supply"
+  properties:
+    cidr: "172.31.16.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-ops-fw"
+  properties:
+    image: "RC_pfSense:1.0.0"
+    networkInterfaces:
+    - name: "switch-3"
+      ipAddress: "172.31.1.14"
+      prefix: 30
+      role: "BGPPEER"
+    - name: "Engineering-Control-Center"
+      ipAddress: "172.31.8.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "switch-4"
+      ipAddress: "172.31.1.21"
+      prefix: 30
+      role: "BGPPEER"
+    - name: "switch-5"
+      ipAddress: "172.31.1.17"
+      prefix: 30
+      role: "BGPPEER"
+    managementInterface:
+      ipAddress: "10.255.240.192"
+      position: "LAST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-ftp"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_24.04:1.1.0"
+    networkInterfaces:
+    - name: "DMZ"
+      ipAddress: "172.31.12.2"
+      prefix: 24
+    hostname: "bs-ftp"
+    managementInterface:
+      ipAddress: "10.255.240.200"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "ansible"
+  properties:
+    image: "global/RC_NG_Ansible:2.0.4"
+    networkInterfaces:
+    - name: "control-10"
+      ipAddress: "10.10.10.10"
+      prefix: 16
+    managementInterface:
+      ipAddress: "10.255.240.152"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-sift"
+  metadata: {}
+  properties:
+    image: "RDP_SIFT:1.1.1"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.17"
+      prefix: 24
+    hostname: "soc-sift"
+    managementInterface:
+      ipAddress: "10.255.240.153"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-hq05"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Headquarters"
+      ipAddress: "172.31.14.15"
+      prefix: 24
+    hostname: "bs-hq05"
+    managementInterface:
+      ipAddress: "10.255.240.154"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Flight-Control-Center"
+  properties:
+    cidr: "172.31.5.0/24"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "DMZ"
+  properties:
+    cidr: "172.31.12.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "atc-weather"
+  properties:
+    image: "global/RDP_Ubuntu_Server_22.04.5:1.1.0"
+    networkInterfaces:
+    - name: "Flight-Control-Center"
+      ipAddress: "172.31.5.11"
+      prefix: 24
+    hostname: "atc-weather"
+    managementInterface:
+      ipAddress: "10.255.240.155"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-file01"
+  metadata: {}
+  properties:
+    image: "global/packer-windows-2025-server-datacenter:1.0.0"
+    networkInterfaces:
+    - name: "Services"
+      ipAddress: "172.31.2.10"
+      prefix: 24
+    hostname: "bs-file01"
+    managementInterface:
+      ipAddress: "10.255.240.156"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Fuel-Sim"
+  properties:
+    cidr: "172.16.46.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-it04"
+  metadata: {}
+  properties:
+    image: "global/RC_NG_Windows_11:1.0.0"
+    networkInterfaces:
+    - name: "IT"
+      ipAddress: "172.31.15.14"
+      prefix: 24
+    hostname: "bs-it04"
+    managementInterface:
+      ipAddress: "10.255.240.157"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-ro-hist"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_24.04:1.1.0"
+    networkInterfaces:
+    - name: "Engineering-Control-Center"
+      ipAddress: "172.31.8.5"
+      prefix: 24
+    hostname: "bs-ro-hist"
+    managementInterface:
+      ipAddress: "10.255.240.158"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-ns1"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_24.04:1.1.0"
+    networkInterfaces:
+    - name: "DMZ"
+      ipAddress: "172.31.12.5"
+      prefix: 24
+    hostname: "bs-ns1"
+    managementInterface:
+      ipAddress: "10.255.240.159"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-core-rtr"
+  properties:
+    image: "RC-VyOS-Router:1.1.0"
+    networkInterfaces:
+    - name: "switch-1"
+      ipAddress: "172.31.1.6"
+      prefix: 30
+      role: "BGPPEER"
+    - name: "Services"
+      ipAddress: "172.31.2.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "Headquarters"
+      ipAddress: "172.31.14.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "IT"
+      ipAddress: "172.31.15.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "Supply"
+      ipAddress: "172.31.16.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "switch-2"
+      ipAddress: "172.31.1.9"
+      prefix: 30
+      role: "BGPPEER"
+    managementInterface:
+      ipAddress: "10.255.240.160"
+      position: "LAST"
+- type: "range.resource.configuration.VmConfiguration::1.0.0"
+  name: "deploy-script-execution"
+  dependsOn:
+  - "download-range-vars"
+  properties:
+    selector:
+      matchInstances:
+      - "ansible"
+    configurationResources:
+    - name: "deploy-script"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-flight04"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Control-Center"
+      ipAddress: "172.31.5.84"
+      prefix: 24
+    hostname: "fops-flight04"
+    managementInterface:
+      ipAddress: "10.255.240.102"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Internet"
+  properties:
+    cidr: "200.200.200.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-ops05"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Ops-Users"
+      ipAddress: "172.31.6.15"
+      prefix: 24
+    hostname: "fops-ops05"
+    managementInterface:
+      ipAddress: "10.255.240.161"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-syslog"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_24.04:1.1.0"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.13"
+      prefix: 24
+    hostname: "soc-syslog"
+    managementInterface:
+      ipAddress: "10.255.240.162"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-eng01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Engineering-Control-Center"
+      ipAddress: "172.31.8.11"
+      prefix: 24
+    hostname: "bs-eng01"
+    managementInterface:
+      ipAddress: "10.255.240.101"
+      position: "FIRST"
+- type: "range.resource.configuration.ScriptDefinition::1.0.0"
+  name: "download-range-vars-script"
+  properties:
+    cwd: "/etc/ansible"
+    user: "root"
+    content: "wget --no-check-certificate --no-cache -e use_proxy=yes -e https_proxy=10.255.240.1:3128\
+      \ -O /etc/ansible/ab-mb.tgz  https://github.com/EricS-Arbitr/airfield-range/raw/main/ab_mb.tgz\
+      \ && tar -xvzf ab_mb.tgz\n"
+    scriptType: "BASH"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "ff-plc-1"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_24.04:1.1.0"
+    networkInterfaces:
+    - name: "Fuel-PLC"
+      ipAddress: "172.16.45.10"
+      prefix: 29
+    hostname: "ff-plc-1"
+    managementInterface:
+      ipAddress: "10.255.245.10"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-ops03"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Ops-Users"
+      ipAddress: "172.31.6.13"
+      prefix: 24
+    hostname: "fops-ops03"
+    managementInterface:
+      ipAddress: "10.255.240.163"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-ops06"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Ops-Users"
+      ipAddress: "172.31.6.16"
+      prefix: 24
+    hostname: "fops-ops06"
+    managementInterface:
+      ipAddress: "10.255.240.164"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-file01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_Server_2022:1.1.0"
+    networkInterfaces:
+    - name: "Flight-Ops-Services"
+      ipAddress: "172.31.3.15"
+      prefix: 24
+    hostname: "fops-file01"
+    managementInterface:
+      ipAddress: "10.255.240.165"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-eng06"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_25:1.1.0"
+    networkInterfaces:
+    - name: "Engineering-Control-Center"
+      ipAddress: "172.31.8.16"
+      prefix: 24
+    hostname: "bs-eng06"
+    managementInterface:
+      ipAddress: "10.255.240.166"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "control-room-hmi"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_24.04:1.1.0"
+    networkInterfaces:
+    - name: "mtu"
+      ipAddress: "172.16.45.3"
+      prefix: 29
+    - name: "Power-PLC"
+      ipAddress: "172.16.47.9"
+      prefix: 29
+    hostname: "control-room-hmi"
+    managementInterface:
+      ipAddress: "10.255.245.3"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Fuel-PLC"
+  properties:
+    cidr: "172.16.45.8/29"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-hq04"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_11:1.1.2"
+    networkInterfaces:
+    - name: "Headquarters"
+      ipAddress: "172.31.14.14"
+      prefix: 24
+    hostname: "bs-hq04"
+    managementInterface:
+      ipAddress: "10.255.240.167"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fuel-db"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Server_24.04:1.1.0"
+    networkInterfaces:
+    - name: "Fuel-Sim"
+      ipAddress: "172.16.46.19"
+      prefix: 24
+    hostname: "fuel-db"
+    managementInterface:
+      ipAddress: "10.255.245.19"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-ops02"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Ops-Users"
+      ipAddress: "172.31.6.12"
+      prefix: 24
+    hostname: "fops-ops02"
+    managementInterface:
+      ipAddress: "10.255.240.168"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-ops01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Ops-Users"
+      ipAddress: "172.31.6.11"
+      prefix: 24
+    hostname: "fops-ops01"
+    managementInterface:
+      ipAddress: "10.255.240.169"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-dc02"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_Server_2025:1.1.0"
+    networkInterfaces:
+    - name: "Services"
+      ipAddress: "172.31.2.8"
+      prefix: 24
+    hostname: "bs-dc02"
+    managementInterface:
+      ipAddress: "10.255.240.170"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-supply02"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Supply"
+      ipAddress: "172.31.16.12"
+      prefix: 24
+    hostname: "bs-supply02"
+    managementInterface:
+      ipAddress: "10.255.240.171"
+      position: "FIRST"

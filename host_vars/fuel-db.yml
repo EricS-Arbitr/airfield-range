@@ -1,0 +1,18 @@
+---
+# host_vars/fuel-db.yml — Linux (Ubuntu)
+# Image:   global/RDP_Ubuntu_Server_24.04:1.1.0
+# Mgmt:    10.255.245.19/20 (position FIRST → eth0)
+ansible_host: "10.255.245.19"
+network_interfaces:
+  - name: "eth0"                     # mgmt (position FIRST)
+    ipv4:
+      type: "ethernet"
+      address: "10.255.245.19"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "eth1"                     # production — Fuel-Sim
+    ipv4:
+      type: "ethernet"
+      address: "172.16.46.19"
+      netmask: "255.255.255.0"
+      gateway: "172.16.46.16"

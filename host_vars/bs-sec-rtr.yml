@@ -1,0 +1,26 @@
+---
+# host_vars/bs-sec-rtr.yml — VyOS router
+# Image:   RC-VyOS-Router:1.1.0
+# Mgmt:    10.255.240.124/20 (position LAST → eth3; managed by SimSpace,
+#          not by the vyos role; ansible_host resolves over it)
+ansible_host: "10.255.240.124"
+
+network_interfaces:
+  - name: "eth0"                     # switch-4 [BGPPEER]
+    ipv4:
+      address: "172.31.1.22"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+  - name: "eth1"                     # Physical-Security [GATEWAY]
+    ipv4:
+      address: "172.31.11.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+  - name: "eth2"                     # SOC [GATEWAY]
+    ipv4:
+      address: "172.31.7.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+
+# Routing protocol (BGP / OSPF / static) — populate when site.yml's
+# network play wires the IGP/eBGP intent. See group_vars/net.yml.

@@ -1,0 +1,9 @@
+---
+- name: wait for Windows systems to be online
+  ansible.builtin.wait_for_connection:
+    timeout: 1800
+    delay: 30
+    sleep: 10
+
+- name: Ping test to verify connectivity
+  win_ping:

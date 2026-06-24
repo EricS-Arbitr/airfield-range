@@ -1,0 +1,42 @@
+---
+# ============================================================
+# vcab.yml — vcab.lan domain configuration
+# ============================================================
+# Applies to: [vcab] (workstations + services) + any other hosts later
+# explicitly joined to vcab.lan (Engineering / SOC TBD per CLAUDE.md §4).
+# ============================================================
+domain_name: "vcab.lan"
+short_domain_name: "vcab"
+domain_tld_name: "lan"
+
+# --- Domain controllers (PDC emulator listed first) ----------
+domain_controllers_vcab:
+  - { name: "bs-dc01", ip: "172.31.2.7" }    # PDC emulator
+  - { name: "bs-dc02", ip: "172.31.2.8" }
+
+# --- File share ----------------------------------------------
+file_server_alias: "file"
+file_server_ip: "172.31.2.10"                # bs-file01
+map_drive_letter: "S"
+map_drive_path: "\\\\bs-file01.vcab.lan\\Share"
+
+# --- DNS records (skeleton; expand as services come online) ---
+internal_dns_records:
+  - { name: "file",     type: "A", value: "172.31.2.10", zone: "{{ domain_name }}" }
+  - { name: "file01",   type: "A", value: "172.31.2.10", zone: "{{ domain_name }}" }
+  - { name: "file02",   type: "A", value: "172.31.2.11", zone: "{{ domain_name }}" }
+  - { name: "wec",      type: "A", value: "172.31.2.17", zone: "{{ domain_name }}" }
+  - { name: "ntp",      type: "A", value: "172.31.2.6",  zone: "{{ domain_name }}" }  # bs-ntp (pending)
+  # DMZ services advertised inward via internal DNS:
+  - { name: "www",      type: "A", value: "172.31.12.3", zone: "{{ domain_name }}" }
+  - { name: "ftp",      type: "A", value: "172.31.12.2", zone: "{{ domain_name }}" }
+  - { name: "ns1",      type: "A", value: "172.31.12.5", zone: "{{ domain_name }}" }
+
+# --- Domain users (skeleton — fill from vault.yml) -----------
+DomainUsers:
+  - name: "simspace"
+    fullname: "SimSpace Admin"
+    password: "{{ vault_simspace_password }}"
+    groups: [ "Domain Admins" ]
+  # Per-user seeds get added here as the build sheet for each enclave
+  # firms up (Headquarters, IT, Supply roles map to OUs and groups).

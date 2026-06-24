@@ -1,0 +1,12 @@
+---
+- name: Apply Hostnames
+  hosts: windows
+  block:
+    - name: Change the hostname to sample-hostname
+      ansible.windows.win_hostname:
+        name: "{{ inventory_hostname }}"
+      register: res
+
+    - name: Reboot
+      ansible.windows.win_reboot:
+      when: res.reboot_required

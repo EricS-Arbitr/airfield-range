@@ -1,0 +1,80 @@
+---
+- name: Restart NetworkManager
+  listen: Restart NetworkManager
+  become: true
+  ansible.builtin.service:
+    name: NetworkManager
+    state: restarted
+
+- name: Restart squid
+  listen: Restart squid
+  become: true
+  ansible.builtin.service:
+    name: squid
+    enabled: true
+    state: restarted
+
+- name: Restart apache2
+  listen: Restart apache2
+  become: true
+  ansible.builtin.service:
+    name: apache2
+    enabled: true
+    state: restarted
+
+- name: Reboot Linux
+  become: true
+  ansible.builtin.reboot:
+    reboot_timeout: 120
+
+- name: Reboot Windows
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+
+- name: Initialize Splunk
+  ansible.builtin.shell: >
+    /opt/splunk/bin/splunk enable boot-start --accept-license --no-prompt
+    --answer-yes --seed-passwd {{ splunk_admin_password }}
+  listen: Initialize Splunk
+  changed_when: false
+
+- name: Start Splunk After Installing and Initializing
+  ansible.builtin.systemd:
+    name: splunk
+    enabled: true
+    state: started
+  register: splunk_status
+  listen: Initialize Splunk
+
+- name: Restart Splunk Service
+  ansible.builtin.systemd:
+    name: splunk
+    state: restarted
+  listen: Restart Splunk Service
+
+- name: reload unbound
+  community.docker.docker_container_exec:
+    container: "{{ global_dns_container_name }}"
+    command: unbound-control reload
+  ignore_errors: yes
+
+- name: Update CA Certificates
+  ansible.builtin.command:
+    cmd: /usr/sbin/update-ca-certificates
+
+- name: Recreate email container
+  listen: Recreate email container
+  ansible.builtin.shell: docker compose up -d --no-deps outlook
+  args:
+    chdir: /home/simspace
+
+- name: Run add_users in email container
+  listen: Run add_users in email container
+  community.docker.docker_container_exec:
+    container: email
+    command: /bin/bash /add_users.sh
+
+- name: Restart email container
+  listen: Restart email container
+  ansible.builtin.shell: docker restart email
+

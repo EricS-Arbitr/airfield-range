@@ -1,0 +1,50 @@
+---
+# ============================================================
+# all.yml — shared across the entire airfield-range
+# ============================================================
+# Anything that varies per-host lives in host_vars/.
+# Anything that varies per-enclave/role lives in the matching
+# group_vars/<group>.yml.
+# ============================================================
+
+# --- Domain admin (mirrors customer-base convention) ---------
+domain_admin: "simspace"
+domain_admin_password: "Simspace1!Simspace1!"
+
+# --- Certs (customer Nexus) ----------------------------------
+cs_certs:
+  - "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/DigiCertHighAssuranceEVRootCA.crt"
+  - "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/DigiCertGlobalRootG2.crt"
+  - "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/DigiCertAssuredIDRootCA.crt"
+ms_cert: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/MicrosoftIdentityVerificationRootCert2020.crt"
+
+# --- Upstream proxy ------------------------------------------
+# The mgmt gateway (10.255.240.1) is the platform's egress proxy.
+inet_proxy_addr: "10.255.240.1"
+inet_proxy_port: "3128"
+
+# --- Global DNS simulator ------------------------------------
+global_dns_container_name: "is-inet"
+
+# --- Time discipline (CLAUDE.md §3 — NTP server in-range) ----
+# bs-ntp is not yet in the blueprint; once added, every host's
+# chrony.conf / w32time points at this IP. PDC-emulator on each
+# domain syncs to bs-ntp and is authoritative for its domain.
+ntp_server_ip: "172.31.2.6"        # planned bs-ntp (Services /24)
+ntp_server_hostname: "bs-ntp.vcab.lan"
+
+# --- Central syslog collector --------------------------------
+# soc-syslog runs rsyslog (UDP+TCP 514) and forwards to the SIEM.
+syslog_server_ip: "172.31.7.13"    # soc-syslog (SOC /24)
+
+# --- SIEM (Elastic-based) ------------------------------------
+siem_server_ip: "172.31.7.15"      # soc-elastic (SOC /24)
+
+# --- WEC collectors (Windows Event Collectors) ---------------
+# Two: one per domain. Domain members forward to their domain's WEC.
+wec_vcab_ip: "172.31.2.17"         # bs-wec (Services)
+wec_flightops_ip: "172.31.3.20"    # fops-wec01 (Flight-Ops-Services)
+
+# --- Wazuh manager (TBD where it lives) ----------------------
+# Likely co-located with the SIEM stack on soc-elastic.
+wazuh_manager_ip: "{{ siem_server_ip }}"

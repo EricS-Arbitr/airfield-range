@@ -1,0 +1,18 @@
+---
+# ============================================================
+# vyos.yml — connection settings for [vyos] routers
+# ============================================================
+# vyos.vyos.vyos_config requires ansible.netcommon.network_cli. Mirrors
+# the customer base group_vars/vyos.yml so build_tarball.sh picks up the
+# same connection profile.
+#
+# NIC ordering (this project's VyOS convention):
+#   managementInterface.position = LAST → the mgmt NIC is the highest-
+#   indexed eth; the `vyos` role only configures the data-plane NICs
+#   eth0..eth(N-1) (in blueprint order). The mgmt NIC is provisioned by
+#   the platform and `ansible_host` resolves over it.
+# ============================================================
+ansible_connection: ansible.netcommon.network_cli
+ansible_network_os: vyos.vyos.vyos
+ansible_user: vyos
+ansible_ssh_pass: Simspace1!

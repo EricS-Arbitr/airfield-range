@@ -1,0 +1,28 @@
+---
+# ============================================================
+# soc.yml — SOC enclave (172.31.7.0/24)
+# ============================================================
+# Domain membership TBD (CLAUDE.md §4 — best-judgment vcab.lan).
+# Hosts split into:
+#   [soc_analysts]  — Win11 analyst workstations
+#   [soc_servers]   — soc-syslog, soc-elastic
+#   [soc_tools]     — soc-flare (FLARE-VM), soc-sift (SIFT), soc-openvas
+#                     — specialized images; NOT in [windows]/[linux] OS
+#                     baseline groups; do not run the common role on them.
+# ============================================================
+
+# --- Syslog collector (rsyslog UDP+TCP 514) -----------------
+soc_syslog_ip: "172.31.7.13"
+
+# --- SIEM (Elastic + Wazuh manager) -------------------------
+soc_siem_ip: "172.31.7.15"
+
+# --- Hunt/forensic tooling (informational) ------------------
+soc_flare_ip:   "172.31.7.18"     # FLARE-VM malware analysis
+soc_sift_ip:    "172.31.7.17"     # SIFT forensic workstation
+soc_openvas_ip: "172.31.7.16"     # vuln scanner
+
+# --- WEC subscription targets (Windows Event Collection) ----
+# bs-wec / fops-wec01 collect domain-side events; both forward into the SIEM.
+wec_collector_vcab_ip:      "{{ wec_vcab_ip }}"
+wec_collector_flightops_ip: "{{ wec_flightops_ip }}"

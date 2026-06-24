@@ -1,0 +1,20 @@
+---
+# host_vars/bs-hq03.yml — Windows
+# Image:   global/RDP_Windows_11:1.1.2
+# Prod:    Headquarters 172.31.14.13/24 → gw 172.31.14.1
+# Mgmt:    10.255.240.121/20 (position FIRST → Ethernet0)
+ansible_host: "10.255.240.121"
+network_interfaces:
+  - name: "Ethernet0"               # mgmt (position FIRST)
+    ipv4:
+      address: "10.255.240.121"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "Ethernet1"               # production — Headquarters
+    ipv4:
+      address: "172.31.14.13"
+      netmask: "255.255.255.0"
+      gateway: "172.31.14.1"
+    dns:
+      - "172.31.2.7"
+      - "172.31.2.8"

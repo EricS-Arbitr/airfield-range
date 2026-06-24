@@ -1,0 +1,26 @@
+---
+# ============================================================
+# vault.yml — encrypted with ansible-vault
+# ============================================================
+# Edit with:  ansible-vault edit group_vars/vault.yml
+#
+# This file is currently UNENCRYPTED as a structural placeholder. Encrypt
+# it before merging anything real. Conventions:
+#   - Every secret variable is prefixed `vault_` and referenced from a
+#     plain-text var in another group_vars file (e.g. `openplc_admin_password:
+#     "{{ vault_openplc_admin_password }}"`).
+#   - Defaults below match the customer's lab-baseline credentials; rotate
+#     before any deployment that simulates real adversary behavior.
+# ============================================================
+
+# --- Domain / OS ---------------------------------------------
+vault_simspace_password:        "Simspace1!Simspace1!"
+vault_ad_trust_secret:          "TRUST_SECRET_PLACEHOLDER"
+
+# --- OT ------------------------------------------------------
+vault_openplc_admin_password:   "OPENPLC_ROTATE_ME"
+vault_fuxa_admin_password:      "FUXA_ROTATE_ME"
+vault_mqtt_password:            "MQTT_ROTATE_ME"
+vault_influxdb_admin_token:     "INFLUX_TOKEN_PLACEHOLDER"
+vault_fuel_db_password:         "FUEL_DB_ROTATE_ME"
+vault_power_db_password:        "POWER_DB_ROTATE_ME"

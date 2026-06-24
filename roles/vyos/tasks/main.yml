@@ -1,0 +1,129 @@
+---
+- name: Configure network interface addresses
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set interface ethernet {{ item.name }} address {{ item.ipv4.address }}/{{ (item.ipv4.address ~ '/' ~ item.ipv4.netmask) | ipaddr('prefix') }}"
+    save: true
+  with_items: "{{ network_interfaces }}"
+  when: item.ipv4.address != "dhcp"
+
+- name: Configure network interfaces DHCP
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set interface ethernet {{ item.name }} address dhcp"
+    save: true
+  with_items: "{{ network_interfaces }}"
+  when: item.ipv4.address == "dhcp"
+
+- name: Configure OSPF Interfaces
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set protocols ospf area 0.0.0.0 network {{ (item.ipv4.address ~ '/' ~ item.ipv4.netmask) | ipaddr('subnet') }}"
+    save: true
+  with_items: "{{ network_interfaces }}"
+  when: "item.ipv4.ospf is defined"
+
+- name: Configure static routes
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set protocols static route {{ static_route.route }} next-hop {{ static_route.next_hop }}"
+    save: true
+  when: static_route.route is defined
+
+- name: Redistribute Static OSPF
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set protocols ospf redistribute static"
+    save: true
+  when:
+    - static_route.redistribute is defined
+    - static_route.redistribute == "ospf"
+
+- name: Advertise Default Route in OSPF
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set protocols ospf default-information originate always"
+    save: true
+  when:
+    - static_route.originate is defined
+    - static_route.originate == "true"
+
+- name: Redistribute Static BGP
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set protocols bgp address-family ipv4-unicast redistribute static"
+    save: true
+  when:
+    - static_route.redistribute is defined
+    - static_route.redistribute == "bgp"
+
+- name: Configure Source NAT
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set nat source rule {{ item.source }} source address {{ item.address }}"
+      - "set nat source rule {{ item.source }} translation address masquerade"
+      - "set nat source rule {{ item.source }} outbound-interface name {{ item.outbound_interface }}"
+    save: true
+  with_items: "{{ nat }}"
+  when:
+    - item.source is defined
+
+- name: Configure destination NAT
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set nat destination rule {{ item.destination }} destination address {{ item.address }}"
+      - "set nat destination rule {{ item.destination }} destination port {{ item.port }}"
+      - "set nat destination rule {{ item.destination }} protocol {{ item.protocol }}"
+      - "set nat destination rule {{ item.destination }} translation address {{ item.translation }}"
+      - "set nat destination rule {{ item.destination }} translation  port {{ item.port }}"
+    save: true
+  with_items: "{{ nat }}"
+  when:
+    - item.destination is defined
+
+- name: Configure BGP distribute-list
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set policy access-list 100 rule 10 action deny"
+      - "set policy access-list 100 rule 10 destination any"
+      - "set policy access-list 100 rule 10 source inverse-mask 0.0.255.255"
+      - "set policy access-list 100 rule 10 source network 10.10.0.0"
+      - "set policy access-list 100 rule 20 action permit"
+      - "set policy access-list 100 rule 20 destination any"
+      - "set policy access-list 100 rule 20 source any"
+    save: true
+  when:
+    - bgp is defined
+
+- name: Configure BGP
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set protocols bgp address-family ipv4-unicast redistribute connected"
+      - "set protocols bgp address-family ipv4-unicast redistribute static"
+      - "set protocols bgp system-as {{ item.as }}"
+    save: true
+  with_items: "{{ bgp }}"
+  when:
+    - item.as is defined
+
+- name: Configure BGP Neighbors
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set protocols bgp neighbor {{ item.neighbor.ip }} address-family ipv4-unicast distribute-list export 100"
+      - "set protocols bgp neighbor {{ item.neighbor.ip }} remote-as {{ item.neighbor.as }}"
+    save: true
+  with_items: "{{ bgp }}"
+  when:
+    - item.neighbor is defined

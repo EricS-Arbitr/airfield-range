@@ -1,0 +1,42 @@
+---
+# host_vars/bs-edge-fw.yml — pfSense firewall (perimeter)
+# Image:   RC_pfSense:1.0.0
+# Mgmt:    10.255.240.191/20 (position FIRST → vmx0)
+# Data-plane: vmx1..vmx3 (3 NICs from blueprint)
+ansible_host: "10.255.240.191"
+
+pfsense_hostname: "bs-edge-fw"
+pfsense_domain: "vcab.lan"
+
+pfsense_interfaces:
+  - descr: "SWITCH_0"               # eBGP transit toward bs-edge-rtr (AS 65002)
+    interface: vmx1
+    enable: true
+    ipv4_type: static
+    ipv4_address: "199.252.163.1"
+    ipv4_prefixlen: 30
+    blockpriv: false
+    blockbogons: false
+  - descr: "DMZ"                    # 172.31.12.0/24 default gateway
+    interface: vmx2
+    enable: true
+    ipv4_type: static
+    ipv4_address: "172.31.12.1"
+    ipv4_prefixlen: 24
+    blockpriv: false
+    blockbogons: false
+  - descr: "SWITCH_1"               # OSPF area 0 toward bs-core-rtr
+    interface: vmx3
+    enable: true
+    ipv4_type: static
+    ipv4_address: "172.31.1.5"
+    ipv4_prefixlen: 30
+    blockpriv: false
+    blockbogons: false
+
+# Routing intent (decided 2026-06-24, matches PowerPlant):
+#   - eBGP AS 65001 ↔ AS 65002 on SWITCH_0 (peer: bs-edge-rtr 199.252.163.2)
+#   - OSPF area 0 on SWITCH_1 + DMZ (peer: bs-core-rtr 172.31.1.6)
+#   - redistribute_ospf into eBGP, default_originate toward AS 65002
+# pfsense_gateways / pfsense_default_gw_name / pfsense_bgp / pfsense_ospf —
+# populate when the network play is written.

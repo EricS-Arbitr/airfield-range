@@ -1,0 +1,7 @@
+- name: Configure vyos
+  hosts: vyos
+  gather_facts: false
+  tasks:
+    - name: "Debug"
+      debug:
+        msg: "the route is {{ static_route.route }}"

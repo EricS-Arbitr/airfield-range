@@ -1,0 +1,209 @@
+---
+# airfield-range site.yml
+#
+# Play order is deliberate: management-plane plays (Init, adapter/NM
+# pre-config, common baseline, GNOME suppression) run FIRST while the data
+# plane is still un-routed. Ansible reaches every host on the mgmt subnet
+# (10.255.240.0/20), which is L2-flat and does not depend on VyOS/pfSense
+# state, so these plays succeed even before the network play runs.
+#
+# Network plays (VyOS, pfSense) then bring the data plane up so the
+# foundation tier (NTP, AD, DNS, DHCP) and everything downstream can land.
+#
+# Deviates from CLAUDE.md §10's documented network-first order by design.
+
+- name: Init
+  hosts: windows
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - init
+  tags:
+    - init
+
+- name: Windows adapter rename pre-config
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: Rename Windows adapters to canonical Ethernet0/EthernetN by ifIndex order
+      ansible.windows.win_powershell:
+        script: |
+          $adapters = @(Get-NetAdapter | Sort-Object ifIndex)
+          $names = @($adapters | ForEach-Object { $_.Name })
+          $count = $adapters.Count
+
+          # If all expected canonical names already exist among the adapters,
+          # the image's naming is correct — leave it alone. Doing otherwise
+          # risks swapping the mgmt/data-plane mapping when ifIndex ordering
+          # doesn't match the image's existing Name ordering (which it often
+          # doesn't on SimSpace Windows 10/11 images).
+          $allCanonical = $true
+          for ($i = 0; $i -lt $count; $i++) {
+            if ($names -notcontains "Ethernet$i") { $allCanonical = $false; break }
+          }
+          if ($allCanonical) {
+            $Ansible.Changed = $false
+            Write-Output "All adapter names already canonical; no rename."
+            return
+          }
+
+          # Non-canonical naming (e.g. Server 2019 image ships with
+          # "Ethernet"/"Ethernet 2"). Rename via a temp-name pass first so
+          # the final names can't collide with existing names mid-loop.
+          $tempPrefix = "_ppRename_"
+          $tempIdx = 0
+          foreach ($a in $adapters) {
+            Rename-NetAdapter -Name $a.Name -NewName "$tempPrefix$tempIdx" -ErrorAction Stop
+            $tempIdx++
+          }
+          $renamed = @()
+          $idx = 0
+          foreach ($a in $adapters) {
+            $target = "Ethernet$idx"
+            Rename-NetAdapter -Name "$tempPrefix$idx" -NewName $target -ErrorAction Stop
+            $renamed += "$($a.Name) -> $target"
+            $idx++
+          }
+          $Ansible.Changed = $true
+          Write-Output ($renamed -join '; ')
+  tags:
+    - common
+    - win_adapter_rename
+
+- name: Linux NM managed-devices pre-config
+  hosts: linux
+  gather_facts: false
+  become: true
+  tasks:
+    # apt needs the corp proxy reachable before any Ubuntu archive call.
+    # `common` drops this same file later but runs in a later play; do it
+    # here too so this play's `apt install network-manager` can reach Nexus.
+    - name: Set apt proxy from group_vars/all.yml
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/95-airfield-proxy
+        content: |
+          Acquire::http::Proxy "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}";
+          Acquire::https::Proxy "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}";
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Ensure NetworkManager is installed
+      ansible.builtin.apt:
+        name: network-manager
+        state: present
+
+    - name: Opt eth* devices into NetworkManager management
+      ansible.builtin.copy:
+        dest: /etc/NetworkManager/conf.d/99-airfield-eth-managed.conf
+        content: |
+          [keyfile]
+          unmanaged-devices=
+
+          [device-eth-managed]
+          match-device=interface-name:eth*
+          managed=true
+        owner: root
+        group: root
+        mode: '0644'
+      register: nm_managed_conf
+
+    - name: Restart NetworkManager if config changed
+      ansible.builtin.systemd:
+        name: NetworkManager
+        state: restarted
+        enabled: true
+      when: nm_managed_conf.changed
+
+    - name: Wait for NetworkManager to settle after restart
+      ansible.builtin.pause:
+        seconds: 3
+      when: nm_managed_conf.changed
+
+    # Drive the loop from facts so multi-NIC OT bridges (e.g. control-room-hmi
+    # with eth0/eth1/eth2) get every eth managed, not just eth0/eth1.
+    - name: Gather network facts for eth* enumeration
+      ansible.builtin.setup:
+        gather_subset: network
+
+    - name: Force every eth device into managed state at runtime
+      ansible.builtin.shell: |
+        nmcli device set "{{ item }}" managed yes
+      loop: "{{ ansible_interfaces | select('match', '^eth[0-9]+$') | list }}"
+      register: nmcli_set_managed
+      changed_when: "'successfully' in (nmcli_set_managed.stdout | default(''))"
+      failed_when: false
+  tags:
+    - common
+    - nm_managed_eth
+
+- name: Common Role
+  hosts: windows,linux
+  gather_facts: true
+  roles:
+    - common
+  tags:
+    - common
+
+# The Ubuntu Desktop images ship with gnome-initial-setup enabled, which
+# pops the "Connect Your Online Accounts" / Welcome wizard the first time
+# anyone logs into the GUI. Drop the documented "wizard already seen" flag
+# file under each existing user's ~/.config and in /etc/skel so future
+# users inherit it. gnome-initial-setup checks for this file and exits
+# silently when it contains "yes".
+- name: Suppress GNOME initial-setup wizard on Linux desktops
+  hosts: linux
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Find user home directories under /home
+      ansible.builtin.find:
+        paths: /home
+        file_type: directory
+        depth: 1
+      register: gnome_user_homes
+
+    - name: Ensure ~/.config exists for each user
+      ansible.builtin.file:
+        path: "{{ item.path }}/.config"
+        state: directory
+        owner: "{{ item.pw_name }}"
+        group: "{{ item.gr_name }}"
+        mode: '0755'
+      loop: "{{ gnome_user_homes.files }}"
+
+    - name: Mark GNOME initial-setup done for each existing user
+      ansible.builtin.copy:
+        dest: "{{ item.path }}/.config/gnome-initial-setup-done"
+        content: "yes\n"
+        owner: "{{ item.pw_name }}"
+        group: "{{ item.gr_name }}"
+        mode: '0644'
+      loop: "{{ gnome_user_homes.files }}"
+
+    - name: Ensure /etc/skel/.config exists for future users
+      ansible.builtin.file:
+        path: /etc/skel/.config
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Mark GNOME initial-setup done in /etc/skel
+      ansible.builtin.copy:
+        dest: /etc/skel/.config/gnome-initial-setup-done
+        content: "yes\n"
+        owner: root
+        group: root
+        mode: '0644'
+  tags:
+    - common
+    - gnome_initial_setup
+
+- name: Vyos Role
+  hosts: vyos
+  gather_facts: false
+  roles:
+    - vyos
+  tags:
+    - vyos

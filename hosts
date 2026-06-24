@@ -1,0 +1,542 @@
+# ============================================================
+# JCTE vCity Military Airfield Cyber Range — Ansible Inventory
+# ============================================================
+# Source: WORK_DIR/ARBITR_MB_011.yml (79 VmInstances)
+# Domains: vcab.lan (enterprise) · flightops.lan (flight ops)
+# Mgmt plane: 10.255.240.0/20 — ansible_host = mgmt IP (per host_vars)
+# ============================================================
+
+# ------------------------------------------------------------
+# Enterprise (vcab.lan) — workstations
+# ------------------------------------------------------------
+[vcab_hq]
+bs-hq01
+bs-hq02
+bs-hq03
+bs-hq04
+bs-hq05
+bs-hq06
+
+[vcab_it]
+bs-it01
+bs-it02
+bs-it03
+bs-it04
+bs-it05
+
+[vcab_supply]
+bs-supply01
+bs-supply02
+bs-supply03
+bs-supply04
+bs-supply05
+
+[vcab_workstations:children]
+vcab_hq
+vcab_it
+vcab_supply
+
+# ------------------------------------------------------------
+# Enterprise (vcab.lan) — servers
+# ------------------------------------------------------------
+[vcab_dcs]
+bs-dc01
+bs-dc02
+
+[pdc_vcab]
+bs-dc01
+
+[additional_dc_vcab]
+bs-dc02
+
+[vcab_file]
+bs-file01
+bs-file02
+
+[vcab_wec]
+bs-wec
+
+[vcab_services]
+bs-dc01
+bs-dc02
+bs-file01
+bs-file02
+bs-wec
+
+[vcab:children]
+vcab_workstations
+vcab_services
+
+# ------------------------------------------------------------
+# Flight Ops (flightops.lan) — workstations
+# ------------------------------------------------------------
+# Flight Control Center: ATC + weather + dispatch
+[flight_control_center]
+atc-radar
+atc-station
+atc-weather
+fops-flight01
+fops-flight02
+fops-flight03
+fops-flight04
+
+[flightops_users]
+fops-ops01
+fops-ops02
+fops-ops03
+fops-ops04
+fops-ops05
+fops-ops06
+fops-ops07
+fops-ops08
+
+[flightops_workstations:children]
+flight_control_center
+flightops_users
+
+# ------------------------------------------------------------
+# Flight Ops (flightops.lan) — servers
+# ------------------------------------------------------------
+[flightops_dcs]
+fops-dc01
+fops-dc02
+
+[pdc_flightops]
+fops-dc01
+
+[additional_dc_flightops]
+fops-dc02
+
+[flightops_file]
+fops-file01
+fops-file02
+
+[flightops_wec]
+fops-wec01
+
+[flightops_app]
+fops-app01
+fops-app02
+fops-app03
+
+[flightops_services]
+fops-dc01
+fops-dc02
+fops-file01
+fops-file02
+fops-wec01
+fops-app01
+fops-app02
+fops-app03
+
+[flightops:children]
+flightops_workstations
+flightops_services
+
+# ------------------------------------------------------------
+# Engineering Control Center — domain membership TBD (CLAUDE.md §4)
+# ------------------------------------------------------------
+[engineering_workstations]
+bs-eng01
+bs-eng02
+bs-eng03
+bs-eng04
+bs-eng05
+bs-eng06
+
+# bs-ro-hist: read-only InfluxDB replica of the OT historian (CLAUDE.md §3.5)
+[engineering_servers]
+bs-ro-hist
+
+[engineering:children]
+engineering_workstations
+engineering_servers
+
+# ------------------------------------------------------------
+# Physical Security — pending (no hosts in blueprint yet)
+# Future: bs-access-ctlr (.11.48), door points 1–4, pin pads, mock door sim
+# ------------------------------------------------------------
+[physical_security]
+
+# ------------------------------------------------------------
+# SOC
+# ------------------------------------------------------------
+[soc_analysts]
+soc-analyst01
+soc-analyst02
+soc-analyst03
+soc-analyst04
+soc-analyst05
+soc-analyst06
+
+# Pre-built forensic VMs (FLARE-VM, SIFT, OpenVAS) — specialized images,
+# do NOT run the standard `common` Windows/Linux baseline against them.
+[soc_tools]
+soc-flare
+soc-sift
+soc-openvas
+
+[soc_servers]
+soc-elastic
+soc-syslog
+
+[soc:children]
+soc_analysts
+soc_servers
+
+# ------------------------------------------------------------
+# DMZ
+# ------------------------------------------------------------
+[dmz]
+bs-www
+bs-ftp
+bs-ns1
+
+# ------------------------------------------------------------
+# OT / RVIN — segmented Purdue chain (CLAUDE.md §6, §7)
+# ------------------------------------------------------------
+[ot_mtu]
+control-room-hmi
+
+[ot_fuel]
+ff-plc-1
+fuel-farm-sim
+fuel-hist
+fuel-db
+
+# Power grid hosts pending in blueprint:
+#   power-plc      172.16.47.10 (DNP3 outstation, OpenPLC)
+#   power-sim      172.16.49.18 (pandapower + DNP3)
+#   power-extra    172.16.48.18
+[ot_power]
+
+[ot:children]
+ot_mtu
+ot_fuel
+ot_power
+
+# OT bridge hosts — dual-homed across adjacent Purdue segments,
+# net.ipv4.ip_forward=1 between their listed NICs ONLY (never onto mgmt).
+[ot_bridges]
+bs-modbus-gateway
+control-room-hmi
+
+# ------------------------------------------------------------
+# Network — VyOS routers
+# ------------------------------------------------------------
+[vyos]
+bs-edge-rtr
+bs-core-rtr
+bs-ops-rtr
+bs-sec-rtr
+bs-modbus-gateway
+
+# ------------------------------------------------------------
+# Network — pfSense firewalls
+# ------------------------------------------------------------
+[pfsense]
+bs-edge-fw
+bs-ops-fw
+
+[net:children]
+vyos
+pfsense
+
+# ------------------------------------------------------------
+# Infrastructure — out-of-band sims + Ansible control node
+# ------------------------------------------------------------
+# is-inet: Internet simulator appliance (200.200.200.2/24)
+# elgg:    Vulnerable Ubuntu 16 / Elgg social-platform scenario host
+# ansible: Ansible control node (referenced by blueprint download/deploy
+#          ScriptDefinitions via matchInstances: ["ansible"]; add to
+#          ARBITR_MB_011.yml when wiring deploy automation)
+[infrastructure]
+is-inet
+elgg
+# ansible
+
+# ============================================================
+# Cross-cutting groups
+# ============================================================
+
+# ------------------------------------------------------------
+# Active Directory roll-ups
+# ------------------------------------------------------------
+[domain_controllers]
+bs-dc01
+bs-dc02
+fops-dc01
+fops-dc02
+
+[pdc]
+bs-dc01
+fops-dc01
+
+[additional_dc]
+bs-dc02
+fops-dc02
+
+# Windows hosts that join vcab.lan
+[members_vcab]
+bs-hq01
+bs-hq02
+bs-hq03
+bs-hq04
+bs-hq05
+bs-hq06
+bs-it01
+bs-it02
+bs-it03
+bs-it04
+bs-it05
+bs-supply01
+bs-supply02
+bs-supply03
+bs-supply04
+bs-supply05
+bs-file01
+bs-file02
+bs-wec
+# Engineering Win hosts — pending domain decision (CLAUDE.md §4):
+# bs-eng01
+# bs-eng02
+# bs-eng03
+# bs-eng04
+
+# Windows hosts that join flightops.lan
+[members_flightops]
+fops-flight01
+fops-flight02
+fops-flight03
+fops-flight04
+fops-ops01
+fops-ops02
+fops-ops03
+fops-ops04
+fops-ops05
+fops-ops06
+fops-ops07
+fops-ops08
+fops-file01
+fops-file02
+fops-wec01
+
+# ------------------------------------------------------------
+# Windows OS groups
+# ------------------------------------------------------------
+[win10]
+bs-eng01
+bs-eng02
+bs-supply01
+bs-supply02
+bs-supply03
+bs-supply04
+bs-supply05
+fops-flight01
+fops-flight02
+fops-flight03
+fops-flight04
+fops-ops01
+fops-ops02
+fops-ops03
+fops-ops04
+
+[win11]
+bs-eng03
+bs-eng04
+bs-hq01
+bs-hq02
+bs-hq03
+bs-hq04
+bs-hq05
+bs-hq06
+bs-it01
+bs-it02
+bs-it03
+bs-it04
+bs-it05
+fops-ops05
+fops-ops06
+fops-ops07
+fops-ops08
+soc-analyst01
+soc-analyst02
+soc-analyst03
+soc-analyst04
+soc-analyst05
+soc-analyst06
+
+[winserver2022]
+fops-dc01
+fops-dc02
+fops-file01
+fops-file02
+fops-wec01
+
+[winserver2025]
+bs-dc01
+bs-dc02
+bs-file01
+bs-file02
+bs-wec
+
+[windows:children]
+win10
+win11
+winserver2022
+winserver2025
+
+# ------------------------------------------------------------
+# Linux OS groups (Ubuntu — baseline = 24.04 LTS, see CLAUDE.md §3.6)
+# ------------------------------------------------------------
+[ubuntu22]
+bs-www
+atc-radar
+atc-station
+atc-weather
+fops-app01
+fops-app02
+fops-app03
+
+[ubuntu24]
+bs-ftp
+bs-ns1
+bs-ro-hist
+soc-elastic
+soc-openvas
+soc-syslog
+control-room-hmi
+ff-plc-1
+fuel-farm-sim
+fuel-hist
+fuel-db
+
+[ubuntu25]
+bs-eng05
+bs-eng06
+
+[linux:children]
+ubuntu22
+ubuntu24
+ubuntu25
+
+# Ubuntu Desktop variants (GNOME initial-setup wizard needs suppression)
+[linux_desktop]
+atc-station
+bs-ro-hist
+soc-openvas
+bs-eng05
+bs-eng06
+
+# ------------------------------------------------------------
+# Service / posture groups
+# ------------------------------------------------------------
+[fileservers]
+bs-file01
+bs-file02
+fops-file01
+fops-file02
+
+# Windows Event Collectors — receive forwarded events from [windows]
+[wec]
+bs-wec
+fops-wec01
+
+# Central syslog collector — receives from net/linux; forwards to SIEM
+[syslog]
+soc-syslog
+
+# SIEM (Elastic-based)
+[siem]
+soc-elastic
+
+# Forensic / hunt tooling (do NOT receive baseline OS roles)
+[hunt]
+soc-flare
+soc-sift
+soc-openvas
+
+# Wazuh agent recipients (every managed Windows + Linux endpoint)
+[wazuh:children]
+windows
+linux
+
+# ------------------------------------------------------------
+# SimSpace platform — Attack Emulation (AE) / Attack User Experience (AUE)
+# ------------------------------------------------------------
+# AE = high-value AD targets for simulated attacker activity
+[ae]
+bs-dc01
+bs-dc02
+bs-file01
+bs-file02
+bs-wec
+fops-dc01
+fops-dc02
+fops-file01
+fops-file02
+fops-wec01
+
+# AUE = Windows workstations simulating user activity
+[aue]
+bs-hq01
+bs-hq02
+bs-hq03
+bs-hq04
+bs-hq05
+bs-hq06
+bs-it01
+bs-it02
+bs-it03
+bs-it04
+bs-it05
+bs-supply01
+bs-supply02
+bs-supply03
+bs-supply04
+bs-supply05
+bs-eng01
+bs-eng02
+bs-eng03
+bs-eng04
+fops-flight01
+fops-flight02
+fops-flight03
+fops-flight04
+fops-ops01
+fops-ops02
+fops-ops03
+fops-ops04
+fops-ops05
+fops-ops06
+fops-ops07
+fops-ops08
+soc-analyst01
+soc-analyst02
+soc-analyst03
+soc-analyst04
+soc-analyst05
+soc-analyst06
+
+# ------------------------------------------------------------
+# Roll-ups
+# ------------------------------------------------------------
+[workstations:children]
+vcab_workstations
+flightops_workstations
+engineering_workstations
+soc_analysts
+
+[servers:children]
+vcab_services
+flightops_services
+engineering_servers
+soc_servers
+dmz
+
+[range:children]
+windows
+linux
+net
+ot
+infrastructure

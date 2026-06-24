@@ -1,0 +1,34 @@
+---
+# ============================================================
+# net.yml — shared network plumbing for [net] (vyos + pfsense)
+# ============================================================
+# Routing model (decided 2026-06-24, matches PowerPlant):
+#   - eBGP-edge:  bs-edge-rtr(AS 65002) ↔ bs-edge-fw(AS 65001) on 199.252.163.0/30
+#   - OSPF area 0 internal mesh, on every link inside AS 65001:
+#       bs-edge-fw ↔ bs-core-rtr  (172.31.1.4/30)
+#       bs-core-rtr ↔ bs-ops-rtr  (172.31.1.8/30)
+#       bs-ops-rtr ↔ bs-ops-fw    (172.31.1.12/30)
+#       bs-ops-fw ↔ bs-sec-rtr    (172.31.1.20/30)
+#     plus every /24 LAN interface (redistribute_connected: false; networks
+#     enumerated explicitly under area 0.0.0.0 so mgmt /20 doesn't leak)
+#   - STATIC-ONLY at the L3.5 boundary:
+#       bs-ops-fw ↔ bs-modbus-gateway (172.31.1.16/30) — default-deny,
+#       OT umbrella 172.16.0.0/16 → 172.31.1.18 (bs-modbus-gateway)
+#       bs-ops-fw redistributes_static into OSPF so the umbrella is reachable
+# ============================================================
+
+# --- AS numbers --------------------------------------------------
+asn_internal: 65001                # corp / internal AS
+asn_external: 65002                # bs-edge-rtr peer (Internet sim)
+
+# --- OSPF area -------------------------------------------------
+ospf_area: "0.0.0.0"
+
+# --- BGP timers ---------------------------------------------------
+bgp_keepalive: 10
+bgp_holdtime:  30
+
+# --- L3.5 boundary (default-deny at bs-ops-fw) -------------------
+# IT/Corp ↔ OT path runs ONLY through bs-modbus-gateway via static.
+# See CLAUDE.md §11 guardrails before adding any cross-boundary rule.
+ot_umbrella_prefix: "172.16.0.0/16"

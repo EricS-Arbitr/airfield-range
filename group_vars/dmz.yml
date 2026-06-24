@@ -1,0 +1,19 @@
+---
+# ============================================================
+# dmz.yml — DMZ enclave (not domain-joined)
+# ============================================================
+# 172.31.12.0/24, gateway 172.31.12.1 (bs-edge-fw).
+# Hosts: bs-www (.3), bs-ftp (.2), bs-ns1 (.5).
+# bs-ns1 is the DMZ-facing recursive DNS for non-AD-joined hosts.
+# ============================================================
+
+# --- Upstream resolvers for bs-ns1 (forwarded outbound) -----
+dmz_dns_forwarders:
+  - "8.8.8.8"      # is-inet routes these to its unbound aliases
+  - "8.8.4.4"
+  - "1.1.1.1"
+
+# --- DMZ services (advertised to internal via vcab.yml) -----
+dmz_www_ip:  "172.31.12.3"
+dmz_ftp_ip:  "172.31.12.2"
+dmz_ns1_ip:  "172.31.12.5"

@@ -1,0 +1,29 @@
+---
+# host_vars/control-room-hmi.yml — Linux (Ubuntu)
+# Image:   global/RDP_Ubuntu_Server_24.04:1.1.0
+# Mgmt:    10.255.245.3/20 (position FIRST → eth0)
+ansible_host: "10.255.245.3"
+network_interfaces:
+  - name: "eth0"                     # mgmt (position FIRST)
+    ipv4:
+      type: "ethernet"
+      address: "10.255.245.3"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "eth1"                     # production — mtu
+    ipv4:
+      type: "ethernet"
+      address: "172.16.45.3"
+      netmask: "255.255.255.248"
+      gateway: "172.16.45.1"
+  - name: "eth2"                     # production — Power-PLC
+    ipv4:
+      type: "ethernet"
+      address: "172.16.47.9"
+      netmask: "255.255.255.248"
+      gateway: ""
+
+# OT bridge host (CLAUDE.md §8): net.ipv4.ip_forward=1 between eth1 (mtu)
+# and eth2 (Power-PLC) ONLY — never onto eth0 (mgmt).
+ot_bridge: true
+ot_bridge_interfaces: [ "eth1", "eth2" ]

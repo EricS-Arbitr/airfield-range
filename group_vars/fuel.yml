@@ -1,0 +1,49 @@
+---
+# ============================================================
+# fuel.yml — OT fuel-farm subsystem
+# ============================================================
+# Build sheet: systems/fuel_farm/fuel-farm-build-sheet.md
+# Purdue chain: MTU /29 + Fuel-PLC /29 + Fuel-Sim /24
+# OT not domain-joined (CLAUDE.md §4).
+# ============================================================
+
+# --- Segments ------------------------------------------------
+ot_fuel_mtu_cidr:       "172.16.45.0/29"
+ot_fuel_plc_cidr:       "172.16.45.8/29"
+ot_fuel_sim_cidr:       "172.16.46.0/24"
+ot_fuel_mtu_gateway:    "172.16.45.1"       # bs-modbus-gateway (mtu IF)
+ot_fuel_plc_gateway:    "172.16.45.9"       # bs-modbus-gateway (Fuel-PLC IF)
+ot_fuel_sim_gateway:    "172.16.46.16"      # bs-modbus-gateway (Fuel-Sim IF)
+
+# --- Modbus TCP (intentional weakness: unauthenticated by default) ---
+fuel_modbus_port: 502
+
+# --- OpenPLC v4 (ff-plc-1) -----------------------------------
+openplc_web_port: 8080
+openplc_admin_user: "openplc"
+openplc_admin_password: "{{ vault_openplc_admin_password }}"   # rotate from openplc/openplc default
+
+# --- FUXA HMI (control-room-hmi, shared with power) ----------
+fuxa_port: 1881
+fuxa_admin_user: "admin"
+fuxa_admin_password: "{{ vault_fuxa_admin_password }}"
+
+# --- InfluxDB 2.7 (fuel-hist) — pin major version ------------
+influxdb_image: "influxdb:2.7"               # NEVER :latest (CLAUDE.md §9)
+influxdb_org: "airfield"
+influxdb_bucket_fuel: "fuel"
+influxdb_admin_token: "{{ vault_influxdb_admin_token }}"
+
+# --- PostgreSQL 16 + TimescaleDB (fuel-db) -------------------
+postgres_db_fuel: "fuel_audit"
+postgres_user_fuel_ro: "fuel_ro"
+postgres_user_fuel_rw: "fuel_rw"
+postgres_password_fuel_rw: "{{ vault_fuel_db_password }}"
+
+# --- Replay harness (fuel-farm-sim) --------------------------
+replay_seed: 20260101                          # deterministic
+replay_speed: 1.0
+fuel_tanks:    [ "T-101", "T-102", "T-201", "T-202" ]
+fuel_trucks:   [ "TR-01", "TR-02", "TR-03" ]
+fuel_aircraft: [ "AC-A1", "AC-A2", "AC-A3" ]
+fuel_pads:     [ "PAD-N", "PAD-S" ]

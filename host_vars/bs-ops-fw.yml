@@ -1,0 +1,53 @@
+---
+# host_vars/bs-ops-fw.yml — pfSense firewall (L3.5 boundary, default-deny)
+# Image:   RC_pfSense:1.0.0
+# Mgmt:    10.255.240.192/20 (position FIRST → vmx0)
+# Data-plane: vmx1..vmx4 (4 NICs from blueprint)
+ansible_host: "10.255.240.192"
+
+pfsense_hostname: "bs-ops-fw"
+pfsense_domain: "vcab.lan"
+
+pfsense_interfaces:
+  - descr: "SWITCH_3"               # OSPF area 0 toward bs-ops-rtr
+    interface: vmx1
+    enable: true
+    ipv4_type: static
+    ipv4_address: "172.31.1.14"
+    ipv4_prefixlen: 30
+    blockpriv: false
+    blockbogons: false
+  - descr: "ENGINEERING_CONTROL_CENTER"   # 172.31.8.0/24 default gateway
+    interface: vmx2
+    enable: true
+    ipv4_type: static
+    ipv4_address: "172.31.8.1"
+    ipv4_prefixlen: 24
+    blockpriv: false
+    blockbogons: false
+  - descr: "SWITCH_4"               # OSPF area 0 toward bs-sec-rtr
+    interface: vmx3
+    enable: true
+    ipv4_type: static
+    ipv4_address: "172.31.1.21"
+    ipv4_prefixlen: 30
+    blockpriv: false
+    blockbogons: false
+  - descr: "SWITCH_5"               # STATIC-ONLY toward bs-modbus-gateway (L3.5 boundary)
+    interface: vmx4
+    enable: true
+    ipv4_type: static
+    ipv4_address: "172.31.1.17"
+    ipv4_prefixlen: 30
+    blockpriv: false
+    blockbogons: false
+
+# Routing intent (decided 2026-06-24, matches PowerPlant pattern):
+#   - OSPF area 0 on SWITCH_3 + SWITCH_4 + ENGINEERING_CONTROL_CENTER (IGP)
+#   - STATIC-ONLY on SWITCH_5 — default-deny L3.5 boundary
+#       OT umbrella 172.16.0.0/16 → 172.31.1.18 (bs-modbus-gateway)
+#   - redistribute_static into OSPF so the OT prefix is reachable upstream
+#   - blueprint tags SWITCH_5 as BGPPEER; that's metadata only — no BGP runs
+#     across this link (default-deny + static is the boundary contract)
+# pfsense_gateways / pfsense_default_gw_name / pfsense_routes / pfsense_ospf —
+# populate when the network play is written.

@@ -1,0 +1,30 @@
+---
+# ============================================================
+# pfsense.yml — connection settings for [pfsense] hosts
+# ============================================================
+# pfsensible.core writes /cf/conf/config.xml directly (no sudo) — only the
+# `admin` account has write access on that root-owned file. The `simspace`
+# fallback account fails on pfsensible.core's rename-then-copy step because
+# /tmp and /cf are on separate filesystems. Use `admin`.
+#
+# NIC ordering (this project's pfSense convention — matches PowerPlant
+# pfSense 2.8.1 image after the platform mgmt-NIC fix):
+#   managementInterface.position = FIRST → mgmt on vmx0; data-plane NICs
+#   are vmx1..vmx(N) in blueprint order.
+#   Example bs-edge-fw (3 data-plane NICs):
+#     vmx0 = mgmt           (10.255.240.191/20, ansible_host)
+#     vmx1 = switch-0       (eBGP transit toward bs-edge-rtr)
+#     vmx2 = DMZ            (172.31.12.1/24 gateway)
+#     vmx3 = switch-1       (OSPF area 0 toward bs-core-rtr)
+#
+# Automation path: pfsensible.core collection + `php -r` escape hatches
+# for the pieces the collection doesn't cover (defaultgw4, NAT outbound
+# mode, installedpackages/frr, syslog). The pfsense_firewall role from
+# PowerPlant carries this pattern — copy it in when site.yml needs it.
+# ============================================================
+ansible_connection: ssh
+ansible_user: admin
+ansible_ssh_pass: simspace1
+ansible_become: false
+ansible_python_interpreter: /usr/local/bin/python3.11
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'

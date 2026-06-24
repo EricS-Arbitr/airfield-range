@@ -1,0 +1,12 @@
+---
+# host_vars/soc-flare.yml — specialized appliance / pre-built image
+# Image:   RDP_Windows_Flare:1.1.1
+# Self-configures from its image; not in [windows]/[linux] OS baseline
+# groups. network_interfaces below is informational only.
+ansible_host: "10.255.240.108"
+
+# network_interfaces:
+#   - name: "Ethernet0"
+#       ipv4: { address: "10.255.240.108", netmask: "255.255.240.0", gateway: "" }
+#   - name: "Ethernet1"              # SOC
+#       ipv4: { address: "172.31.7.18", netmask: "255.255.255.0", gateway: "172.31.7.1" }

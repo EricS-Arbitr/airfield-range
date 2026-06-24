@@ -1,0 +1,36 @@
+---
+# host_vars/bs-ops-rtr.yml — VyOS router
+# Image:   RC-VyOS-Router:1.1.0
+# Mgmt:    10.255.240.100/20 (position LAST → eth5; managed by SimSpace,
+#          not by the vyos role; ansible_host resolves over it)
+ansible_host: "10.255.240.100"
+
+network_interfaces:
+  - name: "eth0"                     # switch-2 [BGPPEER]
+    ipv4:
+      address: "172.31.1.10"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+  - name: "eth1"                     # Flight-Ops-Services [GATEWAY]
+    ipv4:
+      address: "172.31.3.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+  - name: "eth2"                     # Flight-Control-Center [GATEWAY]
+    ipv4:
+      address: "172.31.5.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+  - name: "eth3"                     # Flight-Ops-Users [GATEWAY]
+    ipv4:
+      address: "172.31.6.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+  - name: "eth4"                     # switch-3 [BGPPEER]
+    ipv4:
+      address: "172.31.1.13"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+
+# Routing protocol (BGP / OSPF / static) — populate when site.yml's
+# network play wires the IGP/eBGP intent. See group_vars/net.yml.

@@ -1,0 +1,39 @@
+---
+# ============================================================
+# power.yml — OT power-grid subsystem
+# ============================================================
+# Build sheet: systems/power_grid/power-grid-build-sheet.md
+# Purdue chain: Power-PLC /29 + Power-Sim /24 + Power-Extra /24
+# Protocol: DNP3 :20000 + Mosquitto MQTT :1883 bridge to HMI/historian.
+# Hosts pending in blueprint (power-plc, power-sim).
+# ============================================================
+
+# --- Segments (CLAUDE.md §6) --------------------------------
+ot_power_plc_cidr:      "172.16.47.8/29"
+ot_power_sim_cidr:      "172.16.49.0/24"
+ot_power_extra_cidr:    "172.16.48.0/24"
+
+# Power side has no L3 router — control-room-hmi (mtu) and power-plc /
+# power-sim bridge between adjacent segments. Gateways are bridge IPs,
+# not router IPs (CLAUDE.md §8 — OT bridge contract).
+ot_power_plc_bridge:    "172.16.47.9"        # control-room-hmi (Power-PLC IF)
+
+# --- DNP3 ---------------------------------------------------
+dnp3_port: 20000
+
+# --- MQTT broker --------------------------------------------
+mqtt_port: 1883
+mqtt_user: "airfield"
+mqtt_password: "{{ vault_mqtt_password }}"
+
+# --- InfluxDB 2.7 (power historian) --------------------------
+influxdb_bucket_power: "power"
+
+# --- PostgreSQL 16 + TimescaleDB (power audit DB) ------------
+postgres_db_power: "power_audit"
+postgres_password_power_rw: "{{ vault_power_db_password }}"
+
+# --- DNP3 library selection (CLAUDE.md §12 — pending) -------
+# Options: dnp3-python (Python wrapper on EOL opendnp3)
+#       or Step Function I/O `dnp3` (Rust, TLS, no Python binding)
+dnp3_library: "dnp3-python"        # placeholder — confirm with owner

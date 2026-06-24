@@ -1,0 +1,21 @@
+---
+# host_vars/bs-eng05.yml — Linux (Ubuntu)
+# Image:   global/RDP_Ubuntu_Desktop_25:1.1.0
+# Mgmt:    10.255.240.119/20 (position FIRST → eth0)
+ansible_host: "10.255.240.119"
+network_interfaces:
+  - name: "eth0"                     # mgmt (position FIRST)
+    ipv4:
+      type: "ethernet"
+      address: "10.255.240.119"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "eth1"                     # production — Engineering-Control-Center
+    ipv4:
+      type: "ethernet"
+      address: "172.31.8.15"
+      netmask: "255.255.255.0"
+      gateway: "172.31.8.1"
+    dns:
+      - "172.31.2.7"
+      - "172.31.2.8"

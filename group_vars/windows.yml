@@ -1,0 +1,41 @@
+---
+# ============================================================
+# windows.yml — WinRM connection settings + Windows installers
+# ============================================================
+ansible_connection: winrm
+ansible_winrm_transport: ntlm
+ansible_port: 5985
+ansible_user: simspace
+ansible_password: Simspace1!Simspace1!
+ansible_python_interpreter: python
+ansible_become_method: runas
+ansible_become_user: simspace
+staging_dir_windows: "C:\\temp"
+
+# --- Browsers / Office / EDR helpers -------------------------
+chrome_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Google/Chrome/113.0.5672.93/googlechromestandaloneenterprise64.msi"
+firefox_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Firefox/136.0.1/firefox_setup_136.0.1.msi"
+sysmon_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Microsoft/sysmon/sysmon64.exe"
+
+# --- Range agent bootstrap (common role) ---------------------
+range_agent_bootstrap: range-agent-bootstrap-x64.msi
+range_agent_bootstrap_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/range-agent-bootstrap/{{ range_agent_bootstrap }}"
+
+# --- AUE agent (Attack User Experience) ----------------------
+aue_agent: aue-agent-latest-setup-x86_64.exe
+aue_agent_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/aue-agent/{{ aue_agent }}"
+
+# --- Drainhole (AUE traffic shaping) -------------------------
+drainhole_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/drainhole/network_mgr.exe"
+
+# --- Defender onboarding -------------------------------------
+defender_user_tag: "JCTE-vCity-Airfield"
+defender_staging_dir: "{{ staging_dir_windows }}\\defender_staging"
+defender_windows_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/defender/WindowsDefenderATPOnboardingPackage.zip"
+
+# --- EDR (use whichever the customer selects per host) -------
+cs_windows_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Crowdstrike/WindowsSensor.exe"
+s1_windows_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/sentinelone/SentinelInstaller.exe"
+
+# --- Wazuh agent (Windows) -----------------------------------
+wazuh_agent_installer_win: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/wazuh/wazuh-agent.msi"
