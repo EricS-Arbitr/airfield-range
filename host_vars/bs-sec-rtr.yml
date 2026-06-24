@@ -1,9 +1,9 @@
 ---
 # host_vars/bs-sec-rtr.yml — VyOS router
 # Image:   RC-VyOS-Router:1.1.0
-# Mgmt:    10.255.240.124/20 (position LAST → eth3; managed by SimSpace,
+# Mgmt:    10.255.240.126/20 (position LAST → eth3; managed by SimSpace,
 #          not by the vyos role; ansible_host resolves over it)
-ansible_host: "10.255.240.124"
+ansible_host: "10.255.240.126"
 
 network_interfaces:
   - name: "eth0"                     # switch-4 [BGPPEER]

@@ -20,7 +20,7 @@ Dual-homed: `eth0` on a production OT segment, `eth1` on management (`10.255.240
 | `power-sim` | pandapower model + replay harness (L0); bridges Power-Sim↔Power-Extra | 172.16.49.18 (Power-Sim /24) + 172.16.48.18 (Power-Extra) | 10.255.247.18 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 20 GB | Python 3.12 venv, pandapower, dnp3-python |
 | `power-plc` | DNP3 outstations RTU-1/RTU-2 (L1); bridges Power-PLC↔Power-Sim | 172.16.47.10 (Power-PLC /29) + 172.16.49.10 (Power-Sim) | 10.255.247.10 | Ubuntu 24.04 LTS Server | 2 / 2 GB / 20 GB | dnp3-python (outstation) |
 | `power-scada` | DNP3 master + Mosquitto MQTT broker (L2) | 172.16.47.11 (Power-PLC /29) | 10.255.247.11 | Ubuntu 24.04 LTS Server | 2 / 2 GB / 20 GB | DNP3 master (Python), mosquitto |
-| `control-room-hmi` | FUXA single-line HMI (L2) — **shared with fuel**, bridge host | 172.16.47.9 (Power-PLC /29) + 172.16.45.3 (MTU) | 10.255.245.3 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 20 GB | FUXA (`frangoteam/fuxa`) |
+| `control-room-hmi` | FUXA single-line HMI (L2) — **shared with fuel**, bridge host | 172.16.47.9 (Power-PLC /29) + 172.16.45.3 (MTU) | 10.255.240.173 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 20 GB | FUXA (`frangoteam/fuxa`) |
 | `power-hist` | Historian — Telegraf + InfluxDB 2.7 + Grafana (L2, **in-enclave**) | 172.16.49.20 (Power-Sim /24) | 10.255.247.20 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 60 GB | telegraf, `influxdb:2.7`, grafana |
 | `power-db` | Control/event audit DB — PostgreSQL 16 + TimescaleDB (L2) | 172.16.49.21 (Power-Sim /24) | 10.255.247.21 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 40 GB | postgresql-16, timescaledb |
 

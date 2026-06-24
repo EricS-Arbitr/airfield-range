@@ -1,9 +1,9 @@
 ---
 # host_vars/bs-edge-fw.yml — pfSense firewall (perimeter)
 # Image:   RC_pfSense:1.0.0
-# Mgmt:    10.255.240.191/20 (position FIRST → vmx0)
+# Mgmt:    10.255.240.132/20 (position FIRST → vmx0)
 # Data-plane: vmx1..vmx3 (3 NICs from blueprint)
-ansible_host: "10.255.240.191"
+ansible_host: "10.255.240.132"
 
 pfsense_hostname: "bs-edge-fw"
 pfsense_domain: "vcab.lan"

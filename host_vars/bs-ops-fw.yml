@@ -1,9 +1,9 @@
 ---
 # host_vars/bs-ops-fw.yml — pfSense firewall (L3.5 boundary, default-deny)
 # Image:   RC_pfSense:1.0.0
-# Mgmt:    10.255.240.192/20 (position FIRST → vmx0)
+# Mgmt:    10.255.240.155/20 (position FIRST → vmx0)
 # Data-plane: vmx1..vmx4 (4 NICs from blueprint)
-ansible_host: "10.255.240.192"
+ansible_host: "10.255.240.155"
 
 pfsense_hostname: "bs-ops-fw"
 pfsense_domain: "vcab.lan"

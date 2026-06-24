@@ -2,12 +2,12 @@
 # host_vars/fops-ops02.yml — Windows
 # Image:   global/RDP_Windows_10:1.1.2
 # Prod:    Flight-Ops-Users 172.31.6.12/24 → gw 172.31.6.1
-# Mgmt:    10.255.240.168/20 (position FIRST → Ethernet0)
-ansible_host: "10.255.240.168"
+# Mgmt:    10.255.240.176/20 (position FIRST → Ethernet0)
+ansible_host: "10.255.240.176"
 network_interfaces:
   - name: "Ethernet0"               # mgmt (position FIRST)
     ipv4:
-      address: "10.255.240.168"
+      address: "10.255.240.176"
       netmask: "255.255.240.0"
       gateway: ""
   - name: "Ethernet1"               # production — Flight-Ops-Users

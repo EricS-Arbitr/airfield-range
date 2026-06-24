@@ -2,7 +2,7 @@
 
 **Subsystem:** Bulk fuel storage, truck loading rack, and aircraft delivery
 **Enclave:** `fuel` (OT / RVIN) — segmented Purdue chain off `bs-modbus-gateway`: MTU `172.16.45.0/29` (gw `.45.1`) · Fuel-PLC `172.16.45.8/29` (gw `.45.9`) · Fuel-Sim `172.16.46.0/24` (gw `.46.16`)
-**Management:** all hosts dual-homed onto `10.255.240.0/20` (gw `10.255.240.1`); fuel mgmt block `10.255.245.0/24`; Ansible reaches every host over its mgmt NIC
+**Management:** all hosts dual-homed onto `10.255.240.0/20` (gw `10.255.240.1`); Ansible reaches every host over its mgmt NIC (mgmt IPs are sequential within the shared `/20` — see §1)
 **Purdue placement:** field sim (L0) → OpenPLC (L1) → shared control-room HMI (L2); historian + audit DB **in-enclave** (L2); optional read-only historian replica in Engineering
 **Deployment:** 100% Ansible, idempotent, resettable to known-good between exercise iterations
 
@@ -12,15 +12,15 @@ This sheet is self-contained: host specs, the physical model, the OpenPLC contro
 
 ## 1. Host inventory
 
-All hosts are dual-homed: `eth0` on a production OT segment, `eth1` on management (`10.255.240.0/20`, fuel block `10.255.245.0/24`). `ansible_host` is the **mgmt** IP. Standard hosts run `net.ipv4.ip_forward=0`; `control-room-hmi` is a designated OT **bridge** (forwards MTU↔Power-PLC, with a second production NIC on `172.16.47.9`). `bs-modbus-gateway` (VyOS, in the `net` group) is the L3 gateway for all three fuel segments and routes up to `bs-ops-fw` (pfSense) via `172.31.1.16/30`. All Linux hosts run **Ubuntu 24.04 LTS Server** (headless, `systemd-networkd` renderer — matches the netplan in §9). **Platform constraint:** the `.2` host address is reserved in every subnet — never assign `.2` to any host (lesson learned; `control-room-hmi` therefore sits at `172.16.45.3`, not `.45.2`).
+All hosts are dual-homed: `eth0` on a production OT segment, `eth1` on management (`10.255.240.0/20`). `ansible_host` is the **mgmt** IP; the blueprint assigns mgmt IPs sequentially across all VmInstances, so fuel hosts are interleaved with the rest of the project's mgmt allocation rather than living in a dedicated `/24`. Standard hosts run `net.ipv4.ip_forward=0`; `control-room-hmi` is a designated OT **bridge** (forwards MTU↔Power-PLC, with a second production NIC on `172.16.47.9`). `bs-modbus-gateway` (VyOS, in the `net` group) is the L3 gateway for all three fuel segments and routes up to `bs-ops-fw` (pfSense) via `172.31.1.16/30`. All Linux hosts run **Ubuntu 24.04 LTS Server** (headless, `systemd-networkd` renderer — matches the netplan in §9). **Platform constraint:** the `.2` host address is reserved in every subnet — never assign `.2` to any host (lesson learned; `control-room-hmi` therefore sits at `172.16.45.3`, not `.45.2`).
 
 | Host | Role / Purdue | `eth0` (production) | `eth1` (mgmt) | OS | vCPU / RAM / disk | Core package |
 |---|---|---|---|---|---|---|
-| `ff-plc-1` | OpenPLC v4 runtime (L1) | 172.16.45.10  (Fuel-PLC /29) | 10.255.245.10 | Ubuntu 24.04 LTS Server | 2 / 2 GB / 20 GB | OpenPLC v4 runtime (container) |
-| `fuel-farm-sim` | Field instrument sim + replay harness (L0) | 172.16.46.17  (Fuel-Sim /24) | 10.255.245.17 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 20 GB | Python 3.12 venv, pymodbus, psycopg |
-| `control-room-hmi` | FUXA HMI (L2) — **shared with power**, bridge host | 172.16.45.3  (MTU /29) + 172.16.47.9 (Power-PLC) | 10.255.245.3 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 20 GB | FUXA (`frangoteam/fuxa`) |
-| `fuel-hist` | Historian — Telegraf + InfluxDB 2.7 + Grafana (L2, **in-enclave**) | 172.16.46.18  (Fuel-Sim /24) | 10.255.245.18 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 60 GB | telegraf, `influxdb:2.7`, grafana |
-| `fuel-db` | Audit DB — PostgreSQL 16 + TimescaleDB (L2) | 172.16.46.19  (Fuel-Sim /24) | 10.255.245.19 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 60 GB | postgresql-16, timescaledb |
+| `ff-plc-1` | OpenPLC v4 runtime (L1) | 172.16.45.10  (Fuel-PLC /29) | 10.255.240.168 | Ubuntu 24.04 LTS Server | 2 / 2 GB / 20 GB | OpenPLC v4 runtime (container) |
+| `fuel-farm-sim` | Field instrument sim + replay harness (L0) | 172.16.46.17  (Fuel-Sim /24) | 10.255.240.115 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 20 GB | Python 3.12 venv, pymodbus, psycopg |
+| `control-room-hmi` | FUXA HMI (L2) — **shared with power**, bridge host | 172.16.45.3  (MTU /29) + 172.16.47.9 (Power-PLC) | 10.255.240.173 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 20 GB | FUXA (`frangoteam/fuxa`) |
+| `fuel-hist` | Historian — Telegraf + InfluxDB 2.7 + Grafana (L2, **in-enclave**) | 172.16.46.18  (Fuel-Sim /24) | 10.255.240.118 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 60 GB | telegraf, `influxdb:2.7`, grafana |
+| `fuel-db` | Audit DB — PostgreSQL 16 + TimescaleDB (L2) | 172.16.46.19  (Fuel-Sim /24) | 10.255.240.175 | Ubuntu 24.04 LTS Server | 2 / 4 GB / 60 GB | postgresql-16, timescaledb |
 
 Engineering access: programmed/administered from the Engineering Control Center (`172.31.8.0/24`) running OpenPLC Editor (Autonomy-Logic) — it reaches `ff-plc-1:8080` through `bs-ops-fw` (the L3.5 boundary) to upload the compiled program. An optional read-only historian replica lives at Engineering `172.31.8.5`. No EWS lives inside the fuel segments.
 

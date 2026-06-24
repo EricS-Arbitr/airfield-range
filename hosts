@@ -253,7 +253,7 @@ pfsense
 [infrastructure]
 is-inet
 elgg
-# ansible
+ansible
 
 # ============================================================
 # Cross-cutting groups
@@ -367,24 +367,21 @@ soc-analyst05
 soc-analyst06
 
 [winserver2022]
+bs-dc01
+bs-dc02
+bs-file01
+bs-file02
+bs-wec
 fops-dc01
 fops-dc02
 fops-file01
 fops-file02
 fops-wec01
 
-[winserver2025]
-bs-dc01
-bs-dc02
-bs-file01
-bs-file02
-bs-wec
-
 [windows:children]
 win10
 win11
 winserver2022
-winserver2025
 
 # ------------------------------------------------------------
 # Linux OS groups (Ubuntu — baseline = 24.04 LTS, see CLAUDE.md §3.6)

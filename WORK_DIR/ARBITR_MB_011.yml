@@ -2,10 +2,6 @@
 name: "ARBITR_MB"
 description: "Military Base"
 resources:
-- type: "range.resource.primitive.Subnet::1.0.0"
-  name: "Flight-Ops-Users"
-  properties:
-    cidr: "172.31.6.0/24"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-ops-rtr"
   properties:
@@ -35,6 +31,32 @@ resources:
       ipAddress: "10.255.240.100"
       position: "LAST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-eng01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Engineering-Control-Center"
+      ipAddress: "172.31.8.11"
+      prefix: 24
+    hostname: "bs-eng01"
+    managementInterface:
+      ipAddress: "10.255.240.101"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fops-flight04"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.1.2"
+    networkInterfaces:
+    - name: "Flight-Control-Center"
+      ipAddress: "172.31.5.84"
+      prefix: 24
+    hostname: "fops-flight04"
+    managementInterface:
+      ipAddress: "10.255.240.102"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-eng04"
   metadata: {}
   properties:
@@ -45,7 +67,7 @@ resources:
       prefix: 24
     hostname: "bs-eng04"
     managementInterface:
-      ipAddress: "10.255.240.104"
+      ipAddress: "10.255.240.103"
       position: "FIRST"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "IT"
@@ -55,14 +77,14 @@ resources:
   name: "bs-wec"
   metadata: {}
   properties:
-    image: "global/packer-windows-2025-server-datacenter:1.0.0"
+    image: "global/RDP_Windows_Server_2022:1.1.0"
     networkInterfaces:
     - name: "Services"
       ipAddress: "172.31.2.17"
       prefix: 24
     hostname: "bs-wec"
     managementInterface:
-      ipAddress: "10.255.240.105"
+      ipAddress: "10.255.240.104"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-www"
@@ -75,7 +97,7 @@ resources:
       prefix: 24
     hostname: "bs-www"
     managementInterface:
-      ipAddress: "10.255.240.145"
+      ipAddress: "10.255.240.105"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-hq06"
@@ -111,14 +133,6 @@ resources:
   name: "mtu"
   properties:
     cidr: "172.16.45.0/29"
-- type: "range.resource.configuration.ScriptDefinition::1.0.0"
-  name: "deploy-script"
-  properties:
-    cwd: "/etc/ansible"
-    user: "root"
-    content: "./deploy.sh | tee /var/log/playbook_run.log\n"
-    timeout: 7200
-    scriptType: "BASH"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "soc-flare"
   metadata: {}
@@ -200,6 +214,14 @@ resources:
 - type: "range.resource.primitive.Switch::1.0.0"
   name: "switch-1"
   properties: {}
+- type: "range.resource.configuration.VmConfiguration::1.0.0"
+  name: "download-range-vars"
+  properties:
+    selector:
+      matchInstances:
+      - "ansible"
+    configurationResources:
+    - name: "download-range-vars-script"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-supply04"
   metadata: {}
@@ -237,7 +259,7 @@ resources:
       prefix: 24
     hostname: "fuel-farm-sim"
     managementInterface:
-      ipAddress: "10.255.245.17"
+      ipAddress: "10.255.240.115"
       position: "FIRST"
 - type: "range.resource.primitive.Switch::1.0.0"
   name: "switch-4"
@@ -266,7 +288,7 @@ resources:
       prefix: 24
     hostname: "fops-ops08"
     managementInterface:
-      ipAddress: "10.255.240.103"
+      ipAddress: "10.255.240.117"
       position: "FIRST"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "control-10"
@@ -283,7 +305,7 @@ resources:
       prefix: 24
     hostname: "fuel-hist"
     managementInterface:
-      ipAddress: "10.255.245.18"
+      ipAddress: "10.255.240.118"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-eng02"
@@ -296,7 +318,7 @@ resources:
       prefix: 24
     hostname: "bs-eng02"
     managementInterface:
-      ipAddress: "10.255.240.117"
+      ipAddress: "10.255.240.119"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-dc01"
@@ -309,7 +331,7 @@ resources:
       prefix: 24
     hostname: "fops-dc01"
     managementInterface:
-      ipAddress: "10.255.240.118"
+      ipAddress: "10.255.240.120"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-eng05"
@@ -322,7 +344,7 @@ resources:
       prefix: 24
     hostname: "bs-eng05"
     managementInterface:
-      ipAddress: "10.255.240.119"
+      ipAddress: "10.255.240.121"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "elgg"
@@ -334,7 +356,7 @@ resources:
       prefix: 24
     hostname: "elgg"
     managementInterface:
-      ipAddress: "10.255.240.120"
+      ipAddress: "10.255.240.122"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-hq03"
@@ -347,7 +369,7 @@ resources:
       prefix: 24
     hostname: "bs-hq03"
     managementInterface:
-      ipAddress: "10.255.240.121"
+      ipAddress: "10.255.240.123"
       position: "FIRST"
 - type: "range.resource.primitive.Switch::1.0.0"
   name: "switch-2"
@@ -367,7 +389,7 @@ resources:
       prefix: 24
     hostname: "soc-analyst01"
     managementInterface:
-      ipAddress: "10.255.240.122"
+      ipAddress: "10.255.240.124"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "is-inet"
@@ -378,7 +400,7 @@ resources:
       ipAddress: "200.200.200.2"
       prefix: 24
     managementInterface:
-      ipAddress: "10.255.240.123"
+      ipAddress: "10.255.240.125"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-sec-rtr"
@@ -398,16 +420,8 @@ resources:
       prefix: 24
       role: "GATEWAY"
     managementInterface:
-      ipAddress: "10.255.240.124"
+      ipAddress: "10.255.240.126"
       position: "LAST"
-- type: "range.resource.configuration.VmConfiguration::1.0.0"
-  name: "download-range-vars"
-  properties:
-    selector:
-      matchInstances:
-      - "ansible"
-    configurationResources:
-    - name: "download-range-vars-script"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-eng03"
   metadata: {}
@@ -419,7 +433,7 @@ resources:
       prefix: 24
     hostname: "bs-eng03"
     managementInterface:
-      ipAddress: "10.255.240.125"
+      ipAddress: "10.255.240.127"
       position: "FIRST"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "Power-PLC"
@@ -436,7 +450,7 @@ resources:
       prefix: 24
     hostname: "bs-it02"
     managementInterface:
-      ipAddress: "10.255.240.126"
+      ipAddress: "10.255.240.128"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-it05"
@@ -449,7 +463,7 @@ resources:
       prefix: 24
     hostname: "bs-it05"
     managementInterface:
-      ipAddress: "10.255.240.127"
+      ipAddress: "10.255.240.129"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-it01"
@@ -462,7 +476,7 @@ resources:
       prefix: 24
     hostname: "bs-it01"
     managementInterface:
-      ipAddress: "10.255.240.128"
+      ipAddress: "10.255.240.130"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "soc-elastic"
@@ -475,7 +489,7 @@ resources:
       prefix: 24
     hostname: "soc-elastic"
     managementInterface:
-      ipAddress: "10.255.240.129"
+      ipAddress: "10.255.240.131"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-edge-fw"
@@ -495,7 +509,7 @@ resources:
       prefix: 30
       role: "BGPPEER"
     managementInterface:
-      ipAddress: "10.255.240.191"
+      ipAddress: "10.255.240.132"
       position: "LAST"
 - type: "range.resource.primitive.Switch::1.0.0"
   name: "switch-5"
@@ -518,7 +532,7 @@ resources:
       prefix: 30
       role: "BGPPEER"
     managementInterface:
-      ipAddress: "10.255.240.172"
+      ipAddress: "10.255.240.133"
       position: "LAST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-ops07"
@@ -531,7 +545,7 @@ resources:
       prefix: 24
     hostname: "fops-ops07"
     managementInterface:
-      ipAddress: "10.255.240.130"
+      ipAddress: "10.255.240.134"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-wec01"
@@ -544,20 +558,20 @@ resources:
       prefix: 24
     hostname: "fops-wec01"
     managementInterface:
-      ipAddress: "10.255.240.131"
+      ipAddress: "10.255.240.135"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-dc01"
   metadata: {}
   properties:
-    image: "global/RDP_Windows_Server_2025:1.1.0"
+    image: "global/RDP_Windows_Server_2022:1.1.0"
     networkInterfaces:
     - name: "Services"
       ipAddress: "172.31.2.7"
       prefix: 24
     hostname: "bs-dc01"
     managementInterface:
-      ipAddress: "10.255.240.132"
+      ipAddress: "10.255.240.136"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-supply01"
@@ -570,7 +584,7 @@ resources:
       prefix: 24
     hostname: "bs-supply01"
     managementInterface:
-      ipAddress: "10.255.240.133"
+      ipAddress: "10.255.240.137"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-file02"
@@ -583,8 +597,18 @@ resources:
       prefix: 24
     hostname: "fops-file02"
     managementInterface:
-      ipAddress: "10.255.240.134"
+      ipAddress: "10.255.240.138"
       position: "FIRST"
+- type: "range.resource.configuration.VmConfiguration::1.0.0"
+  name: "deploy-script-execution"
+  dependsOn:
+  - "download-range-vars"
+  properties:
+    selector:
+      matchInstances:
+      - "ansible"
+    configurationResources:
+    - name: "deploy-script"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-hq02"
   metadata: {}
@@ -596,7 +620,7 @@ resources:
       prefix: 24
     hostname: "bs-hq02"
     managementInterface:
-      ipAddress: "10.255.240.135"
+      ipAddress: "10.255.240.139"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-app01"
@@ -609,7 +633,7 @@ resources:
       prefix: 24
     hostname: "fops-app01"
     managementInterface:
-      ipAddress: "10.255.240.136"
+      ipAddress: "10.255.240.140"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "soc-analyst04"
@@ -622,7 +646,7 @@ resources:
       prefix: 24
     hostname: "soc-analyst04"
     managementInterface:
-      ipAddress: "10.255.240.137"
+      ipAddress: "10.255.240.141"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-app03"
@@ -635,20 +659,20 @@ resources:
       prefix: 24
     hostname: "fops-app03"
     managementInterface:
-      ipAddress: "10.255.240.138"
+      ipAddress: "10.255.240.142"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-file02"
   metadata: {}
   properties:
-    image: "global/packer-windows-2025-server-datacenter:1.0.0"
+    image: "global/RDP_Windows_Server_2022:1.1.0"
     networkInterfaces:
     - name: "Services"
       ipAddress: "172.31.2.11"
       prefix: 24
     hostname: "bs-file02"
     managementInterface:
-      ipAddress: "10.255.240.139"
+      ipAddress: "10.255.240.143"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-flight02"
@@ -661,7 +685,7 @@ resources:
       prefix: 24
     hostname: "fops-flight02"
     managementInterface:
-      ipAddress: "10.255.240.140"
+      ipAddress: "10.255.240.144"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "atc-radar"
@@ -673,7 +697,7 @@ resources:
       prefix: 24
     hostname: "atc-radar"
     managementInterface:
-      ipAddress: "10.255.240.141"
+      ipAddress: "10.255.240.145"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "soc-analyst03"
@@ -686,7 +710,7 @@ resources:
       prefix: 24
     hostname: "soc-analyst03"
     managementInterface:
-      ipAddress: "10.255.240.142"
+      ipAddress: "10.255.240.146"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-ops04"
@@ -699,7 +723,7 @@ resources:
       prefix: 24
     hostname: "fops-ops04"
     managementInterface:
-      ipAddress: "10.255.240.143"
+      ipAddress: "10.255.240.147"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-supply03"
@@ -712,7 +736,7 @@ resources:
       prefix: 24
     hostname: "bs-supply03"
     managementInterface:
-      ipAddress: "10.255.240.144"
+      ipAddress: "10.255.240.148"
       position: "FIRST"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "Flight-Ops-Services"
@@ -732,7 +756,7 @@ resources:
       prefix: 24
     hostname: "soc-analyst02"
     managementInterface:
-      ipAddress: "10.255.240.146"
+      ipAddress: "10.255.240.149"
       position: "FIRST"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "Services"
@@ -749,7 +773,7 @@ resources:
       prefix: 24
     hostname: "fops-flight01"
     managementInterface:
-      ipAddress: "10.255.240.147"
+      ipAddress: "10.255.240.150"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-flight03"
@@ -762,8 +786,16 @@ resources:
       prefix: 24
     hostname: "fops-flight03"
     managementInterface:
-      ipAddress: "10.255.240.148"
+      ipAddress: "10.255.240.151"
       position: "FIRST"
+- type: "range.resource.configuration.ScriptDefinition::1.0.0"
+  name: "deploy-script"
+  properties:
+    cwd: "/etc/ansible"
+    user: "root"
+    content: "./deploy.sh | tee /var/log/playbook_run.log\n"
+    timeout: 7200
+    scriptType: "BASH"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "Engineering-Control-Center"
   properties:
@@ -779,7 +811,7 @@ resources:
       prefix: 24
     hostname: "fops-dc02"
     managementInterface:
-      ipAddress: "10.255.240.149"
+      ipAddress: "10.255.240.152"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "soc-analyst06"
@@ -792,7 +824,7 @@ resources:
       prefix: 24
     hostname: "soc-analyst06"
     managementInterface:
-      ipAddress: "10.255.240.150"
+      ipAddress: "10.255.240.153"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "soc-analyst05"
@@ -805,7 +837,7 @@ resources:
       prefix: 24
     hostname: "soc-analyst05"
     managementInterface:
-      ipAddress: "10.255.240.151"
+      ipAddress: "10.255.240.154"
       position: "FIRST"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "Supply"
@@ -833,7 +865,7 @@ resources:
       prefix: 30
       role: "BGPPEER"
     managementInterface:
-      ipAddress: "10.255.240.192"
+      ipAddress: "10.255.240.155"
       position: "LAST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-ftp"
@@ -846,7 +878,7 @@ resources:
       prefix: 24
     hostname: "bs-ftp"
     managementInterface:
-      ipAddress: "10.255.240.200"
+      ipAddress: "10.255.240.156"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "ansible"
@@ -857,7 +889,7 @@ resources:
       ipAddress: "10.10.10.10"
       prefix: 16
     managementInterface:
-      ipAddress: "10.255.240.152"
+      ipAddress: "10.255.240.157"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "soc-sift"
@@ -870,7 +902,7 @@ resources:
       prefix: 24
     hostname: "soc-sift"
     managementInterface:
-      ipAddress: "10.255.240.153"
+      ipAddress: "10.255.240.158"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-hq05"
@@ -883,7 +915,7 @@ resources:
       prefix: 24
     hostname: "bs-hq05"
     managementInterface:
-      ipAddress: "10.255.240.154"
+      ipAddress: "10.255.240.159"
       position: "FIRST"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "Flight-Control-Center"
@@ -903,20 +935,20 @@ resources:
       prefix: 24
     hostname: "atc-weather"
     managementInterface:
-      ipAddress: "10.255.240.155"
+      ipAddress: "10.255.240.160"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-file01"
   metadata: {}
   properties:
-    image: "global/packer-windows-2025-server-datacenter:1.0.0"
+    image: "global/RDP_Windows_Server_2022:1.1.0"
     networkInterfaces:
     - name: "Services"
       ipAddress: "172.31.2.10"
       prefix: 24
     hostname: "bs-file01"
     managementInterface:
-      ipAddress: "10.255.240.156"
+      ipAddress: "10.255.240.161"
       position: "FIRST"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "Fuel-Sim"
@@ -933,7 +965,7 @@ resources:
       prefix: 24
     hostname: "bs-it04"
     managementInterface:
-      ipAddress: "10.255.240.157"
+      ipAddress: "10.255.240.162"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-ro-hist"
@@ -946,7 +978,7 @@ resources:
       prefix: 24
     hostname: "bs-ro-hist"
     managementInterface:
-      ipAddress: "10.255.240.158"
+      ipAddress: "10.255.240.163"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-ns1"
@@ -959,7 +991,7 @@ resources:
       prefix: 24
     hostname: "bs-ns1"
     managementInterface:
-      ipAddress: "10.255.240.159"
+      ipAddress: "10.255.240.164"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-core-rtr"
@@ -991,31 +1023,8 @@ resources:
       prefix: 30
       role: "BGPPEER"
     managementInterface:
-      ipAddress: "10.255.240.160"
+      ipAddress: "10.255.240.165"
       position: "LAST"
-- type: "range.resource.configuration.VmConfiguration::1.0.0"
-  name: "deploy-script-execution"
-  dependsOn:
-  - "download-range-vars"
-  properties:
-    selector:
-      matchInstances:
-      - "ansible"
-    configurationResources:
-    - name: "deploy-script"
-- type: "range.resource.primitive.VmInstance::1.0.0"
-  name: "fops-flight04"
-  metadata: {}
-  properties:
-    image: "global/RDP_Windows_10:1.1.2"
-    networkInterfaces:
-    - name: "Flight-Control-Center"
-      ipAddress: "172.31.5.84"
-      prefix: 24
-    hostname: "fops-flight04"
-    managementInterface:
-      ipAddress: "10.255.240.102"
-      position: "FIRST"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "Internet"
   properties:
@@ -1031,7 +1040,7 @@ resources:
       prefix: 24
     hostname: "fops-ops05"
     managementInterface:
-      ipAddress: "10.255.240.161"
+      ipAddress: "10.255.240.166"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "soc-syslog"
@@ -1044,30 +1053,8 @@ resources:
       prefix: 24
     hostname: "soc-syslog"
     managementInterface:
-      ipAddress: "10.255.240.162"
+      ipAddress: "10.255.240.167"
       position: "FIRST"
-- type: "range.resource.primitive.VmInstance::1.0.0"
-  name: "bs-eng01"
-  metadata: {}
-  properties:
-    image: "global/RDP_Windows_10:1.1.2"
-    networkInterfaces:
-    - name: "Engineering-Control-Center"
-      ipAddress: "172.31.8.11"
-      prefix: 24
-    hostname: "bs-eng01"
-    managementInterface:
-      ipAddress: "10.255.240.101"
-      position: "FIRST"
-- type: "range.resource.configuration.ScriptDefinition::1.0.0"
-  name: "download-range-vars-script"
-  properties:
-    cwd: "/etc/ansible"
-    user: "root"
-    content: "wget --no-check-certificate --no-cache -e use_proxy=yes -e https_proxy=10.255.240.1:3128\
-      \ -O /etc/ansible/ab-mb.tgz  https://github.com/EricS-Arbitr/airfield-range/raw/main/ab_mb.tgz\
-      \ && tar -xvzf ab_mb.tgz\n"
-    scriptType: "BASH"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "ff-plc-1"
   metadata: {}
@@ -1079,7 +1066,7 @@ resources:
       prefix: 29
     hostname: "ff-plc-1"
     managementInterface:
-      ipAddress: "10.255.245.10"
+      ipAddress: "10.255.240.168"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-ops03"
@@ -1092,7 +1079,7 @@ resources:
       prefix: 24
     hostname: "fops-ops03"
     managementInterface:
-      ipAddress: "10.255.240.163"
+      ipAddress: "10.255.240.169"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-ops06"
@@ -1105,7 +1092,7 @@ resources:
       prefix: 24
     hostname: "fops-ops06"
     managementInterface:
-      ipAddress: "10.255.240.164"
+      ipAddress: "10.255.240.170"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-file01"
@@ -1118,7 +1105,7 @@ resources:
       prefix: 24
     hostname: "fops-file01"
     managementInterface:
-      ipAddress: "10.255.240.165"
+      ipAddress: "10.255.240.171"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-eng06"
@@ -1131,7 +1118,7 @@ resources:
       prefix: 24
     hostname: "bs-eng06"
     managementInterface:
-      ipAddress: "10.255.240.166"
+      ipAddress: "10.255.240.172"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "control-room-hmi"
@@ -1147,7 +1134,7 @@ resources:
       prefix: 29
     hostname: "control-room-hmi"
     managementInterface:
-      ipAddress: "10.255.245.3"
+      ipAddress: "10.255.240.173"
       position: "FIRST"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "Fuel-PLC"
@@ -1164,7 +1151,7 @@ resources:
       prefix: 24
     hostname: "bs-hq04"
     managementInterface:
-      ipAddress: "10.255.240.167"
+      ipAddress: "10.255.240.174"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fuel-db"
@@ -1177,7 +1164,7 @@ resources:
       prefix: 24
     hostname: "fuel-db"
     managementInterface:
-      ipAddress: "10.255.245.19"
+      ipAddress: "10.255.240.175"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-ops02"
@@ -1190,7 +1177,7 @@ resources:
       prefix: 24
     hostname: "fops-ops02"
     managementInterface:
-      ipAddress: "10.255.240.168"
+      ipAddress: "10.255.240.176"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-ops01"
@@ -1203,20 +1190,20 @@ resources:
       prefix: 24
     hostname: "fops-ops01"
     managementInterface:
-      ipAddress: "10.255.240.169"
+      ipAddress: "10.255.240.177"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-dc02"
   metadata: {}
   properties:
-    image: "global/RDP_Windows_Server_2025:1.1.0"
+    image: "global/RDP_Windows_Server_2022:1.1.0"
     networkInterfaces:
     - name: "Services"
       ipAddress: "172.31.2.8"
       prefix: 24
     hostname: "bs-dc02"
     managementInterface:
-      ipAddress: "10.255.240.170"
+      ipAddress: "10.255.240.178"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-supply02"
@@ -1229,5 +1216,18 @@ resources:
       prefix: 24
     hostname: "bs-supply02"
     managementInterface:
-      ipAddress: "10.255.240.171"
+      ipAddress: "10.255.240.179"
       position: "FIRST"
+- type: "range.resource.configuration.ScriptDefinition::1.0.0"
+  name: "download-range-vars-script"
+  properties:
+    cwd: "/etc/ansible"
+    user: "root"
+    content: "wget --no-check-certificate --no-cache -e use_proxy=yes -e https_proxy=10.255.240.1:3128\
+      \ -O /etc/ansible/ab_mb.tgz  https://github.com/EricS-Arbitr/airfield-range/raw/main/ab_mb.tgz\
+      \ && tar -xvzf ab_mb.tgz\n"
+    scriptType: "BASH"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Flight-Ops-Users"
+  properties:
+    cidr: "172.31.6.0/24"

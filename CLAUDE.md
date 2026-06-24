@@ -128,10 +128,10 @@ dual-homed across adjacent levels and forward between them on purpose (§8). `[+
 in-enclave historian/audit DB; exact host IPs finalize in the reconciled build sheets.
 
 **Control plane (`10.255.240.0/20`, gw `10.255.240.1`):** every host has a management NIC here; Ansible control
-node `10.255.240.10`. Suggested per-enclave carve-up of the sixteen `/24`s (finalize in `net.yml`):
-`.240.x` network/infra + range services · `.241.x` enterprise (vcab) · `.242.x` flight ops · `.243.x`
-engineering + security/SOC · `.245.x` OT fuel (mirrors prod `172.16.45/46`) · `.247.x` OT power
-(mirrors prod `172.16.47/48/49`). Exact per-host control IPs live in `host_vars`.
+node at `10.255.240.157` (per blueprint). Mgmt IPs are assigned **sequentially in blueprint order** starting at
+`10.255.240.100` — fuel + power OT hosts are interleaved with the rest of the project's mgmt allocation rather
+than living in dedicated `/24` blocks. (Earlier drafts proposed per-enclave `.245.x` / `.247.x` carve-ups; the
+sequential assignment supersedes them.) Exact per-host control IPs live in `host_vars`.
 
 **Platform reservation (lesson learned):** the `.2` host address is reserved by the platform in **every** subnet (production, OT, and management) — never assign `.2` to any host. Baseline-map hosts that the map placed on `.2` (DMZ `ftp`, `mail01`, and the Win10 workstation ranges, plus the shared `control-room-hmi`) have been shifted off `.2` above; honor this in all future build sheets.
 
@@ -157,13 +157,13 @@ sims `.11.10–.11.13`, mock door-mechanism sim `.11.20`. Control `10.255.243.x`
 `ff-plc-1` **[map]** `172.16.45.10` (OpenPLC); `fuel-sim` **[map]** `172.16.46.17` (pymodbus);
 `control-room-hmi` **[map]** `172.16.45.3` (FUXA, shared); `[+]` historian (Telegraf/InfluxDB 2.7/Grafana)
 `172.16.46.18`, audit DB (PostgreSQL/TimescaleDB) `172.16.46.19`. Optional RO replica `172.31.8.5`.
-Control `10.255.245.x`.
+Control: sequential within `10.255.240.0/20` (see fuel build sheet §1 for exact mgmt IPs).
 
 **Power grid** — OT, segmented, **DNP3 (+ MQTT)**:
 `power-plc` **[map]** `172.16.47.10` (DNP3 outstation/controller), hmi `.47.9` (shared control-room-hmi);
 `power-sim` **[map]** `172.16.49.18` (pandapower + DNP3 outstation), extra sim `172.16.48.18`; `[+]` DNP3
 master + Mosquitto broker, historian, and event/audit DB in the Power-Sim/Extra `/24`s. DNP3 :20000 and MQTT
-:1883 stay intra-OT; the historian collects via the master→MQTT→Telegraf path. Control `10.255.247.x`.
+:1883 stay intra-OT; the historian collects via the master→MQTT→Telegraf path. Control: sequential within `10.255.240.0/20` (per-host mgmt IPs to be assigned when power hosts are added to the blueprint).
 
 ---
 

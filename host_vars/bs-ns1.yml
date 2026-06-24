@@ -1,13 +1,13 @@
 ---
 # host_vars/bs-ns1.yml — Linux (Ubuntu)
 # Image:   global/RDP_Ubuntu_Server_24.04:1.1.0
-# Mgmt:    10.255.240.159/20 (position FIRST → eth0)
-ansible_host: "10.255.240.159"
+# Mgmt:    10.255.240.164/20 (position FIRST → eth0)
+ansible_host: "10.255.240.164"
 network_interfaces:
   - name: "eth0"                     # mgmt (position FIRST)
     ipv4:
       type: "ethernet"
-      address: "10.255.240.159"
+      address: "10.255.240.164"
       netmask: "255.255.240.0"
       gateway: ""
   - name: "eth1"                     # production — DMZ
