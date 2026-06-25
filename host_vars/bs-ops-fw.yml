@@ -1,15 +1,25 @@
 ---
-# host_vars/bs-ops-fw.yml — pfSense firewall (L3.5 boundary, default-deny)
+# host_vars/bs-ops-fw.yml — pfSense firewall (L3.5 boundary, AS 65001)
 # Image:   RC_pfSense:1.0.0
 # Mgmt:    10.255.240.155/20 (position FIRST → vmx0)
-# Data-plane: vmx1..vmx4 (4 NICs from blueprint)
+# Data-plane: vmx1..vmx4 (4 NICs)
+#
+# Architecture (CLAUDE.md §3 row 8):
+#   - OSPF area 0 on SWITCH_3 (vmx1 → bs-ops-rtr) + ENGINEERING_CONTROL_CENTER
+#     (vmx2) + SWITCH_4 (vmx3 → bs-sec-rtr) — the corp IGP
+#   - STATIC-ONLY on SWITCH_5 (vmx4 → bs-modbus-gateway) — default-deny L3.5
+#     boundary. OT umbrella 172.16.0.0/16 reachable via 172.31.1.18.
+#   - redistribute_static into OSPF so corp learns the OT umbrella.
+#   - NO BGP here (eBGP is at the WAN edge only).
+#   - NO blocking ACLs yet — lab permit-any per interface; ACLs come AFTER
+#     all systems are working.
 ansible_host: "10.255.240.155"
 
 pfsense_hostname: "bs-ops-fw"
 pfsense_domain: "vcab.lan"
 
 pfsense_interfaces:
-  - descr: "SWITCH_3"               # OSPF area 0 toward bs-ops-rtr
+  - descr: "SWITCH_3"               # vmx1 — OSPF transit to bs-ops-rtr
     interface: vmx1
     enable: true
     ipv4_type: static
@@ -17,7 +27,7 @@ pfsense_interfaces:
     ipv4_prefixlen: 30
     blockpriv: false
     blockbogons: false
-  - descr: "ENGINEERING_CONTROL_CENTER"   # 172.31.8.0/24 default gateway
+  - descr: "ENGINEERING_CONTROL_CENTER"   # vmx2 — Engineering LAN gateway
     interface: vmx2
     enable: true
     ipv4_type: static
@@ -25,7 +35,7 @@ pfsense_interfaces:
     ipv4_prefixlen: 24
     blockpriv: false
     blockbogons: false
-  - descr: "SWITCH_4"               # OSPF area 0 toward bs-sec-rtr
+  - descr: "SWITCH_4"               # vmx3 — OSPF transit to bs-sec-rtr
     interface: vmx3
     enable: true
     ipv4_type: static
@@ -33,7 +43,7 @@ pfsense_interfaces:
     ipv4_prefixlen: 30
     blockpriv: false
     blockbogons: false
-  - descr: "SWITCH_5"               # STATIC-ONLY toward bs-modbus-gateway (L3.5 boundary)
+  - descr: "SWITCH_5"               # vmx4 — STATIC L3.5 to bs-modbus-gateway
     interface: vmx4
     enable: true
     ipv4_type: static
@@ -42,12 +52,50 @@ pfsense_interfaces:
     blockpriv: false
     blockbogons: false
 
-# Routing intent (decided 2026-06-24, matches PowerPlant pattern):
-#   - OSPF area 0 on SWITCH_3 + SWITCH_4 + ENGINEERING_CONTROL_CENTER (IGP)
-#   - STATIC-ONLY on SWITCH_5 — default-deny L3.5 boundary
-#       OT umbrella 172.16.0.0/16 → 172.31.1.18 (bs-modbus-gateway)
-#   - redistribute_static into OSPF so the OT prefix is reachable upstream
-#   - blueprint tags SWITCH_5 as BGPPEER; that's metadata only — no BGP runs
-#     across this link (default-deny + static is the boundary contract)
-# pfsense_gateways / pfsense_default_gw_name / pfsense_routes / pfsense_ospf —
-# populate when the network play is written.
+pfsense_default_gw_name: "GW_OPS_RTR"
+
+pfsense_gateways:
+  - name: "GW_OPS_RTR"
+    interface: "SWITCH_3"
+    gateway: "172.31.1.13"          # bs-ops-rtr (toward corp/internet)
+  - name: "GW_SEC_RTR"
+    interface: "SWITCH_4"
+    gateway: "172.31.1.22"          # bs-sec-rtr
+  - name: "GW_MODBUS"
+    interface: "SWITCH_5"
+    gateway: "172.31.1.18"          # bs-modbus-gateway (L3.5 — static only)
+
+# OT umbrella static back-stop — bs-modbus-gateway doesn't speak OSPF
+# (ESP boundary), so OT prefixes never enter the corp IGP without help.
+pfsense_routes:
+  - network: "172.16.0.0/16"
+    gateway: "GW_MODBUS"
+    descr: "OT umbrella via bs-modbus-gateway (L3.5 boundary, static)"
+
+pfsense_rules:
+  - name: "Allow any on SWITCH_3 (lab)"
+    interface: "SWITCH_3"
+  - name: "Allow any on ENGINEERING_CONTROL_CENTER (lab)"
+    interface: "ENGINEERING_CONTROL_CENTER"
+  - name: "Allow any on SWITCH_4 (lab)"
+    interface: "SWITCH_4"
+  - name: "Allow any on SWITCH_5 (lab)"
+    interface: "SWITCH_5"
+
+# OSPF area 0 — Engineering /24 + the two non-L3.5 transits (SWITCH_3,
+# SWITCH_4). SWITCH_5 is intentionally OUT (it's the static-only L3.5
+# boundary). `redistribute_static: true` so the OT umbrella back-stop
+# above flows into corp OSPF.
+pfsense_ospf:
+  router_id: "172.31.1.14"
+  networks:
+    - network: "172.31.8.0/24"      # Engineering Control Center
+      area: "0.0.0.0"
+    - network: "172.31.1.12/30"     # SWITCH_3 transit to bs-ops-rtr
+      area: "0.0.0.0"
+    - network: "172.31.1.20/30"     # SWITCH_4 transit to bs-sec-rtr
+      area: "0.0.0.0"
+  redistribute_connected: false
+  redistribute_static: true         # advertise the OT umbrella into corp OSPF
+  redistribute_bgp: false
+  default_originate: false

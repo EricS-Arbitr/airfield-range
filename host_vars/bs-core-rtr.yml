@@ -1,41 +1,68 @@
 ---
-# host_vars/bs-core-rtr.yml — VyOS router
+# host_vars/bs-core-rtr.yml — VyOS router (vcab core, AS 65001 OSPF area 0)
 # Image:   RC-VyOS-Router:1.1.0
-# Mgmt:    10.255.240.165/20 (position LAST → eth6; managed by SimSpace,
-#          not by the vyos role; ansible_host resolves over it)
+# Mgmt:    10.255.240.165/20 (position LAST → eth6; SimSpace-managed)
+#
+# Role: vcab enterprise core. OSPF area 0 on every interface (corp /24
+# LANs + transit /30s); static default toward bs-edge-fw for the outbound
+# path. No BGP (eBGP is at the WAN edge only — see bs-edge-rtr / bs-edge-fw).
 ansible_host: "10.255.240.165"
 
 network_interfaces:
-  - name: "eth0"                     # switch-1 [BGPPEER]
+  - name: "eth0"                     # switch-1 transit to bs-edge-fw
     ipv4:
       address: "172.31.1.6"
       netmask: "255.255.255.252"
       type: "ethernet"
-  - name: "eth1"                     # Services [GATEWAY]
+      ospf: true
+  - name: "eth1"                     # Services LAN gateway
     ipv4:
       address: "172.31.2.1"
       netmask: "255.255.255.0"
       type: "ethernet"
-  - name: "eth2"                     # Headquarters [GATEWAY]
+      ospf: true
+  - name: "eth2"                     # Headquarters LAN gateway
     ipv4:
       address: "172.31.14.1"
       netmask: "255.255.255.0"
       type: "ethernet"
-  - name: "eth3"                     # IT [GATEWAY]
+      ospf: true
+  - name: "eth3"                     # IT LAN gateway
     ipv4:
       address: "172.31.15.1"
       netmask: "255.255.255.0"
       type: "ethernet"
-  - name: "eth4"                     # Supply [GATEWAY]
+      ospf: true
+  - name: "eth4"                     # Supply LAN gateway
     ipv4:
       address: "172.31.16.1"
       netmask: "255.255.255.0"
       type: "ethernet"
-  - name: "eth5"                     # switch-2 [BGPPEER]
+      ospf: true
+  - name: "eth5"                     # switch-2 transit to bs-ops-rtr
     ipv4:
       address: "172.31.1.9"
       netmask: "255.255.255.252"
       type: "ethernet"
+      ospf: true
 
-# Routing protocol (BGP / OSPF / static) — populate when site.yml's
-# network play wires the IGP/eBGP intent. See group_vars/net.yml.
+static_route:
+  route: "0.0.0.0/0"
+  next_hop: "172.31.1.5"             # bs-edge-fw (vmx3 SWITCH_1 .5)
+
+# Strip image-baked self-loop defaults (one per /24 LAN IP). FRR refuses
+# to install a default whose next-hop resolves to a local interface and
+# ECMPs the whole route out of the FIB. See UPSTREAM_FIXES.md.
+extra_static_routes_remove:
+  - network: "0.0.0.0/0"
+    next_hop: "172.31.2.1"           # own eth1 IP (Services)
+  - network: "0.0.0.0/0"
+    next_hop: "172.31.14.1"          # own eth2 IP (Headquarters)
+  - network: "0.0.0.0/0"
+    next_hop: "172.31.15.1"          # own eth3 IP (IT)
+  - network: "0.0.0.0/0"
+    next_hop: "172.31.16.1"          # own eth4 IP (Supply)
+
+# Strip any iBGP the customer vyos role may have pushed in a prior deploy
+# (architectural shift: OSPF area 0 is the corp IGP, eBGP at WAN only).
+remove_vyos_bgp: true

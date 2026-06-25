@@ -1,21 +1,42 @@
 ---
-# host_vars/bs-edge-rtr.yml — VyOS router
+# host_vars/bs-edge-rtr.yml — VyOS router (WAN edge, eBGP AS 65002)
 # Image:   RC-VyOS-Router:1.1.0
-# Mgmt:    10.255.240.133/20 (position LAST → eth2; managed by SimSpace,
-#          not by the vyos role; ansible_host resolves over it)
+# Mgmt:    10.255.240.133/20 (position LAST → eth2; SimSpace-managed)
+#
+# Role: simulated ISP-side edge router. eBGP peers with bs-edge-fw at
+# 199.252.163.1 (AS 65001 ↔ AS 65002), default points at is-inet.
+# No OSPF (eBGP edge).
 ansible_host: "10.255.240.133"
 
 network_interfaces:
-  - name: "eth0"                     # Internet [GATEWAY]
+  - name: "eth0"                     # Internet — peers to is-inet (200.200.200.2)
     ipv4:
       address: "200.200.200.1"
       netmask: "255.255.255.0"
       type: "ethernet"
-  - name: "eth1"                     # switch-0 [BGPPEER]
+  - name: "eth1"                     # switch-0 transit to bs-edge-fw (eBGP)
     ipv4:
       address: "199.252.163.2"
       netmask: "255.255.255.252"
       type: "ethernet"
 
-# Routing protocol (BGP / OSPF / static) — populate when site.yml's
-# network play wires the IGP/eBGP intent. See group_vars/net.yml.
+static_route:
+  route: "0.0.0.0/0"
+  next_hop: "200.200.200.2"          # is-inet (simulated upstream)
+
+# eBGP AS 65002 toward bs-edge-fw (AS 65001) — the only BGP session in
+# the fabric. The customer vyos role auto-emits `redistribute connected`
+# + `redistribute static` so the corp side learns 200.200.200.0/24 and
+# the default route.
+bgp:
+  - as: 65002
+    neighbor:
+      ip: "199.252.163.1"            # bs-edge-fw (AS 65001 — eBGP)
+      as: 65001
+
+# SimSpace VyOS image bakes `0.0.0.0/0 next-hop 200.200.200.1` (own eth0
+# IP). Strip the self-loop so only the real default toward is-inet stays.
+# See UPSTREAM_FIXES.md (VyOS image-baked self-loop pattern).
+extra_static_routes_remove:
+  - network: "0.0.0.0/0"
+    next_hop: "200.200.200.1"        # own eth0 IP (self-loop, image artifact)

@@ -207,3 +207,81 @@
     - vyos
   tags:
     - vyos
+
+# The customer's vyos role's `static_route` field is a single dict, not a
+# list. Hosts that need more than one static (e.g. an OT umbrella back-stop
+# alongside the default) declare them in host_vars as
+# `extra_static_routes: [{network, next_hop, descr}]`. This play pushes them
+# via vyos_config; the role's auto `redistribute static` picks them up.
+- name: Additional VyOS static routes
+  hosts: vyos
+  gather_facts: false
+  tasks:
+    - name: Push extra static routes via vyos_config
+      vyos.vyos.vyos_config:
+        match: line
+        lines:
+          - "set protocols static route {{ item.network }} next-hop {{ item.next_hop }}"
+        save: true
+      loop: "{{ extra_static_routes | default([]) }}"
+      when: extra_static_routes is defined and (extra_static_routes | length) > 0
+  tags:
+    - vyos
+    - extra_static_routes
+
+# The SimSpace VyOS image bakes a stale `0.0.0.0/0 next-hop <X>` entry
+# for every /24 "departmental" interface IP on the box. On routers with
+# multiple such interfaces (bs-core-rtr, bs-ops-rtr, bs-sec-rtr, etc.) this
+# creates competing equal-cost defaults whose next-hops resolve to the
+# router's OWN connected IPs. FRR refuses to install a default whose
+# next-hop is a local interface and ECMPs the whole route out of the FIB —
+# leaving the router with no default at all. Symptom: `show ip route` has
+# no `S>* 0.0.0.0/0` line; downstream subnets see "destination unreachable".
+#
+# Each affected host declares `extra_static_routes_remove: [{network,
+# next_hop}]` in host_vars. This play issues the matching `delete` so the
+# only default left is the one the customer `vyos` role just set from
+# `static_route`. Log all new self-loop discoveries in UPSTREAM_FIXES.md.
+- name: Remove stale VyOS static routes (image-baked self-loop defaults)
+  hosts: vyos
+  gather_facts: false
+  tasks:
+    - name: Delete stale static routes via vyos_config
+      vyos.vyos.vyos_config:
+        match: line
+        lines:
+          - "delete protocols static route {{ item.network }} next-hop {{ item.next_hop }}"
+        save: true
+      loop: "{{ extra_static_routes_remove | default([]) }}"
+      when: extra_static_routes_remove is defined and (extra_static_routes_remove | length) > 0
+  tags:
+    - vyos
+    - extra_static_routes_remove
+
+# Architectural shift (CLAUDE.md §3 row 8): corp IGP is OSPF area 0 + eBGP
+# at the WAN edge only — no internal iBGP mesh. Setting `bgp: []` in
+# host_vars stops new pushes but doesn't remove BGP a prior run may have
+# left in the running config. This play deletes the entire `protocols bgp`
+# subtree on hosts that opt in via `remove_vyos_bgp: true`. bs-edge-rtr
+# (eBGP AS 65002 to bs-edge-fw) intentionally keeps its `bgp:` block.
+- name: Remove stale VyOS iBGP (architectural shift to OSPF-IGP)
+  hosts: vyos
+  gather_facts: false
+  tasks:
+    - name: Delete protocols bgp via vyos_config
+      vyos.vyos.vyos_config:
+        lines:
+          - "delete protocols bgp"
+        save: true
+      when: remove_vyos_bgp | default(false)
+  tags:
+    - vyos
+    - remove_vyos_bgp
+
+- name: pfSense firewalls
+  hosts: pfsense
+  gather_facts: false
+  roles:
+    - pfsense_firewall
+  tags:
+    - pfsense

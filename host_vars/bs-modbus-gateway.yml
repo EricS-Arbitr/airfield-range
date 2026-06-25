@@ -1,31 +1,48 @@
 ---
-# host_vars/bs-modbus-gateway.yml — VyOS router
+# host_vars/bs-modbus-gateway.yml — VyOS router (L3.5 OT boundary, STATIC-ONLY)
 # Image:   RC-VyOS-Router:1.1.0
-# Mgmt:    10.255.240.109/20 (position LAST → eth4; managed by SimSpace,
-#          not by the vyos role; ansible_host resolves over it)
+# Mgmt:    10.255.240.109/20 (position LAST → eth4; SimSpace-managed)
+#
+# Role: head of the OT Purdue chain. STATIC-ONLY at the L3.5 boundary
+# (CLAUDE.md §3 row 8). No OSPF — never advertise OT prefixes into the
+# corp IGP. No BGP. The corp side reaches OT via the static back-stop on
+# bs-ops-fw (`172.16.0.0/16 → 172.31.1.18`); this router only needs a
+# default back out toward bs-ops-fw.
 ansible_host: "10.255.240.109"
 
 network_interfaces:
-  - name: "eth0"                     # switch-5 [BGPPEER]
+  - name: "eth0"                     # switch-5 transit to bs-ops-fw (STATIC)
     ipv4:
       address: "172.31.1.18"
       netmask: "255.255.255.252"
       type: "ethernet"
-  - name: "eth1"                     # Fuel-PLC [GATEWAY]
+  - name: "eth1"                     # Fuel-PLC OT segment gateway
     ipv4:
       address: "172.16.45.9"
       netmask: "255.255.255.248"
       type: "ethernet"
-  - name: "eth2"                     # mtu [GATEWAY]
+  - name: "eth2"                     # MTU (control-room) OT segment gateway
     ipv4:
       address: "172.16.45.1"
       netmask: "255.255.255.248"
       type: "ethernet"
-  - name: "eth3"                     # Fuel-Sim [GATEWAY]
+  - name: "eth3"                     # Fuel-Sim OT segment gateway
     ipv4:
       address: "172.16.46.16"
       netmask: "255.255.255.0"
       type: "ethernet"
 
-# Routing protocol (BGP / OSPF / static) — populate when site.yml's
-# network play wires the IGP/eBGP intent. See group_vars/net.yml.
+static_route:
+  route: "0.0.0.0/0"
+  next_hop: "172.31.1.17"            # bs-ops-fw (vmx4 SWITCH_5 .17)
+
+# Strip image-baked self-loop defaults.
+extra_static_routes_remove:
+  - network: "0.0.0.0/0"
+    next_hop: "172.16.45.9"          # own eth1 IP (Fuel-PLC)
+  - network: "0.0.0.0/0"
+    next_hop: "172.16.45.1"          # own eth2 IP (MTU)
+  - network: "0.0.0.0/0"
+    next_hop: "172.16.46.16"         # own eth3 IP (Fuel-Sim)
+
+remove_vyos_bgp: true

@@ -1,26 +1,40 @@
 ---
-# host_vars/bs-sec-rtr.yml — VyOS router
+# host_vars/bs-sec-rtr.yml — VyOS router (security/SOC core, AS 65001 OSPF area 0)
 # Image:   RC-VyOS-Router:1.1.0
-# Mgmt:    10.255.240.126/20 (position LAST → eth3; managed by SimSpace,
-#          not by the vyos role; ansible_host resolves over it)
+# Mgmt:    10.255.240.126/20 (position LAST → eth3; SimSpace-managed)
+#
+# Role: Physical-Security + SOC core, hanging off bs-ops-fw. OSPF area 0
+# on every interface; static default toward bs-ops-fw. No BGP.
 ansible_host: "10.255.240.126"
 
 network_interfaces:
-  - name: "eth0"                     # switch-4 [BGPPEER]
+  - name: "eth0"                     # switch-4 transit to bs-ops-fw
     ipv4:
       address: "172.31.1.22"
       netmask: "255.255.255.252"
       type: "ethernet"
-  - name: "eth1"                     # Physical-Security [GATEWAY]
+      ospf: true
+  - name: "eth1"                     # Physical-Security LAN gateway
     ipv4:
       address: "172.31.11.1"
       netmask: "255.255.255.0"
       type: "ethernet"
-  - name: "eth2"                     # SOC [GATEWAY]
+      ospf: true
+  - name: "eth2"                     # SOC LAN gateway
     ipv4:
       address: "172.31.7.1"
       netmask: "255.255.255.0"
       type: "ethernet"
+      ospf: true
 
-# Routing protocol (BGP / OSPF / static) — populate when site.yml's
-# network play wires the IGP/eBGP intent. See group_vars/net.yml.
+static_route:
+  route: "0.0.0.0/0"
+  next_hop: "172.31.1.21"            # bs-ops-fw (vmx3 SWITCH_4 .21)
+
+extra_static_routes_remove:
+  - network: "0.0.0.0/0"
+    next_hop: "172.31.11.1"          # own eth1 IP (Physical-Security)
+  - network: "0.0.0.0/0"
+    next_hop: "172.31.7.1"           # own eth2 IP (SOC)
+
+remove_vyos_bgp: true

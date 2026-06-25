@@ -1,36 +1,56 @@
 ---
-# host_vars/bs-ops-rtr.yml — VyOS router
+# host_vars/bs-ops-rtr.yml — VyOS router (flightops core, AS 65001 OSPF area 0)
 # Image:   RC-VyOS-Router:1.1.0
-# Mgmt:    10.255.240.100/20 (position LAST → eth5; managed by SimSpace,
-#          not by the vyos role; ansible_host resolves over it)
+# Mgmt:    10.255.240.100/20 (position LAST → eth5; SimSpace-managed)
+#
+# Role: flightops core. OSPF area 0 on every interface (flightops /24s +
+# both transit /30s); static default toward bs-core-rtr for the outbound
+# path. No BGP.
 ansible_host: "10.255.240.100"
 
 network_interfaces:
-  - name: "eth0"                     # switch-2 [BGPPEER]
+  - name: "eth0"                     # switch-2 transit to bs-core-rtr
     ipv4:
       address: "172.31.1.10"
       netmask: "255.255.255.252"
       type: "ethernet"
-  - name: "eth1"                     # Flight-Ops-Services [GATEWAY]
+      ospf: true
+  - name: "eth1"                     # Flight-Ops-Services LAN gateway
     ipv4:
       address: "172.31.3.1"
       netmask: "255.255.255.0"
       type: "ethernet"
-  - name: "eth2"                     # Flight-Control-Center [GATEWAY]
+      ospf: true
+  - name: "eth2"                     # Flight-Control-Center LAN gateway
     ipv4:
       address: "172.31.5.1"
       netmask: "255.255.255.0"
       type: "ethernet"
-  - name: "eth3"                     # Flight-Ops-Users [GATEWAY]
+      ospf: true
+  - name: "eth3"                     # Flight-Ops-Users LAN gateway
     ipv4:
       address: "172.31.6.1"
       netmask: "255.255.255.0"
       type: "ethernet"
-  - name: "eth4"                     # switch-3 [BGPPEER]
+      ospf: true
+  - name: "eth4"                     # switch-3 transit to bs-ops-fw
     ipv4:
       address: "172.31.1.13"
       netmask: "255.255.255.252"
       type: "ethernet"
+      ospf: true
 
-# Routing protocol (BGP / OSPF / static) — populate when site.yml's
-# network play wires the IGP/eBGP intent. See group_vars/net.yml.
+static_route:
+  route: "0.0.0.0/0"
+  next_hop: "172.31.1.9"             # bs-core-rtr (eth5 switch-2 .9)
+
+# Strip image-baked self-loop defaults — same root cause as bs-core-rtr.
+extra_static_routes_remove:
+  - network: "0.0.0.0/0"
+    next_hop: "172.31.3.1"           # own eth1 IP (FOS)
+  - network: "0.0.0.0/0"
+    next_hop: "172.31.5.1"           # own eth2 IP (FCC)
+  - network: "0.0.0.0/0"
+    next_hop: "172.31.6.1"           # own eth3 IP (FOU)
+
+remove_vyos_bgp: true

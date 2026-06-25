@@ -1,0 +1,421 @@
+---
+# pfsense_firewall — generic role for any pfSense firewall in the topology.
+# Driven entirely by host_vars:
+#   pfsense_hostname, pfsense_domain
+#   pfsense_interfaces[]      — descr + physical NIC + ipv4
+#   pfsense_gateways[]        — named gateways referenced by routes/default
+#   pfsense_default_gw_name   — which gateway to pin as IPv4 default
+#   pfsense_stale_gateways[]  — gateway names from the SimSpace image to remove
+#                               (defaults to ['GW_WAN'] which the previous
+#                               OT-pfSense image baked in pointing at
+#                               192.168.90.1; the new 2.8.1 image may not
+#                               have this, in which case the cleanup is a no-op)
+#   pfsense_disable_outbound_nat (bool, default true) — transit firewall mode
+#   pfsense_routes[]          — static routes referencing a gateway name
+#   pfsense_rules[]           — firewall rules (lab-mode permit-any by default)
+#   pfsense_bgp               — optional FRR BGP config (asn, router_id,
+#                               neighbors[]). Enables FRR on the host.
+#
+# The pfsensible.core collection must be installed on the Ansible controller
+# (see ss-pp-ab/requirements.yml).
+
+- name: Set hostname and domain
+  pfsensible.core.pfsense_setup:
+    hostname: "{{ pfsense_hostname }}"
+    domain: "{{ pfsense_domain | default('localdomain') }}"
+  when: pfsense_hostname is defined
+
+- name: Configure pfSense interfaces
+  pfsensible.core.pfsense_interface:
+    state: present
+    descr: "{{ item.descr }}"
+    interface: "{{ item.interface }}"
+    enable: "{{ item.enable | default(true) }}"
+    ipv4_type: "{{ item.ipv4_type | default('static') }}"
+    ipv4_address: "{{ item.ipv4_address }}"
+    ipv4_prefixlen: "{{ item.ipv4_prefixlen }}"
+    blockpriv: "{{ item.blockpriv | default(omit) }}"
+    blockbogons: "{{ item.blockbogons | default(omit) }}"
+  loop: "{{ pfsense_interfaces | default([]) }}"
+
+# pfsensible.core 0.7.x's pfsense_interface module writes the change to
+# /cf/conf/config.xml but does NOT call pfSense's `interface_configure()`
+# apply step — confirmed on pfSense 2.8.1 (image ships pkg pfSense-pkg-frr).
+# Symptom: SSH banner / GUI shows the IP correctly because both read from
+# config.xml, but `ifconfig <iface>` shows ONLY the IPv6 link-local address.
+# `netstat -rn` has no connected route for the subnet. Everything routed
+# off that interface (BGP, ping, syslog) fails with "No route to host."
+#
+# This task walks the data-plane interfaces we just configured (matched by
+# descr) and calls `interface_configure()` per interface, which flushes
+# config.xml to the kernel via `ifconfig`. Idempotent — checks if the
+# wanted IP is already bound before invoking.
+#
+# NOTE: deliberately filters to OUR interfaces (matched by descr in
+# `pfsense_interfaces`). Calling interface_configure() on `lan` (mgmt
+# interface in the new image NIC ordering) would briefly tear down the
+# SSH path Ansible is using.
+- name: Apply pfSense interface config to the kernel
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/interfaces.inc");
+            $want_descrs = json_decode(getenv("PFS_DESCRS"), true);
+            $ifs = config_get_path("interfaces", []);
+            $applied = [];
+            foreach ($ifs as $key => $cfg) {
+              $descr = $cfg["descr"] ?? "";
+              $want_ip = $cfg["ipaddr"] ?? "";
+              $phys = $cfg["if"] ?? "";
+              $subnet = $cfg["subnet"] ?? "";
+              if (!in_array($descr, $want_descrs, true)) continue;
+              if (!$want_ip || $want_ip === "dhcp" || !$phys) continue;
+              $cur = trim(shell_exec("ifconfig " . escapeshellarg($phys) .
+                " 2>/dev/null | awk \"/inet /{print \\$2; exit}\""));
+              if ($cur !== $want_ip) {
+                // First try the pfSense apply (sets up pf, gateway monitor,
+                // dhcpleases, etc.). On a fresh provision, the WAN slot is
+                // mid-DHCP-discovery; interface_configure() reports false
+                // and may not bind the IP cleanly. Whether it returns
+                // true or false, we follow with a direct `ifconfig` kernel
+                // apply as belt-and-suspenders. dhclient on the interface
+                // (if any) is killed first so it does not fight us.
+                interface_configure($key);
+                if ($subnet) {
+                  shell_exec("pkill -f \"dhclient.*" . escapeshellarg($phys) .
+                    "\" 2>/dev/null");
+                  shell_exec("ifconfig " . escapeshellarg($phys) . " inet " .
+                    escapeshellarg($want_ip) . "/" . intval($subnet) . " up 2>&1");
+                }
+                $applied[] = $key . "(" . $descr . ":" . $phys . ")";
+              }
+            }
+            if (count($applied) > 0) {
+              echo "CHANGED: applied=" . implode(",", $applied) . "\n";
+            } else {
+              echo "OK: all interfaces already have their configured IPs\n";
+            }'
+  environment:
+    PFS_DESCRS: "{{ pfsense_interfaces | map(attribute='descr') | list | to_json }}"
+  register: pfsense_iface_apply
+  changed_when: "'CHANGED' in pfsense_iface_apply.stdout"
+  notify: restart frr
+  when: pfsense_interfaces is defined and (pfsense_interfaces | length) > 0
+
+- name: Configure pfSense gateways
+  pfsensible.core.pfsense_gateway:
+    state: present
+    name: "{{ item.name }}"
+    interface: "{{ item.interface }}"
+    gateway: "{{ item.gateway }}"
+    ipprotocol: "{{ item.ipprotocol | default('inet') }}"
+    descr: "{{ item.descr | default(item.name) }}"
+  loop: "{{ pfsense_gateways | default([]) }}"
+
+# pfsensible.core 0.7.x doesn't expose pfSense's IPv4 default-gateway
+# selection (defaultgw4). The SimSpace OT-pfSense image ships with a stale
+# auto-created "GW_WAN" gateway pointing at 192.168.90.1 (left over from
+# the image's pre-baked config) which becomes the system default. The bad
+# default causes pfSense's antispoof on the renamed WAN interface to
+# silently drop traffic (uRPF reply path mismatch). Remove rogue gateways
+# (`pfsense_stale_gateways`, default ['GW_WAN']) and pin the host's chosen
+# upstream (`pfsense_default_gw_name`) as the IPv4 default. Skipped on hosts
+# that don't define `pfsense_default_gw_name`.
+- name: Remove stale gateways and pin default IPv4 gateway
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/system.inc");
+            require_once("/etc/inc/filter.inc");
+            $stale = json_decode(getenv("PFS_STALE_GWS"), true);
+            $target = getenv("PFS_DEFAULT_GW");
+            $gws = config_get_path("gateways/gateway_item", []);
+            $cleaned = [];
+            $removed = [];
+            foreach ($gws as $gw) {
+              if (isset($gw["name"]) && in_array($gw["name"], $stale, true)) {
+                $removed[] = $gw["name"];
+              } else {
+                $cleaned[] = $gw;
+              }
+            }
+            $current = config_get_path("gateways/defaultgw4", "");
+            $needs_change = (count($removed) > 0) || ($current !== $target);
+            if ($needs_change) {
+              config_set_path("gateways/gateway_item", $cleaned);
+              config_set_path("gateways/defaultgw4", $target);
+              write_config("Pin " . $target . " as IPv4 default; remove stale gateways");
+              system_routing_configure();
+              filter_configure();
+              echo "CHANGED: removed=" . implode(",", $removed) .
+                   " defaultgw4=" . config_get_path("gateways/defaultgw4") . "\n";
+            } else {
+              echo "OK: defaultgw4 already " . $target . " and no stale gateways present\n";
+            }'
+  environment:
+    PFS_DEFAULT_GW: "{{ pfsense_default_gw_name }}"
+    PFS_STALE_GWS: "{{ pfsense_stale_gateways | default(['GW_WAN']) | to_json }}"
+  register: pfsense_gw_fix
+  changed_when: "'CHANGED' in pfsense_gw_fix.stdout"
+  when: pfsense_default_gw_name is defined
+
+# Transit firewall: disable outbound NAT entirely. By default pfSense runs
+# "Automatic Outbound NAT" which rewrites the source of any local-subnet
+# traffic exiting the WAN interface to the WAN IP. That hides real source
+# IPs from upstream — bad for monitoring, source-IP-based policy, and any
+# training scenario where defenders need to see actual device IPs. Switch
+# to "disabled" so this firewall just routes packets. Toggle with
+# `pfsense_disable_outbound_nat` (default true) per host.
+- name: Disable outbound NAT (transit firewall mode)
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/filter.inc");
+            $current = config_get_path("nat/outbound/mode", "automatic");
+            if ($current !== "disabled") {
+              config_set_path("nat/outbound/mode", "disabled");
+              write_config("Disable outbound NAT (transit firewall mode)");
+              filter_configure();
+              echo "CHANGED: outbound NAT mode disabled (was " . $current . ")\n";
+            } else {
+              echo "OK: outbound NAT already disabled\n";
+            }'
+  register: pfsense_nat_disable
+  changed_when: "'CHANGED' in pfsense_nat_disable.stdout"
+  when: pfsense_disable_outbound_nat | default(true)
+
+- name: Configure pfSense static routes
+  pfsensible.core.pfsense_route:
+    state: present
+    descr: "{{ item.descr | default('Static route to ' + item.network) }}"
+    network: "{{ item.network }}"
+    gateway: "{{ item.gateway }}"
+  loop: "{{ pfsense_routes | default([]) }}"
+
+# Lab-mode firewall: permit any-any on each named interface. Tighten by
+# overriding `pfsense_rules` in host_vars later if you want per-rule control.
+- name: Configure pfSense firewall rules (permit-any lab mode)
+  pfsensible.core.pfsense_rule:
+    state: present
+    name: "{{ item.name }}"
+    interface: "{{ item.interface }}"
+    action: "{{ item.action | default('pass') }}"
+    protocol: "{{ item.protocol | default('any') }}"
+    source: "{{ item.source | default('any') }}"
+    destination: "{{ item.destination | default('any') }}"
+  loop: "{{ pfsense_rules | default([]) }}"
+
+# FRR routing (pfSense 2.8.1 image ships pfSense-pkg-frr pre-installed).
+#
+# Important discovery on this image: setting `<installedpackages><frr>
+# <config><enable>on</enable></config></frr>` in config.xml is necessary
+# but NOT sufficient — the pfSense FRR package's config-render only fires
+# when per-feature schema blocks are also present (<frrbgp>, <frrglobalraw>,
+# etc.). Those schema blocks vary by package version (currently
+# pfSense-pkg-frr-2.0.2_6 / frr9-9.1.2_1) and aren't worth coding to.
+#
+# Instead, we bypass the package's renderer and write the FRR config files
+# directly into /var/etc/frr/ — which is where the rc.d/frr script reads
+# from (verified: grep "/var/etc/frr" /usr/local/etc/rc.d/frr). Three
+# files: daemons (enables zebra+bgpd), vtysh.conf (integrated config), and
+# frr.conf (the actual BGP config from `pfsense_bgp` host_vars). The rc
+# script loads these on start and reloads via frr-reload.py on restart.
+#
+# We also still flip the package's enable flag so the FRR rc script gets
+# autoloaded at boot and a future GUI user isn't surprised by FRR being
+# "disabled" while clearly running.
+
+- name: Enable FRR package in pfSense config.xml
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            $current = config_get_path("installedpackages/frr/config/0/enable", "");
+            if ($current !== "on") {
+              config_set_path("installedpackages/frr/config/0/enable", "on");
+              write_config("Enable FRR package");
+              echo "CHANGED: FRR package enabled\n";
+            } else {
+              echo "OK: FRR package already enabled\n";
+            }'
+  register: pfsense_frr_enable
+  changed_when: "'CHANGED' in pfsense_frr_enable.stdout"
+  when: pfsense_bgp is defined or pfsense_ospf is defined
+
+# /var/run/frr is required by watchfrr for its pid file; /var/log/frr for
+# daemon logs. Both must be writable by the frr user. We also ensure the
+# config dir /var/etc/frr exists with frr:frr ownership (the rc.d script
+# auto-creates it on first start, but writing the config files needs the
+# dir present already).
+- name: Ensure FRR runtime + config directories exist
+  ansible.builtin.shell: |
+    set -e
+    for d in /var/run/frr /var/log/frr /var/etc/frr; do
+      mkdir -p "$d"
+      chown frr:frr "$d" 2>/dev/null || true
+      chmod 0755 "$d"
+    done
+  changed_when: false
+  when: pfsense_bgp is defined or pfsense_ospf is defined
+
+- name: Drop FRR daemons file
+  ansible.builtin.template:
+    src: frr.daemons.j2
+    dest: /var/etc/frr/daemons
+    owner: frr
+    group: frr
+    mode: '0640'
+  when: pfsense_bgp is defined or pfsense_ospf is defined
+  notify: restart frr
+
+- name: Drop FRR vtysh.conf
+  ansible.builtin.template:
+    src: frr.vtysh.conf.j2
+    dest: /var/etc/frr/vtysh.conf
+    owner: frr
+    group: frr
+    mode: '0640'
+  when: pfsense_bgp is defined or pfsense_ospf is defined
+  notify: restart frr
+
+- name: Drop FRR frr.conf (BGP from host_vars `pfsense_bgp`)
+  ansible.builtin.template:
+    src: frr.conf.j2
+    dest: /var/etc/frr/frr.conf
+    owner: frr
+    group: frr
+    mode: '0640'
+  when: pfsense_bgp is defined or pfsense_ospf is defined
+  notify: restart frr
+
+# POST-FLIGHT: re-verify the data-plane interfaces still have their
+# configured IPv4 addresses in the kernel. pfSense's WAN-role interface
+# is particularly flaky on this image — subsequent tasks in this role
+# (gateway pin's system_routing_configure(), NAT disable's
+# filter_configure(), pfsense_route's apply step) can transiently
+# re-trigger the WAN's DHCP machinery and leave vmx1 without an IPv4
+# address by the end of the role. This catches that. Same belt-and-
+# suspenders pattern as the upfront apply task: try interface_configure
+# first, then directly bind via ifconfig. Mgmt (`lan`) is explicitly
+# excluded — reconfiguring it would tear down the SSH path.
+- name: Post-flight — re-verify data-plane interface IPs are bound
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/interfaces.inc");
+            $want_descrs = json_decode(getenv("PFS_DESCRS"), true);
+            $ifs = config_get_path("interfaces", []);
+            $fixed = [];
+            foreach ($ifs as $key => $cfg) {
+              if ($key === "lan") continue;
+              $descr = $cfg["descr"] ?? "";
+              $want_ip = $cfg["ipaddr"] ?? "";
+              $phys = $cfg["if"] ?? "";
+              $subnet = $cfg["subnet"] ?? "";
+              if (!in_array($descr, $want_descrs, true)) continue;
+              if (!$want_ip || $want_ip === "dhcp" || !$phys || !$subnet) continue;
+              $cur = trim(shell_exec("ifconfig " . escapeshellarg($phys) .
+                " 2>/dev/null | awk \"/inet /{print \\$2; exit}\""));
+              if ($cur !== $want_ip) {
+                shell_exec("pkill -f \"dhclient.*" . escapeshellarg($phys) . "\" 2>/dev/null");
+                interface_configure($key);
+                shell_exec("ifconfig " . escapeshellarg($phys) . " inet " .
+                  escapeshellarg($want_ip) . "/" . intval($subnet) . " up 2>&1");
+                $fixed[] = $key . "(" . $descr . ":" . $phys . ")";
+              }
+            }
+            if (count($fixed) > 0) {
+              echo "CHANGED: re-bound=" . implode(",", $fixed) . "\n";
+            } else {
+              echo "OK: all data-plane interfaces still bound\n";
+            }'
+  environment:
+    PFS_DESCRS: "{{ pfsense_interfaces | map(attribute='descr') | list | to_json }}"
+  register: pfsense_iface_postflight
+  changed_when: "'CHANGED' in pfsense_iface_postflight.stdout"
+  notify: restart frr
+  when: pfsense_interfaces is defined and (pfsense_interfaces | length) > 0
+
+# Force handler flush so FRR is up by the end of the play rather than
+# waiting until after every subsequent task. Some plays in the playbook
+# (notably the syslog client) depend on routing being live.
+- name: Flush FRR restart handler if pending
+  ansible.builtin.meta: flush_handlers
+
+# Start zebra and bgpd DIRECTLY rather than via `watchfrr` / `service frr`.
+# Confirmed on pfSense 2.8.1 (pkg pfSense-pkg-frr-2.0.2_6 / frr9-9.1.2_1):
+# both watchfrr and the rc.d/frr script claim "Starting watchfrr." and
+# silently exit with no daemons running. Invoking the daemons directly
+# works reliably. Documented in UPSTREAM_FIXES.md 2026-06-04 entries.
+- name: Ensure zebra is running
+  ansible.builtin.shell: |
+    pgrep -q zebra || /usr/local/sbin/zebra -d -A 127.0.0.1 -s 90000000 -f /var/etc/frr/frr.conf
+  changed_when: false
+  when: pfsense_bgp is defined or pfsense_ospf is defined
+
+- name: Ensure bgpd is running
+  ansible.builtin.shell: |
+    pgrep -q bgpd || /usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
+  changed_when: false
+  when: pfsense_bgp is defined
+
+- name: Ensure ospfd is running
+  ansible.builtin.shell: |
+    pgrep -q ospfd || /usr/local/sbin/ospfd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
+  changed_when: false
+  when: pfsense_ospf is defined
+
+# Stop FRR and drop its config when neither protocol is declared.
+# Applies to hosts that previously ran BGP/OSPF and have since had it
+# removed from host_vars (e.g. pp-ot-firewall after moving to static-only
+# at the ESP boundary). Without this, stale zebra+bgpd would keep running
+# from a prior deploy.
+- name: Stop FRR if no routing protocol declared
+  ansible.builtin.shell: |
+    pkill -f watchfrr 2>/dev/null || true
+    pkill -f bgpd 2>/dev/null || true
+    pkill -f ospfd 2>/dev/null || true
+    pkill -f zebra 2>/dev/null || true
+    rm -f /var/run/frr/*.pid
+    rm -f /var/etc/frr/frr.conf /var/etc/frr/daemons /var/etc/frr/vtysh.conf
+  changed_when: false
+  when:
+    - pfsense_bgp is not defined
+    - pfsense_ospf is not defined
+
+# Disable IPv6 system-wide. We don't carry IPv6 in this range — every
+# interface just floats a kernel-auto link-local that's noise in the
+# routing table, ARP-noise on the wire, and a complication for any
+# tcpdump triage. Disable via:
+#   1. pfSense config.xml: remove <system><ipv6allow> (pfSense GUI's
+#      "Allow IPv6" checkbox; absent = disabled).
+#   2. Kernel sysctl: net.inet6.ip6.auto_linklocal=0 (immediate effect
+#      and persisted via /etc/sysctl.conf so it survives reboot).
+#   3. Drop existing IPv6 link-locals from each data-plane interface.
+- name: Disable IPv6 in pfSense config.xml
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            $current = config_get_path("system/ipv6allow", null);
+            if ($current !== null) {
+              config_del_path("system/ipv6allow");
+              write_config("Disable IPv6 globally");
+              echo "CHANGED: IPv6 disabled in config\n";
+            } else {
+              echo "OK: IPv6 already disabled in config\n";
+            }'
+  register: pfsense_ipv6_cfg
+  changed_when: "'CHANGED' in pfsense_ipv6_cfg.stdout"
+
+- name: Persist IPv6 disable via sysctl + apply immediately
+  ansible.builtin.shell: |
+    set -e
+    if ! grep -q "net.inet6.ip6.auto_linklocal=0" /etc/sysctl.conf 2>/dev/null; then
+      echo "net.inet6.ip6.auto_linklocal=0" >> /etc/sysctl.conf
+    fi
+    sysctl net.inet6.ip6.auto_linklocal=0 >/dev/null 2>&1 || true
+    for iface in $(ifconfig -l); do
+      case "$iface" in
+        lo*|enc*|usbus*|pflog*|pfsync*) continue ;;
+      esac
+      ifconfig "$iface" inet6 -auto_linklocal 2>/dev/null || true
+      ifconfig "$iface" inet6 2>/dev/null | awk '/inet6 fe80/{print $2}' | \
+        while IFS= read -r addr; do
+          # strip the %iface scope suffix before delete
+          ifconfig "$iface" inet6 "${addr%%\%*}" delete 2>/dev/null || true
+        done
+    done
+  changed_when: false

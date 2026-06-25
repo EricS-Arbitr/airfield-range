@@ -1,15 +1,24 @@
 ---
-# host_vars/bs-edge-fw.yml — pfSense firewall (perimeter)
+# host_vars/bs-edge-fw.yml — pfSense firewall (perimeter, AS 65001)
 # Image:   RC_pfSense:1.0.0
 # Mgmt:    10.255.240.132/20 (position FIRST → vmx0)
-# Data-plane: vmx1..vmx3 (3 NICs from blueprint)
+# Data-plane: vmx1..vmx3 (3 NICs)
+#
+# Architecture (CLAUDE.md §3 row 8):
+#   - eBGP AS 65001 ↔ AS 65002 on SWITCH_0 (vmx1) to bs-edge-rtr
+#   - OSPF area 0 on SWITCH_1 (vmx3) toward bs-core-rtr — IGP
+#   - DMZ (vmx2) advertised into OSPF so corp learns the route to bs-www
+#   - eBGP → OSPF: default-originate (corp learns the WAN exit via OSPF)
+#   - OSPF → eBGP: redistribute_ospf (ISP learns corp prefixes)
+#   - NOT redistribute_connected on either protocol — would leak the
+#     10.255.240.0/20 mgmt subnet
 ansible_host: "10.255.240.132"
 
 pfsense_hostname: "bs-edge-fw"
 pfsense_domain: "vcab.lan"
 
 pfsense_interfaces:
-  - descr: "SWITCH_0"               # eBGP transit toward bs-edge-rtr (AS 65002)
+  - descr: "SWITCH_0"               # vmx1 — eBGP transit to bs-edge-rtr
     interface: vmx1
     enable: true
     ipv4_type: static
@@ -17,7 +26,7 @@ pfsense_interfaces:
     ipv4_prefixlen: 30
     blockpriv: false
     blockbogons: false
-  - descr: "DMZ"                    # 172.31.12.0/24 default gateway
+  - descr: "DMZ"                    # vmx2 — 172.31.12.0/24 default gateway
     interface: vmx2
     enable: true
     ipv4_type: static
@@ -25,7 +34,7 @@ pfsense_interfaces:
     ipv4_prefixlen: 24
     blockpriv: false
     blockbogons: false
-  - descr: "SWITCH_1"               # OSPF area 0 toward bs-core-rtr
+  - descr: "SWITCH_1"               # vmx3 — OSPF transit to bs-core-rtr
     interface: vmx3
     enable: true
     ipv4_type: static
@@ -34,9 +43,54 @@ pfsense_interfaces:
     blockpriv: false
     blockbogons: false
 
-# Routing intent (decided 2026-06-24, matches PowerPlant):
-#   - eBGP AS 65001 ↔ AS 65002 on SWITCH_0 (peer: bs-edge-rtr 199.252.163.2)
-#   - OSPF area 0 on SWITCH_1 + DMZ (peer: bs-core-rtr 172.31.1.6)
-#   - redistribute_ospf into eBGP, default_originate toward AS 65002
-# pfsense_gateways / pfsense_default_gw_name / pfsense_bgp / pfsense_ospf —
-# populate when the network play is written.
+pfsense_default_gw_name: "GW_ISP"
+
+pfsense_gateways:
+  - name: "GW_ISP"
+    interface: "SWITCH_0"
+    gateway: "199.252.163.2"        # bs-edge-rtr (eBGP peer)
+  - name: "GW_CORE"
+    interface: "SWITCH_1"
+    gateway: "172.31.1.6"           # bs-core-rtr
+
+# Lab-mode permit-any rules per data-plane interface. NO blocking ACLs
+# at this stage (CLAUDE.md ops decision — basic routing first, ACLs later).
+pfsense_rules:
+  - name: "Allow any on SWITCH_0 (lab)"
+    interface: "SWITCH_0"
+  - name: "Allow any on DMZ (lab)"
+    interface: "DMZ"
+  - name: "Allow any on SWITCH_1 (lab)"
+    interface: "SWITCH_1"
+
+# eBGP (the ONLY BGP session in the fabric) — peers bs-edge-rtr (AS 65002).
+# `redistribute_ospf: true` advertises every corp prefix learned via OSPF
+# upstream to the ISP. Connected/static deliberately OFF so the mgmt
+# subnet doesn't leak to the ISP.
+pfsense_bgp:
+  asn: 65001
+  router_id: "172.31.1.5"
+  redistribute_ospf: true
+  redistribute_connected: false
+  redistribute_static: false
+  neighbors:
+    - peer_ip: "199.252.163.2"
+      remote_as: 65002
+      description: "bs-edge-rtr (eBGP edge)"
+
+# OSPF area 0 — DMZ /24 advertised inward, SWITCH_1 transit forms an
+# adjacency with bs-core-rtr. `default_originate: true` so corp learns
+# the WAN exit (via this firewall) through OSPF.
+# `redistribute_connected: false` (mgmt-leak hazard). `redistribute_bgp`
+# off too — the default-originate handles the upstream-default story.
+pfsense_ospf:
+  router_id: "172.31.1.5"
+  networks:
+    - network: "172.31.12.0/24"     # DMZ
+      area: "0.0.0.0"
+    - network: "172.31.1.4/30"      # SWITCH_1 transit to bs-core-rtr
+      area: "0.0.0.0"
+  redistribute_connected: false
+  redistribute_static: false
+  redistribute_bgp: false
+  default_originate: true
