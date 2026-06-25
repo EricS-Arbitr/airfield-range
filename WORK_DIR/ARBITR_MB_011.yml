@@ -510,7 +510,7 @@ resources:
       role: "BGPPEER"
     managementInterface:
       ipAddress: "10.255.240.132"
-      position: "LAST"
+      position: "FIRST"
 - type: "range.resource.primitive.Switch::1.0.0"
   name: "switch-5"
   properties: {}
@@ -866,7 +866,7 @@ resources:
       role: "BGPPEER"
     managementInterface:
       ipAddress: "10.255.240.155"
-      position: "LAST"
+      position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-ftp"
   metadata: {}
