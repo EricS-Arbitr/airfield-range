@@ -1,0 +1,14 @@
+- name: Wait for Active Directory to be fully operational
+  ansible.windows.win_shell: |
+    while (-not (Get-Service NTDS -ErrorAction SilentlyContinue).Status -eq 'Running') {
+      Start-Sleep -Seconds 20
+    }
+  register: ad_ready
+  retries: 30  # Adjust based on typical DC startup time
+  delay: 20
+  until: ad_ready.rc == 0
+
+- name: Ensure Active Directory services are running
+  ansible.windows.win_service:
+    name: NTDS
+    state: started

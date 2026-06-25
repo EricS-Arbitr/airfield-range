@@ -68,4 +68,38 @@ Ansible's default Jinja config sets `trim_blocks=True` + `lstrip_blocks=True`. W
 
 ---
 
+## 2026-06-25 · bug · range-development-ansible/roles/common/tasks/windows.yml
+
+**Symptom.** Every Windows host DDNS-registers BOTH its mgmt adapter (Ethernet0, `10.255.240.0/20`) AND its data-plane adapter into AD DNS. `ping bs-dc01` round-robins onto the mgmt IP roughly half the time — which corp workstations can reach over the platform orchestration VLAN but which is supposed to be out of play in-scenario.
+
+**Root cause.** The customer `common/tasks/windows.yml` "Disable control net DNS registration" task is a double-bug:
+1. The loop value is misspelled `Ehternet0` — never matches the actual mgmt adapter.
+2. The cmdlet parameter is misspelled `RegisterThisConnectionAddress` instead of the real `RegisterThisConnectionsAddress`.
+
+Net result: the task fires but achieves nothing.
+
+**Fix (upstream).** Correct both typos in `range-development-ansible/roles/common/tasks/windows.yml`:
+- `Ehternet0` → `Ethernet0`
+- `RegisterThisConnectionAddress` → `RegisterThisConnectionsAddress`
+
+Same root cause and same fix PowerPlant documented on 2026-05-27.
+
+**Workaround (overlay).** Two plays in `site.yml`:
+1. `Strip mgmt interface from AD DNS registration` (hosts: windows) — explicitly disables DDNS on `Ethernet0` and re-registers so only the data-plane adapter's record stays.
+2. `Purge mgmt-subnet A records from AD DNS` (hosts: pdc) — scrubs any `10.255.240.0/20` A records that already snuck into each forest's zone before play #1 lands.
+
+---
+
+## 2026-06-25 · gap · range-development-ansible/roles/dns
+
+**Symptom.** `nslookup vcab.lan` works from a domain-joined workstation, but `nslookup hbo.com` (or any external name) times out — no traffic exits the forest.
+
+**Root cause.** The customer `dns` role creates AD zones + the records listed in `internal_dns_records` but doesn't configure DNS server forwarders. The Windows DNS server returns SERVFAIL for any zone it isn't authoritative for.
+
+**Fix (upstream).** Have the role optionally set `Set-DnsServerForwarder` based on a `dns_forwarders` group_vars list, or document the requirement in the role README.
+
+**Workaround (overlay).** `Configure DNS forwarders to is-inet` play in `site.yml` runs against `[domain_controllers]` and sets the forwarder list to `8.8.8.8 / 8.8.4.4 / 1.1.1.1` (is-inet's unbound aliases). Same pattern PowerPlant logged on 2026-05-22.
+
+---
+
 <!-- New entries go above this line, newest first. -->

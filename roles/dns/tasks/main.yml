@@ -1,0 +1,67 @@
+---
+# The win_dns_record module supports the following record types: A, AAAA, CNAME, DHCID, NS, PTR, SRV, TXT
+- name: Identify unique zones from DNS records
+  set_fact:
+    unique_zones: "{{ internal_dns_records | map(attribute='zone') | unique | list }}"
+  when: internal_dns_records is defined
+
+- name: Create Forward Lookup Zones
+  community.windows.win_dns_zone:
+    name: "{{ item }}"
+    type: primary
+    state: present
+    replication: forest  # or 'domain' or 'none' based on your needs
+  loop: "{{ unique_zones }}"
+  when:
+    - internal_dns_records is defined
+    - not item.endswith('.in-addr.arpa')
+    - not item.endswith('.ip6.arpa')
+
+- name: Create Reverse Lookup Zones
+  community.windows.win_dns_zone:
+    name: "{{ item }}"
+    type: primary
+    state: present
+    replication: forest
+    forwarder_timeout: 3
+  loop: "{{ unique_zones }}"
+  when:
+    - internal_dns_records is defined
+    - item.endswith('.in-addr.arpa') or item.endswith('.ip6.arpa')
+
+- name: Manage Internal DNS Records
+  community.windows.win_dns_record:
+    name: "{{ item.name }}"
+    type: "{{ item.type }}"
+    value: "{{ item.value }}"
+    zone: "{{ item.zone }}"
+    ttl: "{{ item.ttl | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ internal_dns_records | default([]) }}"
+  when: 
+    - internal_dns_records is defined
+    - item.name is defined
+    - item.type is defined
+    - item.value is defined
+    - item.zone is defined
+
+- name: Add WPAD A record
+  community.windows.win_dns_record:
+    name: "wpad"
+    type: "A"
+    value: "{{ proxy_server }}"
+    zone: "{{ domain_name }}"
+  when: proxy_server is defined
+
+- name: Disable DNS Global Query Blocklist
+  ansible.windows.win_dsc:
+    resource_name: Script
+    GetScript: |
+      return @{
+          Result = (Get-DnsServerGlobalQueryBlockList).Enabled
+      }
+    SetScript: |
+      Set-DnsServerGlobalQueryBlockList -Enable $false
+    TestScript: |
+      $currentState = Get-DnsServerGlobalQueryBlockList
+      return -not $currentState.Enable

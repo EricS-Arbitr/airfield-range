@@ -63,9 +63,29 @@ bs-file01
 bs-file02
 bs-wec
 
+# Windows Engineering + SOC workstations joining vcab.lan (per CLAUDE.md §4
+# best-judgment, confirmed 2026-06-25). Linux engineering (bs-eng05/06) +
+# Linux SOC servers (soc-elastic/soc-syslog/soc-tools) intentionally NOT
+# in these groups — they don't AD-join.
+[vcab_engineering]
+bs-eng01
+bs-eng02
+bs-eng03
+bs-eng04
+
+[vcab_soc]
+soc-analyst01
+soc-analyst02
+soc-analyst03
+soc-analyst04
+soc-analyst05
+soc-analyst06
+
 [vcab:children]
 vcab_workstations
 vcab_services
+vcab_engineering
+vcab_soc
 
 # ------------------------------------------------------------
 # Flight Ops (flightops.lan) — workstations
@@ -297,11 +317,18 @@ bs-supply05
 bs-file01
 bs-file02
 bs-wec
-# Engineering Win hosts — pending domain decision (CLAUDE.md §4):
-# bs-eng01
-# bs-eng02
-# bs-eng03
-# bs-eng04
+# Engineering Win hosts (Eng = vcab.lan, confirmed 2026-06-25)
+bs-eng01
+bs-eng02
+bs-eng03
+bs-eng04
+# SOC Win analysts (SOC = vcab.lan, confirmed 2026-06-25)
+soc-analyst01
+soc-analyst02
+soc-analyst03
+soc-analyst04
+soc-analyst05
+soc-analyst06
 
 # Windows hosts that join flightops.lan
 [members_flightops]

@@ -1,0 +1,36 @@
+- name: wait for LDAP
+  ansible.windows.win_wait_for:
+    host: "{{ domain_name }}"
+    port: 389
+    timeout: 600
+
+- name: Check current password complexity setting
+  ansible.windows.win_shell: (Get-ADDefaultDomainPasswordPolicy).ComplexityEnabled
+  register: current_setting
+  changed_when: false
+
+- name: Disable password complexity in domain GPO
+  ansible.windows.win_shell: Set-ADDefaultDomainPasswordPolicy -Identity (Get-ADDomain) -ComplexityEnabled $false
+  when:
+    - current_setting.stdout | regex_search('True') != None
+
+
+- name: Create Users
+  microsoft.ad.user:
+    name: "{{ item.name }}"
+    password: "{{ item.password }}"
+    password_never_expires: yes
+    state: present
+  loop: "{{ DomainUsers }}"
+  when:
+    - DomainUsers is defined
+
+- name: Group Assignment
+  microsoft.ad.user:
+    name: "{{ item.name }}"
+    groups: 
+      set: "{{ item.groups }}"
+    state: present
+  loop: "{{ DomainUsers }}"
+  when:
+    - item.groups is defined

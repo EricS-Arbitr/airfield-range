@@ -285,3 +285,185 @@
     - pfsense_firewall
   tags:
     - pfsense
+
+# =============================================================================
+# Foundation tier — Active Directory (vcab.lan + flightops.lan)
+# =============================================================================
+# Two-domain build: bs-dc01 promotes vcab.lan, fops-dc01 promotes flightops.lan.
+# Each host in [pdc] picks up its own `domain_name` from group_vars/{vcab,
+# flightops}.yml via inventory-group precedence, so a single `hosts: pdc` play
+# fans out cleanly across both forests.
+
+- name: dcpromo
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - dcpromo
+  tags:
+    - dcpromo
+
+- name: Create Users
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - create_users
+  tags:
+    - create_users
+
+- name: dns
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - dns
+  tags:
+    - dns
+
+# The customer's `dns` role creates AD zones and records but doesn't touch
+# DNS forwarders, so anything outside vcab.lan / flightops.lan is unresolvable
+# on the domain workstations. Point both DCs at is-inet's simulated public DNS
+# (unbound binds the 8.8.8.8 / 8.8.4.4 / 1.1.1.1 aliases on is-inet — see
+# PowerPlant ss-pp-ab/UPSTREAM_FIXES.md 2026-05-22 entry).
+- name: Configure DNS forwarders to is-inet
+  hosts: domain_controllers
+  gather_facts: false
+  tasks:
+    - name: Point Windows DNS forwarder at is-inet
+      ansible.windows.win_powershell:
+        script: |
+          $current = @((Get-DnsServerForwarder).IPAddress.IPAddressToString | Sort-Object)
+          $desired = @('8.8.8.8', '8.8.4.4', '1.1.1.1') | Sort-Object
+          if (-not (Compare-Object $current $desired -SyncWindow 0)) {
+            $Ansible.Changed = $false
+            Write-Output "DNS forwarder already set to: $($desired -join ', ')"
+          } else {
+            Set-DnsServerForwarder -IPAddress $desired -UseRootHint $false -Timeout 3
+            $Ansible.Changed = $true
+            Write-Output "DNS forwarder updated to: $($desired -join ', ')"
+          }
+  tags:
+    - dns
+    - dns_forwarder
+
+# Pre-emptively strip 169.254.x.x APIPA addresses Windows assigns when the
+# DHCP→static handoff lags (most common on .3 host in every subnet during
+# PowerPlant). If APIPA stays, domain join fails with "The specified domain
+# either does not exist or could not be contacted."
+- name: Strip APIPA
+  hosts: windows
+  gather_facts: false
+  roles:
+    - strip_apipa
+  tags:
+    - strip_apipa
+
+# Two Join Domain plays — one per forest. Each member host inherits its own
+# `domain_name` from the vcab/flightops group_vars (members_vcab hosts are
+# also in [vcab] via the vcab_workstations / vcab_services / vcab_engineering
+# / vcab_soc subgroups; members_flightops hosts similarly under [flightops]).
+- name: Join Domain — vcab.lan
+  hosts: members_vcab
+  gather_facts: false
+  roles:
+    - domain_member_retry
+  tags:
+    - domain_member_retry
+    - join_vcab
+
+- name: Join Domain — flightops.lan
+  hosts: members_flightops
+  gather_facts: false
+  roles:
+    - domain_member_retry
+  tags:
+    - domain_member_retry
+    - join_flightops
+
+# Promotes bs-dc02 into vcab.lan and fops-dc02 into flightops.lan. The
+# additional_dc role joins each VM as a workstation first (using its
+# domain_name from group_vars), then runs Install-ADDSDomainController.
+- name: Additional DC
+  hosts: additional_dc
+  gather_facts: false
+  roles:
+    - additional_dc
+  tags:
+    - additional_dc
+
+- name: dc_status
+  hosts: domain_controllers
+  gather_facts: false
+  roles:
+    - dc_status
+  tags:
+    - dc_status
+
+# The customer's common/tasks/windows.yml "Disable control net DNS
+# registration" task is a double-no-op (typo `Ehternet0` + misspelled
+# `RegisterThisConnectionAddress` cmdlet param). Net result: every Windows
+# host DDNS-registers BOTH Ethernet0 (mgmt 10.255.240.0/20) AND the
+# data-plane adapter, so name resolution round-robins onto the mgmt IP
+# (which is supposed to be out of play in-scenario).
+#
+# Disable DDNS on Ethernet0 on every Windows host and force a re-register
+# so the data-plane record stays. The next play purges any 10.255.240.0/20
+# records already in AD DNS. Logged in UPSTREAM_FIXES.md.
+- name: Strip mgmt interface from AD DNS registration
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: Disable DDNS on Ethernet0 (mgmt adapter)
+      ansible.windows.win_powershell:
+        script: |
+          $iface = 'Ethernet0'
+          $c = Get-DnsClient -InterfaceAlias $iface -ErrorAction SilentlyContinue
+          if ($null -eq $c) {
+            $Ansible.Changed = $false
+            Write-Output "No $iface adapter present; nothing to do."
+            return
+          }
+          if ($c.RegisterThisConnectionsAddress) {
+            Set-DnsClient -InterfaceAlias $iface -RegisterThisConnectionsAddress $false
+            ipconfig /registerdns | Out-Null
+            $Ansible.Changed = $true
+            Write-Output "Disabled DDNS on $iface; re-registered."
+          } else {
+            $Ansible.Changed = $false
+            Write-Output "DDNS already disabled on $iface."
+          }
+  tags:
+    - strip_mgmt_dns
+
+# Scrub any 10.255.240.0/20 A records that already snuck into AD DNS before
+# the strip_mgmt_dns play landed. Runs against both PDCs — each one targets
+# its own forest's zone (`vcab.lan` on bs-dc01, `flightops.lan` on fops-dc01)
+# via the per-host `domain_name`. PTR records in 240.255.10.in-addr.arpa are
+# scoped to whatever reverse zones the dns role created — we don't expect
+# any to be present yet, but log_only here to be safe.
+- name: Purge mgmt-subnet A records from AD DNS
+  hosts: pdc
+  gather_facts: false
+  tasks:
+    - name: Remove A records in {{ domain_name }} whose IPv4 falls in 10.255.240.0/20
+      ansible.windows.win_powershell:
+        script: |
+          $zone = '{{ domain_name }}'
+          # 10.255.240.0/20 = 10.255.240.0 .. 10.255.255.255 (third octet 240..255)
+          $stale = Get-DnsServerResourceRecord -ZoneName $zone -RRType A -ErrorAction SilentlyContinue |
+            Where-Object {
+              $ip = $_.RecordData.IPv4Address.ToString()
+              if ($ip -notlike '10.255.*') { return $false }
+              $third = [int]($ip.Split('.')[2])
+              ($third -ge 240) -and ($third -le 255)
+            }
+          foreach ($r in $stale) {
+            Remove-DnsServerResourceRecord -ZoneName $zone -InputObject $r -Force -ErrorAction Stop
+          }
+          if ($stale.Count -eq 0) {
+            $Ansible.Changed = $false
+            Write-Output "No stale 10.255.240.0/20 A records in $zone."
+          } else {
+            $Ansible.Changed = $true
+            Write-Output "Removed $($stale.Count) stale A record(s) in $zone."
+          }
+  tags:
+    - purge_mgmt_dns
