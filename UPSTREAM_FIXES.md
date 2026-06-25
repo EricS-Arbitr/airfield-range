@@ -38,4 +38,34 @@ vyos@bs-core-rtr$ show ip route 0.0.0.0/0
 
 ---
 
+## 2026-06-25 · bug · roles/pfsense_firewall/handlers/main.yml (ported from PowerPlant)
+
+**Symptom.** On any pfSense host that defines BOTH `pfsense_bgp` and `pfsense_ospf` in `host_vars` (the eBGP-edge case — `bs-edge-fw` here, `pp-external-firewall` in PowerPlant), the `restart frr` handler fails with `bgpd: -A option specified more than once! Invalid options.` after committing FRR config changes. `ospfd` never starts; the firewall loses its OSPF adjacencies and BGP session.
+
+**Root cause.** The handler's shell heredoc has the two protocol-launch lines inlined:
+
+```
+{% if pfsense_bgp is defined %}/usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf{% endif %}
+{% if pfsense_ospf is defined %}/usr/local/sbin/ospfd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf{% endif %}
+```
+
+Ansible's default Jinja config sets `trim_blocks=True` + `lstrip_blocks=True`. With both, the newline after the first `{% endif %}` is trimmed AND the leading whitespace of the next `{% if %}` is stripped — leaving `bgpd ... frr.conf/usr/local/sbin/ospfd ...` as one shell command. The shell parses `-A 127.0.0.1` twice (once from each command) and `bgpd` rejects it.
+
+**Detection.** `restart frr` handler errors with the `-A option specified more than once!` message + bgpd usage dump. The smushed command is visible in the failure output as a single `cmd:` line.
+
+**Fix (upstream).** Put each `bgpd`/`ospfd` launch on its own line with the `{% if %}` and `{% endif %}` on their own lines too, so Jinja's whitespace stripping leaves the launch lines intact:
+
+```
+{% if pfsense_bgp is defined %}
+/usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
+{% endif %}
+{% if pfsense_ospf is defined %}
+/usr/local/sbin/ospfd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
+{% endif %}
+```
+
+**Workaround (overlay).** Already applied in `airfield-range/roles/pfsense_firewall/handlers/main.yml`. Back-port the same fix into `PowerPlant/ss-pp-ab/roles/pfsense_firewall/handlers/main.yml` — `pp-external-firewall` defines both `pfsense_bgp` (eBGP to ISP) and `pfsense_ospf` (area 0 on DMZ + EDGE_TRANSIT), so the same bug should affect PowerPlant FRR convergence (consistent with the "FRR convergence pending verification" note in ss-pp-ab/CLAUDE.md).
+
+---
+
 <!-- New entries go above this line, newest first. -->
