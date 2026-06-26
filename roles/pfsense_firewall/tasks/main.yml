@@ -336,6 +336,49 @@
 - name: Flush FRR restart handler if pending
   ansible.builtin.meta: flush_handlers
 
+# Post-handler rebind: the restart-frr handler kills + restarts zebra/ospfd,
+# and on some pfSense images that race causes one or more data-plane vmx
+# interfaces to lose their IP between the SIGTERM and FRR re-attach. Same
+# logic as the earlier post-flight task, but runs AFTER handlers fire so it
+# catches the post-restart drop too. We do NOT notify restart frr from here
+# (zebra/ospfd are already running; just re-bind the IP and FRR picks it up
+# automatically). Logged in UPSTREAM_FIXES.md.
+- name: Post-handler — re-verify data-plane interface IPs survived FRR restart
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/interfaces.inc");
+            $want_descrs = json_decode(getenv("PFS_DESCRS"), true);
+            $ifs = config_get_path("interfaces", []);
+            $fixed = [];
+            foreach ($ifs as $key => $cfg) {
+              if ($key === "lan") continue;
+              $descr = $cfg["descr"] ?? "";
+              $want_ip = $cfg["ipaddr"] ?? "";
+              $phys = $cfg["if"] ?? "";
+              $subnet = $cfg["subnet"] ?? "";
+              if (!in_array($descr, $want_descrs, true)) continue;
+              if (!$want_ip || $want_ip === "dhcp" || !$phys || !$subnet) continue;
+              $cur = trim(shell_exec("ifconfig " . escapeshellarg($phys) .
+                " 2>/dev/null | awk \"/inet /{print \\$2; exit}\""));
+              if ($cur !== $want_ip) {
+                shell_exec("pkill -f \"dhclient.*" . escapeshellarg($phys) . "\" 2>/dev/null");
+                interface_configure($key);
+                shell_exec("ifconfig " . escapeshellarg($phys) . " inet " .
+                  escapeshellarg($want_ip) . "/" . intval($subnet) . " up 2>&1");
+                $fixed[] = $key . "(" . $descr . ":" . $phys . ":" . $cur . "→" . $want_ip . ")";
+              }
+            }
+            if (count($fixed) > 0) {
+              echo "POST-HANDLER FIXED: " . implode(",", $fixed) . "\n";
+            } else {
+              echo "POST-HANDLER OK: all data-plane interfaces still bound\n";
+            }'
+  environment:
+    PFS_DESCRS: "{{ pfsense_interfaces | map(attribute='descr') | list | to_json }}"
+  register: pfsense_iface_postrestart
+  changed_when: "'POST-HANDLER FIXED' in pfsense_iface_postrestart.stdout"
+  when: pfsense_interfaces is defined and (pfsense_interfaces | length) > 0
+
 # Start zebra and bgpd DIRECTLY rather than via `watchfrr` / `service frr`.
 # Confirmed on pfSense 2.8.1 (pkg pfSense-pkg-frr-2.0.2_6 / frr9-9.1.2_1):
 # both watchfrr and the rc.d/frr script claim "Starting watchfrr." and

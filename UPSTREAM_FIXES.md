@@ -228,4 +228,56 @@ Bare task body:
 
 ---
 
+## 2026-06-26 · bug · range-development-ansible/roles/mapped_drive
+
+**Symptom.** Running `mapped_drive` against any non-DC Windows host fails with:
+
+```
+"msg": "Resource 'GroupPolicy' not found."
+"msg": "Failed to invoke DSC Test method: The term 'Get-GPO' is not recognized..."
+```
+
+…on every member workstation / file server in both forests.
+
+**Root cause.** The role uses `ansible.windows.win_dsc` with the **`GroupPolicy`** DSC resource (and `GPRegistryValue`, `GPLink` for the linked GPO). Both the DSC resource and the underlying `Get-GPO`/`Set-GPRegistryValue` cmdlets ship with `RSAT-GPMC`, which is **only installed by default on Domain Controllers**. Member workstations and member servers don't have it.
+
+**Architecturally**, the role's intent IS to run once on a DC: create a single GPO, populate its registry values, link it to the domain root. GP replication then propagates the GPO to every DC and every member machine applies it at next login. Targeting member hosts directly was always the wrong shape — every member runs into the missing-module error and there's no benefit to running it per-host.
+
+**Fix (upstream).** Either move the `mapped_drive` README to clearly call out "this role MUST run on a Domain Controller" or add a guard at the top of `tasks/main.yml`:
+
+```yaml
+- name: Fail early if RSAT-GPMC is missing
+  ansible.windows.win_powershell:
+    script: |
+      if (-not (Get-Command Get-GPO -ErrorAction SilentlyContinue)) {
+        throw "mapped_drive must run on a Domain Controller (RSAT-GPMC required)."
+      }
+```
+
+**Workaround (overlay).** Already applied in airfield-range `site.yml`: both `Mapped Drive — vcab.lan` and `Mapped Drive — flightops.lan` plays now target `pdc_vcab` / `pdc_flightops` instead of `members_*`. The GPO replicates to every member automatically.
+
+---
+
+## 2026-06-26 · bug (recurring) · pfSense interface IP drops during FRR restart
+
+**Symptom.** Hosts behind `bs-ops-fw` (Engineering `172.31.8.0/24`, SOC `172.31.7.0/24`) intermittently can't reach `bs-dc01` to join `vcab.lan`. Traceroute from a failed host (e.g., `bs-eng01 172.31.8.11`):
+
+```
+tracert -d 172.31.2.7
+  1   172.31.8.1   <- bs-ops-fw responds
+  2   172.31.8.1  reports: Destination host unreachable
+```
+
+OSPF adjacency is `Full` on bs-ops-fw (FRR shows it), and `bs-ops-rtr` knows the route to `172.31.2.0/24`. But `netstat -rn` on bs-ops-fw is missing the connected entry for `172.31.1.12/30` (SWITCH_3/vmx1) — vmx1 has no kernel IP, so the kernel rejects FRR's attempt to install the OSPF-learned route via that interface.
+
+**Root cause.** The `pfsense_firewall` role's `restart frr` handler kills + restarts `zebra` and `ospfd`. On the SimSpace `RC_pfSense:1.0.0` image, that SIGTERM occasionally races with one of the data-plane interfaces and the kernel IP drops between the SIGTERM and the new daemon's `interface_attach`. After the handler completes, vmx1 (or whichever NIC lost the race) is up at L2 (FRR still gets Hellos) but has no IPv4 address at the kernel level.
+
+The existing "Post-flight — re-verify data-plane interface IPs are bound" task in the role runs *before* the handler — so it can't catch a drop that happens *because of* the handler firing later in the same play.
+
+**Fix (upstream).** Add a complementary post-handler rebind task that runs *after* `meta: flush_handlers`. Same PHP body as the pre-handler task (`interface_configure()` + raw `ifconfig`), just scheduled after the restart-frr handler fires.
+
+**Workaround (overlay).** Applied in `airfield-range/roles/pfsense_firewall/tasks/main.yml` — new task "Post-handler — re-verify data-plane interface IPs survived FRR restart" runs immediately after the `flush_handlers` meta task. Does not re-notify `restart frr` (the daemons are already running; re-binding the kernel IP is enough — FRR's interface listener picks it up).
+
+---
+
 <!-- New entries go above this line, newest first. -->

@@ -483,8 +483,13 @@
   tags:
     - file_share
 
+# mapped_drive uses win_dsc with the GroupPolicy DSC resource — must run on
+# a DC, which has RSAT-GPMC + the GroupPolicy DSC module installed.
+# GP replication propagates the GPO to every member at next login.
+# (Previously targeted `members_*` directly, which failed on every member
+#  with "Resource 'GroupPolicy' not found" / "Get-GPO not recognized".)
 - name: Mapped Drive — vcab.lan
-  hosts: members_vcab
+  hosts: pdc_vcab
   gather_facts: false
   roles:
     - mapped_drive
@@ -493,7 +498,7 @@
     - mapped_drive_vcab
 
 - name: Mapped Drive — flightops.lan
-  hosts: members_flightops
+  hosts: pdc_flightops
   gather_facts: false
   roles:
     - mapped_drive
