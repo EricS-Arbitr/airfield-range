@@ -565,16 +565,14 @@
             Write-Output "Created conditional forwarder $name -> $master"
           }
 
+    # Forest.GetAllTrustRelationships() misses one-side-only trusts that
+    # netdom can leave behind. Get-ADTrust queries trustedDomain objects
+    # directly and catches the trust regardless of which API created it.
     - name: Check whether trust toward flightops.lan already exists
       ansible.windows.win_powershell:
         script: |
-          try {
-            $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
-            $t = $f.GetAllTrustRelationships() | Where-Object { $_.TargetName -ieq 'flightops.lan' }
-            if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
-          } catch {
-            Write-Output 'absent'
-          }
+          $t = Get-ADTrust -Filter 'Target -eq "flightops.lan"' -ErrorAction SilentlyContinue
+          if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
       register: vcab_trust_state
       changed_when: false
 
@@ -599,6 +597,10 @@
             )
             $Ansible.Changed = $true
             Write-Output "Created inbound trust on vcab.lan from flightops.lan"
+          } catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectExistsException] {
+            # Trust already existed (likely from a prior netdom run); no-op.
+            $Ansible.Changed = $false
+            Write-Output "Trust already exists between vcab.lan and flightops.lan; skipping create"
           } catch {
             $Ansible.Failed = $true
             throw
@@ -633,13 +635,8 @@
     - name: Check whether trust from vcab.lan already exists
       ansible.windows.win_powershell:
         script: |
-          try {
-            $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
-            $t = $f.GetAllTrustRelationships() | Where-Object { $_.TargetName -ieq 'vcab.lan' }
-            if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
-          } catch {
-            Write-Output 'absent'
-          }
+          $t = Get-ADTrust -Filter 'Target -eq "vcab.lan"' -ErrorAction SilentlyContinue
+          if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
       register: fops_trust_state
       changed_when: false
 
@@ -659,6 +656,9 @@
             )
             $Ansible.Changed = $true
             Write-Output "Created outbound trust on flightops.lan to vcab.lan"
+          } catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectExistsException] {
+            $Ansible.Changed = $false
+            Write-Output "Trust already exists between flightops.lan and vcab.lan; skipping create"
           } catch {
             $Ansible.Failed = $true
             throw

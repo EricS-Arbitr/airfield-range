@@ -188,12 +188,12 @@ done
 
 # Cross-forest trust — outgoing on vcab, incoming on flightops
 check_ps bs-dc01 \
-  '[System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest().GetAllTrustRelationships() | Where-Object { $_.TargetName -eq "flightops.lan" } | Select-Object -ExpandProperty TargetName' \
+  'Get-ADTrust -Filter "Target -eq \"flightops.lan\"" | Select-Object -ExpandProperty Target' \
   '\(stdout\)[[:space:]]+flightops\.lan' \
   "Cross-forest trust on vcab side (outgoing to flightops.lan)"
 
 check_ps fops-dc01 \
-  '[System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest().GetAllTrustRelationships() | Where-Object { $_.TargetName -eq "vcab.lan" } | Select-Object -ExpandProperty TargetName' \
+  'Get-ADTrust -Filter "Target -eq \"vcab.lan\"" | Select-Object -ExpandProperty Target' \
   '\(stdout\)[[:space:]]+vcab\.lan' \
   "Cross-forest trust on flightops side (incoming from vcab.lan)"
 
