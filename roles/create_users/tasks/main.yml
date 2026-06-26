@@ -51,3 +51,13 @@
     - "{{ DomainUsers }}"
     - groups
   when: DomainUsers is defined
+
+# Unconditional belt-and-suspenders: simspace is the lab convention admin
+# account (declared in group_vars/all.yml as `domain_admin`). The loop-based
+# tasks above can silently skip if a future schema change breaks the loop;
+# this one always runs.
+- name: Force-add the lab admin user to Domain Admins (no loop)
+  microsoft.ad.group:
+    identity: "Domain Admins"
+    members:
+      add: ["{{ domain_admin }}"]

@@ -38,7 +38,7 @@ internal_dns_records:
 DomainUsers:
   - name: "simspace"
     fullname: "SimSpace Admin"
-    password: "{{ vault_simspace_password }}"
+    password: "{{ domain_admin_password }}"  # already in group_vars/all.yml; vault.yml isn't auto-loaded (no [vault] group)
     groups: [ "Domain Admins" ]
   # Per-user seeds get added here as the build sheet for each enclave
   # firms up (Headquarters, IT, Supply roles map to OUs and groups).

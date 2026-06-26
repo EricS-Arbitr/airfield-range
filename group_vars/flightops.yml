@@ -52,5 +52,5 @@ ad_trust:
 DomainUsers:
   - name: "simspace"
     fullname: "SimSpace Admin"
-    password: "{{ vault_simspace_password }}"
+    password: "{{ domain_admin_password }}"  # already in group_vars/all.yml; vault.yml isn't auto-loaded
     groups: [ "Domain Admins" ]
