@@ -102,4 +102,22 @@ Same root cause and same fix PowerPlant documented on 2026-05-27.
 
 ---
 
+## 2026-06-25 · bug · range-development-ansible/roles/dns/tasks/main.yml
+
+**Symptom.** First `dns` play run after a fresh `dcpromo` fails on both PDCs with `Failed to set properties on the zone <domain>: Failed to reset the directory partition for zone <domain> on server <DC>.`
+
+**Root cause.** `dcpromo` auto-creates the forward zone for the new domain (e.g., `vcab.lan`) and stores it in the **domain** directory partition (`CN=MicrosoftDNS,DC=DomainDnsZones,...`). The customer `dns` role then runs `community.windows.win_dns_zone` with `state: present` + `replication: forest` (hardcoded). Because the zone already exists, the module attempts to **migrate** its replication scope from the domain partition to the forest partition. On a brand-new single-domain forest the migration call (`Set-DnsServerPrimaryZone -ReplicationScope Forest`) errors with the "reset the directory partition" message; for our two-forest build it fails identically on `vcab.lan` (bs-dc01) and `flightops.lan` (fops-dc01).
+
+**Fix (upstream).** Replace the hardcoded `replication: forest` in both zone tasks with a variable that defaults to a value compatible with the most common deployment shape (single-domain forest):
+
+```yaml
+replication: "{{ dns_zone_replication | default('domain') }}"
+```
+
+For ranges with multi-domain forests where forest-wide replication actually matters, set `dns_zone_replication: forest` in `group_vars/all.yml`. The literal comment `# or 'domain' or 'none' based on your needs` already in the role file suggests the original author intended this to be tunable; it just never was.
+
+**Workaround (overlay).** Already applied in `airfield-range/roles/dns/tasks/main.yml` (both Forward and Reverse zone tasks). Functionally identical for vcab.lan and flightops.lan since each is a single-domain forest. Back-port the same change into `range-development-ansible/roles/dns/tasks/main.yml`.
+
+---
+
 <!-- New entries go above this line, newest first. -->

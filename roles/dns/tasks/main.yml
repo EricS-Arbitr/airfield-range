@@ -10,7 +10,7 @@
     name: "{{ item }}"
     type: primary
     state: present
-    replication: forest  # or 'domain' or 'none' based on your needs
+    replication: "{{ dns_zone_replication | default('domain') }}"  # see UPSTREAM_FIXES.md 2026-06-25
   loop: "{{ unique_zones }}"
   when:
     - internal_dns_records is defined
@@ -22,7 +22,7 @@
     name: "{{ item }}"
     type: primary
     state: present
-    replication: forest
+    replication: "{{ dns_zone_replication | default('domain') }}"  # see UPSTREAM_FIXES.md 2026-06-25
     forwarder_timeout: 3
   loop: "{{ unique_zones }}"
   when:
