@@ -578,19 +578,32 @@
       register: vcab_trust_state
       changed_when: false
 
+    # netdom /OneSide:Trusting works here but errored "Access is denied" on
+    # the flightops side under WinRM (token-filtering quirk specific to
+    # netdom's trusted-side operation). Use DirectoryServices.Forest directly
+    # — netdom is just a wrapper around this API and the API call is honored
+    # under the same WinRM session that ran the precheck above.
+    #
+    # TrustDirection.Inbound on the trusting domain = "users from the
+    # remote domain can access local resources". For vcab→flightops:
+    #   vcab is the trusting/local domain; flightops users can access vcab.
     - name: Add one-way trusting side on vcab.lan (vcab TRUSTS flightops)
-      ansible.windows.win_command:
-        argv:
-          - netdom
-          - trust
-          - vcab.lan
-          - /Domain:flightops.lan
-          - /add
-          - /OneSide:Trusting
-          - /PasswordT:{{ ad_trust_secret }}
+      ansible.windows.win_powershell:
+        script: |
+          try {
+            $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+            $f.CreateLocalSideOfTrustRelationship(
+              'flightops.lan',
+              [System.DirectoryServices.ActiveDirectory.TrustDirection]::Inbound,
+              '{{ ad_trust_secret }}'
+            )
+            $Ansible.Changed = $true
+            Write-Output "Created inbound trust on vcab.lan from flightops.lan"
+          } catch {
+            $Ansible.Failed = $true
+            throw
+          }
       when: "'absent' in vcab_trust_state.output"
-      register: vcab_trust_add
-      changed_when: vcab_trust_add.rc == 0
   tags:
     - cross_forest_trust
     - trust_vcab
@@ -630,19 +643,27 @@
       register: fops_trust_state
       changed_when: false
 
+    # TrustDirection.Outbound on the trusted domain = "local users can
+    # access remote resources". For our trust (vcab trusts flightops):
+    #   flightops is the trusted/local domain; flightops users can access
+    #   vcab — i.e., outbound flow from flightops's perspective.
     - name: Add one-way trusted side on flightops.lan (flightops is TRUSTED)
-      ansible.windows.win_command:
-        argv:
-          - netdom
-          - trust
-          - flightops.lan
-          - /Domain:vcab.lan
-          - /add
-          - /OneSide:Trusted
-          - /PasswordT:{{ ad_trust_secret }}
+      ansible.windows.win_powershell:
+        script: |
+          try {
+            $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+            $f.CreateLocalSideOfTrustRelationship(
+              'vcab.lan',
+              [System.DirectoryServices.ActiveDirectory.TrustDirection]::Outbound,
+              '{{ ad_trust_secret }}'
+            )
+            $Ansible.Changed = $true
+            Write-Output "Created outbound trust on flightops.lan to vcab.lan"
+          } catch {
+            $Ansible.Failed = $true
+            throw
+          }
       when: "'absent' in fops_trust_state.output"
-      register: fops_trust_add
-      changed_when: fops_trust_add.rc == 0
   tags:
     - cross_forest_trust
     - trust_flightops
