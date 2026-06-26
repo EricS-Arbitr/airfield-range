@@ -124,6 +124,10 @@ cp    "$AIRFIELD_RANGE/hosts"      "$STAGE/"
 cp    "$AIRFIELD_RANGE/site.yml"   "$STAGE/"
 cp    "$AIRFIELD_RANGE/deploy.sh"  "$STAGE/"
 chmod +x "$STAGE/deploy.sh"
+if [ -f "$AIRFIELD_RANGE/verify_deployment.sh" ]; then
+  cp "$AIRFIELD_RANGE/verify_deployment.sh" "$STAGE/"
+  chmod +x "$STAGE/verify_deployment.sh"
+fi
 if [ -f "$AIRFIELD_RANGE/requirements.yml" ]; then
   cp "$AIRFIELD_RANGE/requirements.yml" "$STAGE/"
 fi
@@ -146,6 +150,7 @@ fi
 
 cd "$STAGE"
 TAR_PATHS=(roles host_vars group_vars hosts site.yml deploy.sh)
+[ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
 [ -d "files" ] && TAR_PATHS+=(files)
 tar --no-xattrs -czf "$ARCHIVE" "${TAR_PATHS[@]}"
