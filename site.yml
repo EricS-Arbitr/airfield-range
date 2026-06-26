@@ -544,6 +544,27 @@
   hosts: pdc_vcab
   gather_facts: false
   tasks:
+    # Prereq: bs-dc01 must be able to resolve flightops.lan for netdom to
+    # reach the partner PDC. vcab's DNS is authoritative for vcab.lan only,
+    # so we install a conditional forwarder pointing flightops.lan at
+    # fops-dc01 (172.31.3.11). Without this, netdom fails with "The
+    # specified domain either does not exist or could not be contacted."
+    - name: Ensure conditional DNS forwarder for flightops.lan exists
+      ansible.windows.win_powershell:
+        script: |
+          $name = 'flightops.lan'
+          $master = '172.31.3.11'
+          $z = Get-DnsServerZone -Name $name -ErrorAction SilentlyContinue
+          if ($z) {
+            $Ansible.Changed = $false
+            Write-Output "Conditional forwarder for $name already present"
+          } else {
+            Add-DnsServerConditionalForwarderZone -Name $name `
+              -MasterServers $master -ReplicationScope 'Domain' -ErrorAction Stop
+            $Ansible.Changed = $true
+            Write-Output "Created conditional forwarder $name -> $master"
+          }
+
     - name: Check whether trust toward flightops.lan already exists
       ansible.windows.win_powershell:
         script: |
@@ -578,6 +599,24 @@
   hosts: pdc_flightops
   gather_facts: false
   tasks:
+    # Mirror conditional forwarder on the flightops side — fops-dc01 must
+    # be able to resolve vcab.lan so netdom's other half can connect.
+    - name: Ensure conditional DNS forwarder for vcab.lan exists
+      ansible.windows.win_powershell:
+        script: |
+          $name = 'vcab.lan'
+          $master = '172.31.2.7'
+          $z = Get-DnsServerZone -Name $name -ErrorAction SilentlyContinue
+          if ($z) {
+            $Ansible.Changed = $false
+            Write-Output "Conditional forwarder for $name already present"
+          } else {
+            Add-DnsServerConditionalForwarderZone -Name $name `
+              -MasterServers $master -ReplicationScope 'Domain' -ErrorAction Stop
+            $Ansible.Changed = $true
+            Write-Output "Created conditional forwarder $name -> $master"
+          }
+
     - name: Check whether trust from vcab.lan already exists
       ansible.windows.win_powershell:
         script: |
