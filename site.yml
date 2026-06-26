@@ -307,7 +307,6 @@
   gather_facts: false
   roles:
     - create_users
-    - group_assignment
   tags:
     - create_users
 

@@ -28,9 +28,27 @@
 - name: Group Assignment
   microsoft.ad.user:
     name: "{{ item.name }}"
-    groups: 
+    groups:
       set: "{{ item.groups }}"
     state: present
   loop: "{{ DomainUsers }}"
   when:
     - item.groups is defined
+
+# microsoft.ad.user's `groups: set:` resolved "Domain Admins" against the
+# *Builtin* container (CN=Builtin) instead of the global group at
+# CN=Domain Admins,CN=Users — net result: simspace landed in
+# Builtin\Administrators rather than the global Domain Admins group, and
+# `Install-ADDSDomainController` rejected the credential. Belt-and-suspenders
+# pass with microsoft.ad.group resolves the group by sAMAccountName explicitly,
+# which lands the membership in the right group. See UPSTREAM_FIXES.md 2026-06-26.
+- name: Force-add Domain Users to their declared groups (explicit sAMAccountName)
+  microsoft.ad.group:
+    identity: "{{ item.1 }}"
+    members:
+      add: ["{{ item.0.name }}"]
+  loop: "{{ DomainUsers | subelements('groups') }}"
+  loop_control:
+    label: "{{ item.0.name }} → {{ item.1 }}"
+  when:
+    - DomainUsers is defined

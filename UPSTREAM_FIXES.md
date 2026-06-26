@@ -120,9 +120,60 @@ For ranges with multi-domain forests where forest-wide replication actually matt
 
 ---
 
-## 2026-06-26 · bug · range-development-ansible/roles/group_assignment
+## 2026-06-26 · bug · range-development-ansible/roles/create_users/tasks/main.yml
 
-**Symptom.** PowerPlant's playbook (and now airfield-range's) lists `group_assignment` as a role after `create_users`:
+**Symptom.** `Install-ADDSDomainController` on `bs-dc02` / `fops-dc02` fails with:
+
+```
+Verification of user credential permissions failed. You have not supplied
+user credentials that belong to the Domain Admins group or the Enterprise
+Admins group.
+```
+
+…even after `create_users` ran cleanly with no errors. Verifying directly on bs-dc01:
+
+```
+Get-ADGroupMember "Domain Admins"   # only Administrator; no simspace
+Get-ADUser simspace -Properties MemberOf
+# MemberOf: { CN=Users,CN=Builtin,DC=vcab,DC=lan,
+#             CN=Administrators,CN=Builtin,DC=vcab,DC=lan }
+```
+
+…so `simspace` exists with the right password, but it's in **`Builtin\Administrators`** (local domain group on each DC) instead of the global **`Domain Admins`** group required by Install-ADDSDomainController.
+
+**Root cause.** The `Group Assignment` task in `create_users` uses:
+
+```yaml
+microsoft.ad.user:
+  name: "{{ item.name }}"
+  groups:
+    set: "{{ item.groups }}"   # e.g., ["Domain Admins"]
+```
+
+When `microsoft.ad.user` resolves the group name `"Domain Admins"`, it walks AD in a search order that hits the **`CN=Builtin`** container first. There happens to be an `Administrators` group there (`Builtin\Administrators`), and the partial/loose match logic appears to match `"Domain Admins"` against it instead of the global `CN=Domain Admins,CN=Users` group. Net result: the user lands in `Builtin\Administrators`, which gives them local-admin rights on the DC machine but does NOT grant the domain-wide Domain Admins privilege.
+
+**Fix (upstream).** Replace the loose `microsoft.ad.user` `groups: set:` block with an explicit `microsoft.ad.group` `members: add:` pass that resolves the group by sAMAccountName:
+
+```yaml
+- name: Force-add Domain Users to their declared groups (explicit sAMAccountName)
+  microsoft.ad.group:
+    identity: "{{ item.1 }}"        # group sAMAccountName from DomainUsers[*].groups
+    members:
+      add: ["{{ item.0.name }}"]
+  loop: "{{ DomainUsers | subelements('groups') }}"
+  loop_control:
+    label: "{{ item.0.name }} → {{ item.1 }}"
+```
+
+`microsoft.ad.group identity:` resolves unambiguously — `"Domain Admins"` lands in the correct global group every time.
+
+**Workaround (overlay).** Already applied in `airfield-range/roles/create_users/tasks/main.yml`: the original `Group Assignment` task is kept (it's idempotent and harmless), with the new `microsoft.ad.group` task appended as a belt-and-suspenders pass. Removed the stale `group_assignment` role reference from `site.yml`'s Create Users play — the customer role at `range-development-ansible/roles/group_assignment/main.yml` is malformed (file at role root instead of `tasks/main.yml`, wrapped as a full playbook) and silently contributes zero tasks; it's redundant with `create_users` doing the job inline anyway.
+
+---
+
+## 2026-06-26 · bug (stale) · range-development-ansible/roles/group_assignment
+
+**Symptom.** The customer's `group_assignment` "role" looks like:
 
 ```yaml
 - name: Create Users
