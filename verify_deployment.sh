@@ -188,13 +188,13 @@ done
 
 # Cross-forest trust — outgoing on vcab, incoming on flightops
 check_ps bs-dc01 \
-  'Get-ADTrust -Filter "Target -eq \"flightops.lan\"" | Select-Object -ExpandProperty Target' \
-  '\(stdout\)[[:space:]]+flightops\.lan' \
+  'Get-ADTrust -Filter * | Select-Object -ExpandProperty Target' \
+  '\(stdout\)[^|]*flightops\.lan' \
   "Cross-forest trust on vcab side (outgoing to flightops.lan)"
 
 check_ps fops-dc01 \
-  'Get-ADTrust -Filter "Target -eq \"vcab.lan\"" | Select-Object -ExpandProperty Target' \
-  '\(stdout\)[[:space:]]+vcab\.lan' \
+  'Get-ADTrust -Filter * | Select-Object -ExpandProperty Target' \
+  '\(stdout\)[^|]*vcab\.lan' \
   "Cross-forest trust on flightops side (incoming from vcab.lan)"
 
 # Member join counts (each host echoes True/False to its stdout)
