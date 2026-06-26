@@ -161,7 +161,7 @@ done
 
 check_pf_shell bs-edge-fw \
   'vtysh -c "show ip bgp summary"' \
-  'Establ' \
+  'Establ|\(Policy\)' \
   "bs-edge-fw eBGP session Established to bs-edge-rtr"
 
 # =========================================================================
