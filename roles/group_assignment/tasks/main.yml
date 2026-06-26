@@ -1,0 +1,13 @@
+---
+# Customer's group_assignment role was malformed (main.yml at role root, wrapped
+# as a full playbook). Extracted the task body into tasks/main.yml so it works
+# when referenced under a play's `roles:` block. See UPSTREAM_FIXES.md 2026-06-26.
+- name: Group Assignment
+  community.windows.win_domain_user:
+    name: "{{ item.name }}"
+    groups: "{{ item.groups }}"
+    state: present
+  loop: "{{ DomainUsers }}"
+  when:
+    - DomainUsers is defined
+    - item.groups is defined

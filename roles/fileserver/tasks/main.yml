@@ -1,0 +1,10 @@
+- name: Create Share Directory
+  ansible.windows.win_file:
+    path: "{{ share_path }}"
+    state: directory
+- name: Create Share
+  ansible.windows.win_share:
+    name: "{{ share_name }}"
+    path: "{{ share_path }}"
+    list: true
+    full: everyone

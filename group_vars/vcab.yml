@@ -17,6 +17,8 @@ domain_controllers_vcab:
 # --- File share ----------------------------------------------
 file_server_alias: "file"
 file_server_ip: "172.31.2.10"                # bs-file01
+share_name: "Share"
+share_path: "C:\\Shares\\Share"
 map_drive_letter: "S"
 map_drive_path: "\\\\bs-file01.vcab.lan\\Share"
 

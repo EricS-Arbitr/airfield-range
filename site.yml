@@ -307,6 +307,7 @@
   gather_facts: false
   roles:
     - create_users
+    - group_assignment
   tags:
     - create_users
 
@@ -467,3 +468,36 @@
           }
   tags:
     - purge_mgmt_dns
+
+# =============================================================================
+# File services tier — fileserver + mapped drive (per domain)
+# =============================================================================
+# Mapped Drive depends on File Share existing first. Two Mapped Drive plays
+# (one per forest) so each domain's letter/path stays explicit in the playbook
+# even though the customer role reads per-host vars from group_vars.
+
+- name: File Share
+  hosts: fileservers
+  gather_facts: false
+  roles:
+    - fileserver
+  tags:
+    - file_share
+
+- name: Mapped Drive — vcab.lan
+  hosts: members_vcab
+  gather_facts: false
+  roles:
+    - mapped_drive
+  tags:
+    - mapped_drive
+    - mapped_drive_vcab
+
+- name: Mapped Drive — flightops.lan
+  hosts: members_flightops
+  gather_facts: false
+  roles:
+    - mapped_drive
+  tags:
+    - mapped_drive
+    - mapped_drive_flightops

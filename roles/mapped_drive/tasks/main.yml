@@ -1,0 +1,95 @@
+- name: Create the GPO first
+  ansible.windows.win_dsc:
+    resource_name: GroupPolicy
+    Name: "Mapped Network Drives"
+    Ensure: Present
+
+- name: Configure drive mapping registry value in GPO
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Mapped Network Drives"
+    Key: "HKEY_CURRENT_USER\\Network\\{{ map_drive_letter }}"
+    ValueName: "RemotePath"
+    Value: "{{ map_drive_path }}"
+    ValueType: String
+    Ensure: Present
+
+- name: Set provider name for drive mapping
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Mapped Network Drives"
+    Key: "HKCU\\Network\\{{ map_drive_letter }}"
+    ValueName: "ProviderName"
+    Value: "Microsoft Windows Network"
+    ValueType: String
+    Ensure: Present
+
+- name: Set provider type for drive mapping
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Mapped Network Drives"
+    Key: "HKCU\\Network\\{{ map_drive_letter }}"
+    ValueName: "ProviderType"
+    Value: 20000
+    ValueType: DWord
+    Ensure: Present
+
+- name: Set connection type for drive mapping
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Mapped Network Drives"
+    Key: "HKCU\\Network\\{{ map_drive_letter }}"
+    ValueName: "ConnectionType"
+    Value: 1
+    ValueType: DWord
+    Ensure: Present
+
+- name: Set connection flags for drive mapping
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Mapped Network Drives"
+    Key: "HKCU\\Network\\{{ map_drive_letter }}"
+    ValueName: "ConnectFlags"
+    Value: 0
+    ValueType: DWord
+    Ensure: Present
+
+- name: Set UserName for drive mapping
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Mapped Network Drives"
+    Key: "HKCU\\Network\\{{ map_drive_letter }}"
+    ValueName: "UserName"
+    Value: 0
+    ValueType: DWord
+    Ensure: Present
+
+- name: Set defer flags for drive mapping
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Mapped Network Drives"
+    Key: "HKCU\\Network\\{{ map_drive_letter }}"
+    ValueName: "DeferFlags"
+    Value: 4
+    ValueType: DWord
+    Ensure: Present
+
+- name: Enable drive mapping at login
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Mapped Network Drives"
+    Key: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer"
+    ValueName: "NoDriveTypeAutoRun"
+    Value: 145
+    ValueType: DWord
+    Ensure: Present
+
+- name: Link GPO to OU
+  ansible.windows.win_dsc:
+    resource_name: GPLink
+    GPOName: "Mapped Network Drives"
+    Path: "DC={{ short_domain_name }},DC={{ domain_tld_name }}"
+    Enabled: "Yes"
+    Enforced: "No"
+    Order: 1
+    Ensure: Present

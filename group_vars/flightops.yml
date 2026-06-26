@@ -19,6 +19,8 @@ domain_controllers_flightops:
 # --- File share ----------------------------------------------
 file_server_alias: "fops-file"
 file_server_ip: "172.31.3.15"                   # fops-file01
+share_name: "Share"
+share_path: "C:\\Shares\\Share"
 map_drive_letter: "F"
 map_drive_path: "\\\\fops-file01.flightops.lan\\Share"
 

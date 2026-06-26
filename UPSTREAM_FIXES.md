@@ -120,4 +120,61 @@ For ranges with multi-domain forests where forest-wide replication actually matt
 
 ---
 
+## 2026-06-26 · bug · range-development-ansible/roles/group_assignment
+
+**Symptom.** PowerPlant's playbook (and now airfield-range's) lists `group_assignment` as a role after `create_users`:
+
+```yaml
+- name: Create Users
+  hosts: pdc
+  roles:
+    - create_users
+    - group_assignment
+```
+
+The intent is to add each `DomainUsers` entry to the AD groups declared in its `groups:` list (most importantly `Domain Admins`). In practice the role does nothing, so the `simspace` user gets created but is never added to Domain Admins. The first downstream symptom is `additional_dc` failing on bs-dc02 / fops-dc02 with:
+
+```
+Verification of user credential permissions failed. You have not supplied
+user credentials that belong to the Domain Admins group or the Enterprise
+Admins group.
+```
+
+**Root cause.** The `group_assignment` "role" is malformed:
+
+```
+roles/group_assignment/
+├── README.md
+└── main.yml      ← wrong path (should be tasks/main.yml)
+```
+
+…and `main.yml` is wrapped as a full playbook (`hosts: pdc`, `gather_facts: false`, `tasks:`) instead of being a bare task list. When referenced under a play's `roles:` block, Ansible's role loader looks for `tasks/main.yml`, doesn't find it, and silently contributes zero tasks. The role appears to run cleanly in the playbook output, but no group assignments actually happen.
+
+**Fix (upstream).** Reorganize the customer's role to the conventional layout:
+
+```
+roles/group_assignment/
+├── README.md
+└── tasks/
+    └── main.yml   ← bare task body, no playbook wrapper
+```
+
+Bare task body:
+
+```yaml
+- name: Group Assignment
+  community.windows.win_domain_user:
+    name: "{{ item.name }}"
+    groups: "{{ item.groups }}"
+    state: present
+  loop: "{{ DomainUsers }}"
+  when:
+    - DomainUsers is defined
+    - item.groups is defined
+```
+
+**Workaround (overlay).** Already applied in `airfield-range/roles/group_assignment/` — the tasks/main.yml exists with the bare task body and the old `main.yml` is deleted. Same fix should be back-ported to `range-development-ansible/roles/group_assignment/` (PowerPlant likely hits the same silent no-op, which would explain "FRR convergence pending verification" but not the broader AD trust posture — worth double-checking pp-dc02's Domain Admin membership).
+
+---
+
 <!-- New entries go above this line, newest first. -->
