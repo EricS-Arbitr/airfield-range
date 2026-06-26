@@ -1,0 +1,45 @@
+# - name: wait for LDAP
+#  ansible.windows.win_wait_for:
+#    host: "{{ domain_name }}"
+#    port: 389
+#    timeout: 600
+
+- name: Check current password complexity setting
+  ansible.windows.win_shell: (Get-ADDefaultDomainPasswordPolicy).ComplexityEnabled
+  register: current_setting
+  changed_when: false
+
+- name: Disable password complexity in domain GPO
+  ansible.windows.win_shell: Set-ADDefaultDomainPasswordPolicy -Identity (Get-ADDomain) -ComplexityEnabled $false
+  when:
+    - current_setting.stdout | regex_search('True') != None
+
+- name: Configure UAC elevation behavior in Domain GPO ConsentPromptBehaviorAdmin
+  ansible.windows.win_shell: |
+    Import-Module GroupPolicy
+    Set-GPRegistryValue -Name "Default Domain Policy" `
+      -Key "HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
+      -ValueName "ConsentPromptBehaviorAdmin" `
+      -Type DWord `
+      -Value 0
+  register: gpo_change
+
+- name: Configure UAC elevation behavior in Domain GPO ConsentPromptBehaviorUser
+  ansible.windows.win_shell: |
+    Import-Module GroupPolicy
+    Set-GPRegistryValue -Name "Default Domain Policy" `
+      -Key "HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
+      -ValueName "ConsentPromptBehaviorUser" `
+      -Type DWord `
+      -Value 0
+  register: gpo_change
+
+- name: Configure UAC elevation behavior in Domain GPO EnableLUA
+  ansible.windows.win_shell: |
+    Import-Module GroupPolicy
+    Set-GPRegistryValue -Name "Default Domain Policy" `
+      -Key "HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
+      -ValueName "EnableLUA" `
+      -Type DWord `
+      -Value 0
+  register: gpo_change

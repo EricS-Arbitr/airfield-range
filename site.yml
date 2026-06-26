@@ -500,3 +500,117 @@
   tags:
     - mapped_drive
     - mapped_drive_flightops
+
+# =============================================================================
+# Windows-side polish (matches PowerPlant pattern, doubled for two forests)
+# =============================================================================
+
+- name: ae_gpo
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - ae_gpo
+  tags:
+    - ae_gpo
+
+# Suppress the Win10/11 "Set network location (Public/Private)" popup that
+# blocks AUE simulation, reclassify any Public profiles as Private, and
+# enable Network Discovery + File & Printer Sharing firewall rule groups.
+- name: Enable network discovery and suppress the Public/Private popup
+  hosts: windows
+  gather_facts: false
+  roles:
+    - network_discovery
+  tags:
+    - network_discovery
+
+# =============================================================================
+# Cross-forest trust — vcab.lan TRUSTS flightops.lan (one-way external)
+# =============================================================================
+# Asymmetric access pattern from CLAUDE.md §4:
+#   - flightops users authenticate against vcab resources (corp services)
+#   - vcab users are default-denied into flightops (selective exceptions later)
+# Trust object lives in BOTH forests:
+#   - on vcab.lan:    "Outgoing" trust toward flightops (vcab is TRUSTING)
+#   - on flightops.lan: "Incoming" trust from vcab (flightops is TRUSTED)
+# Both halves use the same `ad_trust_secret` (group_vars/all.yml).
+
+- name: Cross-forest trust — vcab side (TRUSTING)
+  hosts: pdc_vcab
+  gather_facts: false
+  tasks:
+    - name: Check whether trust toward flightops.lan already exists
+      ansible.windows.win_powershell:
+        script: |
+          try {
+            $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+            $t = $f.GetAllTrustRelationships() | Where-Object { $_.TargetName -ieq 'flightops.lan' }
+            if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
+          } catch {
+            Write-Output 'absent'
+          }
+      register: vcab_trust_state
+      changed_when: false
+
+    - name: Add one-way trusting side on vcab.lan (vcab TRUSTS flightops)
+      ansible.windows.win_command:
+        argv:
+          - netdom
+          - trust
+          - vcab.lan
+          - /Domain:flightops.lan
+          - /add
+          - /OneSide:Trusting
+          - /PasswordT:{{ ad_trust_secret }}
+      when: "'absent' in vcab_trust_state.output"
+      register: vcab_trust_add
+      changed_when: vcab_trust_add.rc == 0
+
+- name: Cross-forest trust — flightops side (TRUSTED)
+  hosts: pdc_flightops
+  gather_facts: false
+  tasks:
+    - name: Check whether trust from vcab.lan already exists
+      ansible.windows.win_powershell:
+        script: |
+          try {
+            $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+            $t = $f.GetAllTrustRelationships() | Where-Object { $_.TargetName -ieq 'vcab.lan' }
+            if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
+          } catch {
+            Write-Output 'absent'
+          }
+      register: fops_trust_state
+      changed_when: false
+
+    - name: Add one-way trusted side on flightops.lan (flightops is TRUSTED)
+      ansible.windows.win_command:
+        argv:
+          - netdom
+          - trust
+          - flightops.lan
+          - /Domain:vcab.lan
+          - /add
+          - /OneSide:Trusted
+          - /PasswordT:{{ ad_trust_secret }}
+      when: "'absent' in fops_trust_state.output"
+      register: fops_trust_add
+      changed_when: fops_trust_add.rc == 0
+
+- name: Cross-forest trust — verify both sides
+  hosts: pdc
+  gather_facts: false
+  tasks:
+    - name: List established trust relationships
+      ansible.windows.win_powershell:
+        script: |
+          $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+          $f.GetAllTrustRelationships() | ForEach-Object {
+            "{0,-25} target={1,-20} direction={2}" -f $f.Name, $_.TargetName, $_.TrustDirection
+          }
+      register: trust_summary
+      changed_when: false
+
+    - name: Show trust summary
+      ansible.builtin.debug:
+        var: trust_summary.output

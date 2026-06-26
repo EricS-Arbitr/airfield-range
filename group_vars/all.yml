@@ -45,6 +45,11 @@ siem_server_ip: "172.31.7.15"      # soc-elastic (SOC /24)
 wec_vcab_ip: "172.31.2.17"         # bs-wec (Services)
 wec_flightops_ip: "172.31.3.20"    # fops-wec01 (Flight-Ops-Services)
 
+# --- Cross-forest trust secret (vcab.lan ↔ flightops.lan) ----
+# Same secret used on both sides of the one-way external trust.
+# Rotate before any deployment that simulates real adversary behavior.
+ad_trust_secret: "Airfield-Trust-2026!"
+
 # --- Wazuh manager (TBD where it lives) ----------------------
 # Likely co-located with the SIEM stack on soc-elastic.
 wazuh_manager_ip: "{{ siem_server_ip }}"
