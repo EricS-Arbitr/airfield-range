@@ -570,6 +570,9 @@
       when: "'absent' in vcab_trust_state.output"
       register: vcab_trust_add
       changed_when: vcab_trust_add.rc == 0
+  tags:
+    - cross_forest_trust
+    - trust_vcab
 
 - name: Cross-forest trust — flightops side (TRUSTED)
   hosts: pdc_flightops
@@ -601,6 +604,9 @@
       when: "'absent' in fops_trust_state.output"
       register: fops_trust_add
       changed_when: fops_trust_add.rc == 0
+  tags:
+    - cross_forest_trust
+    - trust_flightops
 
 - name: Cross-forest trust — verify both sides
   hosts: pdc
@@ -619,3 +625,6 @@
     - name: Show trust summary
       ansible.builtin.debug:
         var: trust_summary.output
+  tags:
+    - cross_forest_trust
+    - trust_verify

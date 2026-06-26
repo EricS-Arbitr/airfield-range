@@ -174,7 +174,7 @@ for dc in bs-dc01:vcab.lan fops-dc01:flightops.lan; do
   host="${dc%%:*}"; forest="${dc##*:}"
   check_ps "$host" \
     'Get-ADGroupMember "Domain Admins" | Where-Object { $_.Name -eq "simspace" } | Select-Object -ExpandProperty Name' \
-    '"stdout":[[:space:]]*"simspace' \
+    '\(stdout\)[[:space:]]+simspace' \
     "$forest: simspace is in Domain Admins"
 done
 
@@ -182,19 +182,19 @@ done
 for adc in bs-dc02 fops-dc02; do
   check_ps "$adc" \
     '(Get-WmiObject Win32_ComputerSystem).PartOfDomain' \
-    '"stdout":[[:space:]]*"True' \
+    '\(stdout\)[[:space:]]+True' \
     "$adc: PartOfDomain True (additional DC promoted)"
 done
 
 # Cross-forest trust — outgoing on vcab, incoming on flightops
 check_ps bs-dc01 \
   '[System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest().GetAllTrustRelationships() | Where-Object { $_.TargetName -eq "flightops.lan" } | Select-Object -ExpandProperty TargetName' \
-  '"stdout":[[:space:]]*"flightops\.lan' \
+  '\(stdout\)[[:space:]]+flightops\.lan' \
   "Cross-forest trust on vcab side (outgoing to flightops.lan)"
 
 check_ps fops-dc01 \
   '[System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest().GetAllTrustRelationships() | Where-Object { $_.TargetName -eq "vcab.lan" } | Select-Object -ExpandProperty TargetName' \
-  '"stdout":[[:space:]]*"vcab\.lan' \
+  '\(stdout\)[[:space:]]+vcab\.lan' \
   "Cross-forest trust on flightops side (incoming from vcab.lan)"
 
 # Member join counts (each host echoes True/False to its stdout)
@@ -202,7 +202,7 @@ for grp in members_vcab members_flightops; do
   total=$(n_hosts "$grp")
   joined=$(count_ps_predicate "$grp" \
     '(Get-WmiObject Win32_ComputerSystem).PartOfDomain' \
-    '"stdout":[[:space:]]*"True')
+    '\(stdout\)[[:space:]]+True')
   if [ "$joined" -eq "$total" ] && [ "$total" -gt 0 ]; then
     pass "$grp: $joined/$total hosts domain-joined"
   else
@@ -227,7 +227,7 @@ for dc in bs-dc01:vcab.lan fops-dc01:flightops.lan; do
   host="${dc%%:*}"; forest="${dc##*:}"
   check_ps "$host" \
     'Get-GPO -All | Where-Object { $_.DisplayName -eq "Mapped Network Drives" } | Select-Object -ExpandProperty DisplayName' \
-    '"stdout":[[:space:]]*"Mapped Network Drives' \
+    '\(stdout\)[[:space:]]+Mapped Network Drives' \
     "$forest: 'Mapped Network Drives' GPO exists"
 done
 
@@ -235,7 +235,7 @@ for fs in bs-file01:vcab.lan fops-file01:flightops.lan; do
   host="${fs%%:*}"; forest="${fs##*:}"
   check_ps "$host" \
     'Get-SmbShare -Name "Share" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name' \
-    '"stdout":[[:space:]]*"Share' \
+    '\(stdout\)[[:space:]]+Share' \
     "$forest: \\\\$host.$forest\\Share is exposed"
 done
 
