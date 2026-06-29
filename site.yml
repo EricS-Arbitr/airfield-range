@@ -688,3 +688,66 @@
   tags:
     - cross_forest_trust
     - trust_verify
+
+# =============================================================================
+# SOC tier — syslog backbone
+# =============================================================================
+# Central rsyslog collector on soc-syslog (172.31.7.13), receives over UDP+TCP
+# 514, writes per-host files at /var/log/remote/<hostname>/syslog.log. Linux
+# hosts and VyOS routers forward into it. pfSense + Wazuh + SIEM ingest come
+# in the next batch.
+
+- name: Syslog collector — soc-syslog
+  hosts: soc-syslog
+  gather_facts: false
+  become: true
+  roles:
+    - syslog_server
+  tags:
+    - syslog
+    - syslog_server
+
+- name: Syslog client — Linux
+  hosts: linux:!syslog
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Drop rsyslog forwarder snippet
+      ansible.builtin.copy:
+        dest: /etc/rsyslog.d/00-forward.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Forward all logs to soc-syslog (the central rsyslog collector).
+          # Managed by Ansible (site.yml). UDP — accepted on both UDP+TCP by
+          # the server; UDP avoids the queue-up failure mode if soc-syslog
+          # is briefly unreachable.
+          *.* @{{ syslog_server_ip }}:514
+      register: rsyslog_forward
+
+    - name: Restart rsyslog if forwarder snippet changed
+      ansible.builtin.systemd:
+        name: rsyslog
+        state: restarted
+      when: rsyslog_forward.changed
+  tags:
+    - syslog
+    - syslog_client
+
+# VyOS client config: push the syslog remote-host line.
+# `set system syslog host` is idempotent under vyos_config; level "info"
+# matches what the GUI default sets.
+- name: Syslog client — VyOS
+  hosts: vyos
+  gather_facts: false
+  tasks:
+    - name: Configure remote syslog host
+      vyos.vyos.vyos_config:
+        match: line
+        lines:
+          - "set system syslog host {{ syslog_server_ip }} facility all level info"
+        save: true
+  tags:
+    - syslog
+    - syslog_client
