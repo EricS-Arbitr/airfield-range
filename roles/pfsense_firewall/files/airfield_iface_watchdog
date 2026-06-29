@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# rc.d init script for airfield_iface_watchdog — supervises the periodic
+# rebind loop at /usr/local/bin/airfield_iface_watchdog.sh.
+#
+# Enable: sysrc airfield_iface_watchdog_enable=YES
+# Start:  service airfield_iface_watchdog start
+# Status: service airfield_iface_watchdog status
+#
+
+# PROVIDE: airfield_iface_watchdog
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="airfield_iface_watchdog"
+desc="Re-binds drifted pfSense data-plane interface IPs every 30s"
+rcvar="${name}_enable"
+pidfile="/var/run/${name}.pid"
+
+command="/usr/sbin/daemon"
+command_args="-f -P ${pidfile} -t ${name} -o /var/log/${name}.log /usr/local/bin/${name}.sh"
+
+load_rc_config $name
+: ${airfield_iface_watchdog_enable:=NO}
+
+run_rc_command "$1"

@@ -290,13 +290,14 @@ The existing "Post-flight — re-verify data-plane interface IPs are bound" task
 
 **Fix (upstream).** Would require either a SimSpace image change to stop the delayed interface refresh, or a pfSense FRR package change to bind the data-plane IPs at a lower level (e.g., via `rc.conf.local` ifconfig lines) so they survive write_config refreshes.
 
-**Workaround (overlay).** Three layers of defense in `airfield-range`:
+**Workaround (overlay).** Four layers of defense in `airfield-range`:
 
 1. `pfsense_firewall` role's `Post-flight — re-verify data-plane interface IPs are bound` task (pre-handler).
 2. `pfsense_firewall` role's `Post-handler — re-verify data-plane interface IPs survived FRR restart` task (right after `meta: flush_handlers`).
-3. **New (2026-06-29):** standalone play in `site.yml` named `pfSense — pre-AD interface re-verify (catches delayed vmx drop)` that fires between `pfSense firewalls` and `dcpromo`. Includes a 20-second settle pause + the same PHP rebind logic. This catches drift that happens in the gap between the pfSense play ending and the AD plays starting.
+3. Standalone play in `site.yml` named `pfSense — pre-AD interface re-verify (catches delayed vmx drop)` that fires between `pfSense firewalls` and `dcpromo`. 20-second settle pause + PHP rebind. Tagged across every AD-foundation tag (`strip_apipa`, `domain_member_retry`, `dcpromo`, etc.) so scoped runs can't accidentally skip it.
+4. **Final layer (2026-06-29, after layers 1-3 still failed):** background watchdog daemon installed by the `pfsense_firewall` role at `/usr/local/etc/rc.d/airfield_iface_watchdog`. Loops every 30 seconds running the same rebind PHP, logging each rebind to syslog with tag `airfield-iface-watchdog`. Layers 1-3 are time-bounded (they only run during a deploy window); layer 4 is the only one that survives between deploys, which is when we observed the actual vmx1 drops happen (2-5 minute gaps from a known-good rebind to the next break, well after Ansible moved on).
 
-When the rebind fires, expect a `PRE-AD FIXED: opt1(SWITCH_3:vmx1:->172.31.1.14)` line in the play output; when nothing drifted, `PRE-AD OK`. The task is tagged `pfsense_pre_ad_rebind` so it can be re-run scoped: `ansible-playbook site.yml --tags pfsense_pre_ad_rebind`.
+When any rebind fires, watch `/var/log/messages` on the pfSense for an `airfield-iface-watchdog` syslog entry. Status: `service airfield_iface_watchdog status`. The maximum window where vmx1 stays broken is now ~30 seconds (one watchdog cycle).
 
 ---
 

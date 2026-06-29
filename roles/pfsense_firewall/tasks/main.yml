@@ -336,6 +336,51 @@
 - name: Flush FRR restart handler if pending
   ansible.builtin.meta: flush_handlers
 
+# Background watchdog daemon — final layer of defense. The pre-handler,
+# post-handler, and pre-AD site.yml plays all catch drift that happens
+# during the deploy window, but the SimSpace pfSense image keeps dropping
+# the static IPs at unpredictable intervals (we've seen 2-5 minute gaps
+# from a known-good rebind to the next drop, well after Ansible has moved
+# on). This watchdog loops every 30s and re-binds anything that drifts —
+# so the maximum-time-broken window is 30 seconds, not "until next deploy."
+# See airfield-range/UPSTREAM_FIXES.md 2026-06-29 entry.
+- name: Watchdog — drop the rebind loop script
+  ansible.builtin.copy:
+    src: airfield_iface_watchdog.sh
+    dest: /usr/local/bin/airfield_iface_watchdog.sh
+    owner: root
+    group: wheel
+    mode: '0755'
+  register: watchdog_script
+
+- name: Watchdog — drop the rc.d init script
+  ansible.builtin.copy:
+    src: airfield_iface_watchdog
+    dest: /usr/local/etc/rc.d/airfield_iface_watchdog
+    owner: root
+    group: wheel
+    mode: '0755'
+  register: watchdog_initscript
+
+- name: Watchdog — enable in /etc/rc.conf
+  ansible.builtin.shell: |
+    sysrc airfield_iface_watchdog_enable=YES
+  register: watchdog_sysrc
+  changed_when: "'YES' not in watchdog_sysrc.stdout_lines[0] | default('')"
+
+- name: Watchdog — (re)start service
+  ansible.builtin.shell: |
+    if service airfield_iface_watchdog status >/dev/null 2>&1; then
+      service airfield_iface_watchdog restart
+      echo "WATCHDOG RESTARTED"
+    else
+      service airfield_iface_watchdog start
+      echo "WATCHDOG STARTED"
+    fi
+  register: watchdog_svc
+  changed_when: "'WATCHDOG STARTED' in watchdog_svc.stdout or 'WATCHDOG RESTARTED' in watchdog_svc.stdout"
+  when: watchdog_script.changed or watchdog_initscript.changed
+
 # Post-handler rebind: the restart-frr handler kills + restarts zebra/ospfd,
 # and on some pfSense images that race causes one or more data-plane vmx
 # interfaces to lose their IP between the SIGTERM and FRR re-attach. Same
