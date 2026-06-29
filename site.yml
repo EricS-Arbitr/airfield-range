@@ -286,6 +286,65 @@
   tags:
     - pfsense
 
+# Belt-and-suspenders rebind that fires BETWEEN the pfSense play and the AD
+# plays. The pfsense_firewall role's own post-flight + post-handler tasks
+# only catch drift that happens DURING the play; pfSense's write_config()
+# can trigger a background interface refresh that drops a data-plane vmx
+# IP seconds-to-minutes AFTER the play ends. We've hit this 3+ times on
+# vmx1 (SWITCH_3) on bs-ops-fw, and each time Eng/SOC hosts then fail to
+# join vcab.lan with "domain not contacted" because the OSPF-learned route
+# can't install through an interface with no kernel IP.
+#
+# This play: brief settle pause + same rebind PHP, scheduled right before
+# anything that needs routing-through-pfSense.
+- name: pfSense — pre-AD interface re-verify (catches delayed vmx drop)
+  hosts: pfsense
+  gather_facts: false
+  tasks:
+    - name: Settle pause for any delayed pfSense reconfig
+      ansible.builtin.pause:
+        seconds: 20
+      run_once: true
+
+    - name: Re-bind any data-plane interface whose kernel IP has drifted
+      ansible.builtin.shell: |
+        php -r 'require_once("/etc/inc/config.inc");
+                require_once("/etc/inc/interfaces.inc");
+                $want_descrs = json_decode(getenv("PFS_DESCRS"), true);
+                $ifs = config_get_path("interfaces", []);
+                $fixed = [];
+                foreach ($ifs as $key => $cfg) {
+                  if ($key === "lan") continue;
+                  $descr = $cfg["descr"] ?? "";
+                  $want_ip = $cfg["ipaddr"] ?? "";
+                  $phys = $cfg["if"] ?? "";
+                  $subnet = $cfg["subnet"] ?? "";
+                  if (!in_array($descr, $want_descrs, true)) continue;
+                  if (!$want_ip || $want_ip === "dhcp" || !$phys || !$subnet) continue;
+                  $cur = trim(shell_exec("ifconfig " . escapeshellarg($phys) .
+                    " 2>/dev/null | awk \"/inet /{print \\$2; exit}\""));
+                  if ($cur !== $want_ip) {
+                    shell_exec("pkill -f \"dhclient.*" . escapeshellarg($phys) . "\" 2>/dev/null");
+                    interface_configure($key);
+                    shell_exec("ifconfig " . escapeshellarg($phys) . " inet " .
+                      escapeshellarg($want_ip) . "/" . intval($subnet) . " up 2>&1");
+                    $fixed[] = $key . "(" . $descr . ":" . $phys . ":" . $cur . "->" . $want_ip . ")";
+                  }
+                }
+                if (count($fixed) > 0) {
+                  echo "PRE-AD FIXED: " . implode(",", $fixed) . "\n";
+                } else {
+                  echo "PRE-AD OK: all data-plane interfaces still bound\n";
+                }'
+      environment:
+        PFS_DESCRS: "{{ pfsense_interfaces | map(attribute='descr') | list | to_json }}"
+      register: pfsense_pre_ad
+      changed_when: "'PRE-AD FIXED' in pfsense_pre_ad.stdout"
+      when: pfsense_interfaces is defined and (pfsense_interfaces | length) > 0
+  tags:
+    - pfsense
+    - pfsense_pre_ad_rebind
+
 # =============================================================================
 # Foundation tier — Active Directory (vcab.lan + flightops.lan)
 # =============================================================================

@@ -280,4 +280,24 @@ The existing "Post-flight — re-verify data-plane interface IPs are bound" task
 
 ---
 
+## 2026-06-29 · platform (recurring) · pfSense data-plane interface drops AFTER role finishes
+
+**Symptom.** Every full `./deploy.sh` run, Eng + SOC member hosts (10 total, behind `bs-ops-fw`) fail `domain_member_retry` with "The specified domain either does not exist or could not be contacted." On `bs-ops-fw`, vmx1 (SWITCH_3) has lost its 172.31.1.14/30 kernel IP again — no connected route, OSPF route to vcab `172.31.2.0/24` can't install, hosts behind the firewall can't reach `bs-dc01`.
+
+**Detection sequence:** `ifconfig vmx1` shows no `inet` line; `netstat -rn -f inet | head` is missing the `172.31.1.12/30 link#... vmx1` connected entry; `vtysh -c "show ip ospf neighbor"` shows the adjacency `Full` (LSAs flow at L2); `vtysh -c "show ip route 172.31.2.0/24"` shows the route in FRR but `netstat` doesn't have it in the kernel.
+
+**Root cause (best understanding so far).** pfSense's `write_config()` triggers a background interface refresh on the SimSpace `RC_pfSense:1.0.0` image. The pre-handler `Post-flight — re-verify data-plane interface IPs are bound` task in `roles/pfsense_firewall/tasks/main.yml` and the post-handler companion `Post-handler — re-verify ...` both catch drift that happens DURING the play, but they can't catch a refresh that fires seconds-to-minutes AFTER the play completes — by then Ansible has moved on to the AD foundation plays and the vmx1 binding silently disappears in the gap.
+
+**Fix (upstream).** Would require either a SimSpace image change to stop the delayed interface refresh, or a pfSense FRR package change to bind the data-plane IPs at a lower level (e.g., via `rc.conf.local` ifconfig lines) so they survive write_config refreshes.
+
+**Workaround (overlay).** Three layers of defense in `airfield-range`:
+
+1. `pfsense_firewall` role's `Post-flight — re-verify data-plane interface IPs are bound` task (pre-handler).
+2. `pfsense_firewall` role's `Post-handler — re-verify data-plane interface IPs survived FRR restart` task (right after `meta: flush_handlers`).
+3. **New (2026-06-29):** standalone play in `site.yml` named `pfSense — pre-AD interface re-verify (catches delayed vmx drop)` that fires between `pfSense firewalls` and `dcpromo`. Includes a 20-second settle pause + the same PHP rebind logic. This catches drift that happens in the gap between the pfSense play ending and the AD plays starting.
+
+When the rebind fires, expect a `PRE-AD FIXED: opt1(SWITCH_3:vmx1:->172.31.1.14)` line in the play output; when nothing drifted, `PRE-AD OK`. The task is tagged `pfsense_pre_ad_rebind` so it can be re-run scoped: `ansible-playbook site.yml --tags pfsense_pre_ad_rebind`.
+
+---
+
 <!-- New entries go above this line, newest first. -->
