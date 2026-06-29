@@ -344,6 +344,16 @@
   tags:
     - pfsense
     - pfsense_pre_ad_rebind
+    # Pull this rebind into any AD-foundation tag scope so it's unmissable —
+    # we've been hitting the case where users tag `domain_member_retry` and
+    # the rebind sits silently outside the scope while Eng/SOC fail.
+    - strip_apipa
+    - domain_member_retry
+    - dcpromo
+    - join_vcab
+    - join_flightops
+    - create_users
+    - dns
 
 # =============================================================================
 # Foundation tier — Active Directory (vcab.lan + flightops.lan)
