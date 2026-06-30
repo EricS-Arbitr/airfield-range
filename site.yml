@@ -821,14 +821,14 @@
     - syslog
     - syslog_client
 
-# Splunk indexer + search head on soc-elastic. Base `splunk` role from
-# PowerPlant/range-development-ansible/roles/splunk (copied per role-sourcing
-# policy; see project memory `siem-choice`). Downloads splunk.deb from the
-# customer nexus, applies the license, writes limits/inputs/server/web
-# configs, creates the indices declared in group_vars/all.yml (windows,
-# sysmon, linux, netfw, ot, wec), starts the splunkd service. Forwarders
-# in subsequent plays will point at `splunk_server_ip` (= siem_server_ip,
-# 172.31.7.15) on TCP 9997.
+# Splunk indexer + search head on soc-splunk (Ubuntu Desktop 22.04, SOC
+# subnet 172.31.7.19). Base `splunk` role from PowerPlant/range-development-
+# ansible/roles/splunk (copied per role-sourcing policy; see project memory
+# `siem-choice`). Downloads splunk.deb from the customer nexus, applies the
+# license, writes limits/inputs/server/web configs, creates the indices
+# declared in group_vars/all.yml (windows, sysmon, linux, netfw, ot, wec),
+# starts the splunkd service. Forwarders in subsequent plays will point at
+# `splunk_server_ip` (172.31.7.19) on TCP `splunk_forwarder_port` (9997).
 #
 # Splunk Enterprise Security (premium SIEM saved searches/dashboards) is
 # DEFERRED to a later slice — the splunk-es role needs splunk-es.spl plus
@@ -838,7 +838,7 @@
 #
 # gather_facts: true because templates/limits.conf.j2 references
 # `ansible_processor_vcpus` to size httpServer.maxThreads.
-- name: Splunk indexer + search head — soc-elastic
+- name: Splunk indexer + search head — soc-splunk
   hosts: splunk
   gather_facts: true
   become: true
@@ -848,18 +848,24 @@
     - splunk
     - splunk_indexer
 
-# Splunk universal forwarder rollout on every Linux host except the
-# indexer itself. The highest-value target is soc-syslog: it tails
+# Splunk universal forwarder rollout on every Linux host except (a) the
+# indexer itself (soc-splunk) and (b) the future-Elastic placeholder
+# (soc-elastic). The highest-value target is soc-syslog: it tails
 # /var/log/remote/<host>/syslog.log and is the ONLY source feeding the
 # netfw index (pfSense + VyOS events forwarded over UDP 514 to soc-syslog,
 # then UF tails the files and ships into Splunk). Other Linux hosts feed
 # their /var/log/{syslog,auth.log} into the linux index.
 #
+# soc-elastic is intentionally excluded (`:!elastic`) — it stays bare for
+# the future Elastic / Security Onion stack so we don't have to disentangle
+# a Splunk UF from that host when Elastic comes online. See project memory
+# `siem-choice`.
+#
 # Run scoped for fast first-feedback:
 #   --tags splunk_forwarder_linux --limit soc-syslog   # syslog visible in UI
 #   --tags splunk_forwarder_linux                       # full Linux rollout
 - name: Splunk universal forwarder — Linux
-  hosts: linux:!siem
+  hosts: linux:!splunk:!elastic
   gather_facts: true
   become: true
   roles:

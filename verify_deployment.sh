@@ -267,20 +267,20 @@ done
 section "6. SOC tier — Splunk SIEM"
 
 # Indexer service active and listening on receiver (9997) + web (8000) + REST (8089).
-check_pf_shell soc-elastic \
+check_pf_shell soc-splunk \
   'systemctl is-active splunk' \
   'active' \
-  "soc-elastic Splunk indexer service active"
+  "soc-splunk Splunk indexer service active"
 
-check_pf_shell soc-elastic \
+check_pf_shell soc-splunk \
   'ss -lnt | awk "{print \$4}"' \
   ':9997$|:9997[[:space:]]' \
-  "soc-elastic listening on :9997 (receiver — UF target)"
+  "soc-splunk listening on :9997 (receiver — UF target)"
 
-check_pf_shell soc-elastic \
+check_pf_shell soc-splunk \
   'ss -lnt | awk "{print \$4}"' \
   ':8000$|:8000[[:space:]]' \
-  "soc-elastic listening on :8000 (Splunk Web)"
+  "soc-splunk listening on :8000 (Splunk Web)"
 
 # soc-syslog forwarder up + has an ESTABLISHED conn to the indexer on 9997.
 # Catches "service running but indexer unreachable" silently-broken state.
@@ -290,7 +290,7 @@ check_pf_shell soc-syslog \
   "soc-syslog SplunkForwarder service active"
 
 check_pf_shell soc-syslog \
-  'ss -ant | grep "172.31.7.15:9997" | grep -c ESTAB' \
+  'ss -ant | grep "172.31.7.19:9997" | grep -c ESTAB' \
   '^[1-9]' \
   "soc-syslog UF has ESTABLISHED connection to indexer :9997"
 

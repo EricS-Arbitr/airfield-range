@@ -198,12 +198,19 @@ soc-openvas
 
 [soc_servers]
 soc-elastic
+soc-splunk
 soc-syslog
 
 # Splunk indexer + search head (base splunk role from PowerPlant).
-# Single-host group; co-located with the Ubuntu host that already runs the
-# rsyslog collector. See project memory `siem-choice`.
+# soc-splunk runs Splunk Enterprise Core; UFs ship to 172.31.7.19:9997.
+# See project memory `siem-choice`.
 [splunk]
+soc-splunk
+
+# Reserved for future Elastic / Security Onion stack on soc-elastic.
+# Empty role-wise today -- the host gets baseline OS roles + GNOME wizard
+# suppression but NO splunk-forwarder (per the "leave bare" decision).
+[elastic]
 soc-elastic
 
 [soc:children]
@@ -427,6 +434,7 @@ atc-weather
 fops-app01
 fops-app02
 fops-app03
+soc-splunk
 
 [ubuntu24]
 bs-ftp
@@ -455,6 +463,7 @@ ubuntu25
 atc-station
 bs-ro-hist
 soc-openvas
+soc-splunk
 bs-eng05
 bs-eng06
 
@@ -476,9 +485,12 @@ fops-wec01
 [syslog]
 soc-syslog
 
-# SIEM (Elastic-based)
-[siem]
-soc-elastic
+# SIEM hosts have their own purpose-specific groups now: [splunk] for the
+# active SIEM (soc-splunk) and [elastic] for the future stack on soc-elastic.
+# A generic [siem] umbrella group is intentionally NOT defined because it
+# was previously used as a forwarder-exclusion ("hosts: linux:!siem") that
+# would silently start excluding soc-elastic once Elastic comes online.
+# Forwarder plays now use the explicit `linux:!splunk:!elastic` form.
 
 # Forensic / hunt tooling (do NOT receive baseline OS roles)
 [hunt]

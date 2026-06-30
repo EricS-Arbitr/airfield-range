@@ -1,0 +1,31 @@
+---
+# host_vars/soc-splunk.yml — Linux (Ubuntu Desktop 22.04)
+# Image:   global/RDP_Ubuntu_Desktop_22.04.5:1.1.0
+# Mgmt:    10.255.240.180/20 (position FIRST → eth0)
+#
+# Runs Splunk Enterprise Core (indexer + search head). All UFs point at
+# splunk_server_ip (172.31.7.19) on TCP 9997. Analysts RDP into this VM
+# to drive Splunk Web in a local browser (rationale for Desktop edition;
+# GNOME initial-setup wizard is suppressed by the existing role).
+ansible_host: "10.255.240.180"
+
+# Blueprint omits `hostname` for this VM (soc-elastic has one explicitly).
+# Set it via common role so /etc/hostname + DNS registration match.
+inventory_hostname_short: "soc-splunk"
+
+network_interfaces:
+  - name: "eth0"                     # mgmt (position FIRST)
+    ipv4:
+      type: "ethernet"
+      address: "10.255.240.180"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "eth1"                     # production — SOC
+    ipv4:
+      type: "ethernet"
+      address: "172.31.7.19"
+      netmask: "255.255.255.0"
+      gateway: "172.31.7.1"
+    dns:
+      - "172.31.2.7"
+      - "172.31.2.8"
