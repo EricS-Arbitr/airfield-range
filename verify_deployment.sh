@@ -178,6 +178,36 @@ for dc in bs-dc01:vcab.lan fops-dc01:flightops.lan; do
     "$forest: simspace is in Domain Admins"
 done
 
+# Per-workstation domain users (one per Windows workstation, all in Domain
+# Admins -- see group_vars/{vcab,flightops}.yml DomainUsers lists).
+# vcab.lan expects >= 27 user members (simspace + 26 named workstation users);
+# flightops.lan expects >= 13 (simspace + 12 named). The builtin Administrator
+# is typically also a DA member -- the floor checks catch a partial create_users
+# run without false-failing on count drift.
+check_ps bs-dc01 \
+  '$c=(Get-ADGroupMember "Domain Admins" -Recursive | Where-Object {$_.objectClass -eq "user"}).Count; if ($c -ge 27) {"OK_$c"} else {"LOW_$c"}' \
+  '\(stdout\)[[:space:]]+OK_' \
+  "vcab.lan: >= 27 named users in Domain Admins (simspace + 26 workstation users)"
+
+check_ps fops-dc01 \
+  '$c=(Get-ADGroupMember "Domain Admins" -Recursive | Where-Object {$_.objectClass -eq "user"}).Count; if ($c -ge 13) {"OK_$c"} else {"LOW_$c"}' \
+  '\(stdout\)[[:space:]]+OK_' \
+  "flightops.lan: >= 13 named users in Domain Admins (simspace + 12 workstation users)"
+
+# Spot-check one specific named user exists + enabled on each domain.
+# ahmed.ortega is a PowerPlant-roster name (validates the main path);
+# emma.rodriguez is one of the 5 names new to airfield-range (validates
+# the new-names branch in flightops.yml).
+check_ps bs-dc01 \
+  'try { (Get-ADUser ahmed.ortega -Properties Enabled).Enabled } catch { "MISSING" }' \
+  '\(stdout\)[[:space:]]+True' \
+  "vcab.lan: ahmed.ortega exists and is enabled (PowerPlant-roster user)"
+
+check_ps fops-dc01 \
+  'try { (Get-ADUser emma.rodriguez -Properties Enabled).Enabled } catch { "MISSING" }' \
+  '\(stdout\)[[:space:]]+True' \
+  "flightops.lan: emma.rodriguez exists and is enabled (new airfield-range user)"
+
 # Both additional DCs promoted (PartOfDomain == True)
 for adc in bs-dc02 fops-dc02; do
   check_ps "$adc" \
