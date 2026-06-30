@@ -13,15 +13,22 @@ input(type="imtcp" port="514")
 
 # Per-host file template:
 #   /var/log/remote/<hostname>/syslog.log
-# pfSense sends its hostname unqualified (pp-ot-firewall), VyOS sends short
-# hostnames too, Linux uses %HOSTNAME% from /etc/hostname. The Splunk UF on
-# this same host uses the directory name as the host= field.
+# VyOS routers and Linux hosts populate HOSTNAME in their syslog messages
+# correctly, so $hostname (parsed from the wire) is the right default. The
+# Splunk UF on this same host uses the directory name as the host= field.
+#
+# pfSense is the exception: its FreeBSD syslogd forwards remote messages
+# WITHOUT a HOSTNAME field (malformed RFC3164 -- documented in
+# UPSTREAM_FIXES.md 2026-06-30). Without intervention, rsyslog falls back to
+# the source IP for $hostname, so logs land at /var/log/remote/<ip>/. We
+# work around it with a static source-IP → hostname mapping driven by
+# `syslog_source_ip_map` in host_vars (a list of {ip, name} dicts).
 template(
   name="RemoteHostFile"
   type="list"
 ) {
   constant(value="/var/log/remote/")
-  property(name="hostname" securepath="replace")
+  property(name="$!hostfile" securepath="replace")
   constant(value="/syslog.log")
 }
 
@@ -29,6 +36,14 @@ template(
 # files and then stop processing so they don't also land in /var/log/syslog.
 # Local rsyslog/journald messages keep their normal path.
 if $fromhost-ip != '127.0.0.1' then {
+    # Default: trust the parsed hostname from the message
+    set $!hostfile = $hostname;
+
+{% for entry in syslog_source_ip_map | default([]) %}
+    # Override: pfSense / other hostname-less sources mapped by source IP
+    if $fromhost-ip == '{{ entry.ip }}' then set $!hostfile = '{{ entry.name }}';
+{% endfor %}
+
     action(
       type="omfile"
       dynaFile="RemoteHostFile"

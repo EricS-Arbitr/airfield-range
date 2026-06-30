@@ -301,6 +301,30 @@ When any rebind fires, watch `/var/log/messages` on the pfSense for an `airfield
 
 ---
 
+## 2026-06-30 · bug (upstream pfSense/FreeBSD) · pfSense syslog forwarding omits HOSTNAME field
+
+**Symptom.** After enabling remote syslog forwarding (`syslog/enable` + `syslog/remoteserver` + `syslog/logall` in pfSense `config.xml`, then `system_syslogd_start()`), packets arrive at the SOC collector but `$hostname` is unparseable, so rsyslog's per-host template writes them to `/var/log/remote/<source-ip>/syslog.log` (e.g. `/var/log/remote/172.31.1.21/` for bs-ops-fw) instead of `/var/log/remote/bs-ops-fw/`.
+
+**Detection.**
+```
+tcpdump -i any -n -A "udp port 514 and src <pfsense-ip>" -c 5
+# Packets look like:
+<30>Jun 30 16:24:03 dhclient[21361]: No DHCPOFFERS received.
+#       ^^^^^^^^^^^^ timestamp     ^^^^^^^^^^ program — HOSTNAME field is missing
+```
+
+VyOS routers on the same collector format correctly (`Jun 30 16:24:03 bs-core-rtr systemd[1]: Started ...`).
+
+**Root cause.** pfSense's FreeBSD syslogd does not insert the local hostname when forwarding messages received via the chrooted log socket (`/var/dhcpd/var/run/log`), and on pfSense 2.8.1 this behavior extends to most non-dhclient sources too. The remote messages are technically malformed RFC3164. Confirmed on pfSense 2.8.1 (SimSpace image `RC_pfSense:1.0.0`); was reportedly working on earlier PowerPlant images where the rsyslog template comment notes "pfSense sends its hostname unqualified (pp-ot-firewall)".
+
+**Fix (upstream).** Would require a pfSense / FreeBSD syslogd patch to consistently insert the local hostname on remote forwards, regardless of which log socket the message came in on.
+
+**Workaround (overlay).** Map source-IP → hostname on the rsyslog side. `roles/syslog_server/templates/30-remote.conf.j2` now iterates `syslog_source_ip_map` (a list of `{ip, name}` dicts from host_vars/soc-syslog.yml) and emits one `if $fromhost-ip == '<ip>' then set $!hostfile = '<name>';` line per entry. Non-pfSense sources still flow through the default `$hostname`-from-message path. The map is small (2 entries today, one per pfSense firewall) and inventory-driven, so adding a third firewall is one host_vars line.
+
+After the fix, restart rsyslog on soc-syslog (the role's handler does this on template change) and any new packets land in `/var/log/remote/<hostname>/`. Stale IP-named directories from before the fix can be deleted manually.
+
+---
+
 ## 2026-06-29 · bug · roles/pfsense_firewall/files/airfield_iface_watchdog.sh — skipped vmx1 on bs-ops-fw
 
 **Symptom.** Even after the watchdog daemon (layer 4 above) was installed and verified running, every full deploy still produced "domain not contacted" failures on the 10 Eng/SOC hosts behind `bs-ops-fw`. vmx1 (172.31.1.14, SWITCH_3 transit toward bs-ops-rtr) stayed dropped indefinitely — the watchdog never logged a rebind for it.

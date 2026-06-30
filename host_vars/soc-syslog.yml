@@ -19,3 +19,17 @@ network_interfaces:
     dns:
       - "172.31.2.7"
       - "172.31.2.8"
+
+# pfSense's syslogd forwards remote messages without a HOSTNAME field, so
+# rsyslog falls back to source IP. Map each pfSense firewall's outbound
+# source IP (the interface IP it uses on the route to soc-syslog 172.31.7.13)
+# to its hostname so logs land in /var/log/remote/<hostname>/ like everyone
+# else. Each pfSense routes to 172.31.7.13 deterministically:
+#   bs-edge-fw: via core-rtr → sources from vmx1 = 172.31.1.5  (transit /30 .4/30)
+#   bs-ops-fw:  via sec-rtr  → sources from vmx3 = 172.31.1.21 (transit /30 .20/30)
+# Add more entries here if more pfSense firewalls or hostname-less sources
+# join the topology. VyOS routers send their hostname correctly and don't
+# need entries here.
+syslog_source_ip_map:
+  - { ip: "172.31.1.5",  name: "bs-edge-fw" }
+  - { ip: "172.31.1.21", name: "bs-ops-fw" }
