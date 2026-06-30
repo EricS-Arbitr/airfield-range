@@ -34,11 +34,56 @@ internal_dns_records:
   - { name: "ftp",      type: "A", value: "172.31.12.2", zone: "{{ domain_name }}" }
   - { name: "ns1",      type: "A", value: "172.31.12.5", zone: "{{ domain_name }}" }
 
-# --- Domain users (skeleton — fill from vault.yml) -----------
+# --- Domain users (one per workstation, matches PowerPlant pattern) ----
+# Each named user is the notional "primary occupant" of a single Windows
+# workstation -- so the workstation count drives the user count. Following
+# PowerPlant's lab-aggressive posture every named user is in Domain Admins;
+# tighten later if a scenario calls for least-privilege. Password is shared
+# across all accounts (mirrors PowerPlant's "Simspace1!Simspace1!" via the
+# group_vars/all.yml `domain_admin_password` variable).
+#
+# Names are drawn from PowerPlant/ss-pp-ab/group_vars/voltgrid.yml so
+# trainees who run multiple ranges see familiar accounts. Workstation
+# assignments live in the trailing comment so a future AUE / auto-logon
+# role can consume an explicit mapping if needed.
 DomainUsers:
   - name: "simspace"
     fullname: "SimSpace Admin"
-    password: "{{ domain_admin_password }}"  # already in group_vars/all.yml; vault.yml isn't auto-loaded (no [vault] group)
+    password: "{{ domain_admin_password }}"
     groups: [ "Domain Admins" ]
-  # Per-user seeds get added here as the build sheet for each enclave
-  # firms up (Headquarters, IT, Supply roles map to OUs and groups).
+
+  # --- Headquarters (vcab_hq: bs-hq01..06) -------------------
+  - { name: "ahmed.ortega",      fullname: "Ahmed Ortega",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-hq01
+  - { name: "barbara.white",     fullname: "Barbara White",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-hq02
+  - { name: "bob.burke",         fullname: "Bob Burke",         password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-hq03
+  - { name: "charity.bowen",     fullname: "Charity Bowen",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-hq04
+  - { name: "charles.hardy",     fullname: "Charles Hardy",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-hq05
+  - { name: "charles.martinez",  fullname: "Charles Martinez",  password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-hq06
+
+  # --- IT (vcab_it: bs-it01..05) -----------------------------
+  - { name: "ciara.schultz",     fullname: "Ciara Schultz",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-it01
+  - { name: "dale.hays",         fullname: "Dale Hays",         password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-it02
+  - { name: "david.miller",      fullname: "David Miller",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-it03
+  - { name: "diana.johnson",     fullname: "Diana Johnson",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-it04
+  - { name: "elizabeth.garcia",  fullname: "Elizabeth Garcia",  password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-it05
+
+  # --- Supply (vcab_supply: bs-supply01..05) -----------------
+  - { name: "eunice.gilmore",    fullname: "Eunice Gilmore",    password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-supply01
+  - { name: "gavin.horn",        fullname: "Gavin Horn",        password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-supply02
+  - { name: "irwin.choi",        fullname: "Irwin Choi",        password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-supply03
+  - { name: "jacob.smith",       fullname: "Jacob Smith",       password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-supply04
+  - { name: "james.moore",       fullname: "James Moore",       password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-supply05
+
+  # --- Engineering (vcab_engineering: bs-eng01..04) ----------
+  - { name: "janice.durham",     fullname: "Janice Durham",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-eng01
+  - { name: "jennifer.davis",    fullname: "Jennifer Davis",    password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-eng02
+  - { name: "jessica.robinson",  fullname: "Jessica Robinson",  password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-eng03
+  - { name: "joaquin.clayton",   fullname: "Joaquin Clayton",   password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-eng04
+
+  # --- SOC analysts (vcab_soc: soc-analyst01..06) ------------
+  - { name: "john.jackson",      fullname: "John Jackson",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # soc-analyst01
+  - { name: "joseph.clark",      fullname: "Joseph Clark",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # soc-analyst02
+  - { name: "lara.whitaker",     fullname: "Lara Whitaker",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # soc-analyst03
+  - { name: "liam.sherman",      fullname: "Liam Sherman",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # soc-analyst04
+  - { name: "linda.taylor",      fullname: "Linda Taylor",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # soc-analyst05
+  - { name: "makenzie.melton",   fullname: "Makenzie Melton",   password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # soc-analyst06

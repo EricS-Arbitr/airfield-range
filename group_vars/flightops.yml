@@ -48,9 +48,31 @@ ad_trust:
   direction: "incoming"             # flightops is the TRUSTED domain
   trust_secret: "{{ vault_ad_trust_secret }}"
 
-# --- Domain users (skeleton — fill from vault.yml) ---------
+# --- Domain users (one per workstation, matches PowerPlant pattern) ----
+# See group_vars/vcab.yml for the convention rationale: one user per
+# workstation, all in Domain Admins (PowerPlant lab posture), shared
+# password via `domain_admin_password`. PowerPlant's roster supplies the
+# first 7 here; the last 5 (amir.patel ... emma.rodriguez) are new to
+# airfield-range because flightops has 12 workstations and we exhausted
+# the PowerPlant list after 33 names (26 spent on vcab).
 DomainUsers:
   - name: "simspace"
     fullname: "SimSpace Admin"
-    password: "{{ domain_admin_password }}"  # already in group_vars/all.yml; vault.yml isn't auto-loaded
+    password: "{{ domain_admin_password }}"
     groups: [ "Domain Admins" ]
+
+  # --- Flight Control Center (fops-flight01..04) ----------
+  - { name: "marcos.casey",        fullname: "Marcos Casey",        password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-flight01
+  - { name: "michelle.blanchard",  fullname: "Michelle Blanchard",  password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-flight02
+  - { name: "ola.burch",           fullname: "Ola Burch",           password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-flight03
+  - { name: "rosemary.cortez",     fullname: "Rosemary Cortez",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-flight04
+
+  # --- Flight Operations Users (fops-ops01..08) ----------
+  - { name: "roxanne.farley",      fullname: "Roxanne Farley",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops01
+  - { name: "sean.wilkinson",      fullname: "Sean Wilkinson",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops02
+  - { name: "tessa.church",        fullname: "Tessa Church",        password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops03
+  - { name: "amir.patel",          fullname: "Amir Patel",          password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops04 (new — not in PowerPlant roster)
+  - { name: "bianca.olson",        fullname: "Bianca Olson",        password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops05 (new)
+  - { name: "chloe.nguyen",        fullname: "Chloe Nguyen",        password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops06 (new)
+  - { name: "darius.washington",   fullname: "Darius Washington",   password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops07 (new)
+  - { name: "emma.rodriguez",      fullname: "Emma Rodriguez",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops08 (new)
