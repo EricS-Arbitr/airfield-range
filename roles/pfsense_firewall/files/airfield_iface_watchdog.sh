@@ -13,6 +13,16 @@
 # Logs each rebind to syslog (tag: airfield-iface-watchdog).
 
 while :; do
+  # Kill dhclient on data-plane interfaces (vmx1+). SimSpace's pfSense
+  # image spawns dhclient on every vmx at boot, regardless of static
+  # config. The transient DHCP leases poison zebra's connected-route
+  # view and prevent OSPF routes from being installed in the kernel.
+  # See UPSTREAM_FIXES.md 2026-06-30 entry.
+  if pgrep -f "dhclient.*vmx[1-9]" >/dev/null 2>&1; then
+    pkill -f "dhclient.*vmx[1-9]" 2>/dev/null
+    logger -t airfield-iface-watchdog "Killed dhclient on data-plane interfaces (vmx1+)"
+  fi
+
   /usr/local/bin/php -r '
     require_once("/etc/inc/config.inc");
     require_once("/etc/inc/interfaces.inc");

@@ -335,4 +335,40 @@ After the fix, restart rsyslog on soc-syslog (the role's handler does this on te
 
 ---
 
+## 2026-06-30 · platform · pfSense data-plane dhclient poisons zebra route installation
+
+**Symptom.** On a fresh range deploy, ALL Eng + SOC member hosts (10 total, behind bs-ops-fw) fail `domain_member_retry` with "The specified domain either does not exist or could not be contacted." Every other Windows host joins fine — only the subnets that have to traverse bs-ops-fw fail. The watchdog reports vmx1 bound, OSPF neighbors Full, FRR's `show ip route` shows `O>* 172.31.2.0/24 via 172.31.1.13` (selected + installed in FIB). But `netstat -rn -f inet` is missing `172.31.2.0/24`, missing the default route, and missing everything else FRR claims to have installed via vmx1. `route -n get 172.31.2.7` returns "route has not been found." Routes via vmx3 (sec-rtr direction) install correctly; routes via vmx1 (ops-rtr direction) do not.
+
+**Detection.**
+```
+# On bs-ops-fw:
+vtysh -c "show ip route" | head -40
+# Output includes mysterious bogus connected entries:
+C>* 10.41.240.0/20  is directly connected, vmx1, 02:19:24
+C>* 192.168.1.0/24  is directly connected, vmx1, 02:19:22
+# Plus the legit:
+C>* 172.31.1.12/30  is directly connected, vmx1
+# These bogus C>* entries are NOT visible in `ifconfig vmx1` (which shows
+# only the configured 172.31.1.14) -- they are stale state baked into
+# zebra's connected-route view at zebra startup time.
+
+ps auxww | grep "dhclient.*vmx"
+# Reveals: dhclient running on vmx1 (data-plane) alongside vmx0 (mgmt).
+_dhcp    6037   0.0  0.2  14408  3228  -  SCs  20:09  dhclient: vmx1
+```
+
+**Root cause.** SimSpace's `RC_pfSense:1.0.0` image spawns `dhclient` on EVERY `vmxN` interface at boot, regardless of whether config.xml has the interface set to `ipv4_type=static`. dhclient transiently acquires leases from the SimSpace backend platform networks (10.41.240.0/20, 192.168.1.0/24 observed). pfSense's `interface_configure()` then sets the interface to the configured static IP and removes the alias, but zebra has ALREADY read the connected-route table during its startup and recorded the transient subnets as `C>*`. Zebra then silently refuses to install any OSPF route via that interface because it can't unambiguously select among the (apparent) multiple connected paths.
+
+**Fix (upstream).** SimSpace's pfSense 1.0.0 image should set the data-plane interfaces to `ipv4_type=staticv4` at the rc.conf level so dhclient never spawns on them, OR pfSense's `interface_configure()` should explicitly `pkill -f "dhclient.*<phys>"` when switching an interface from DHCP→static.
+
+**Workaround (overlay).** Two defenses in `roles/pfsense_firewall`:
+
+1. **Deploy-time kill** — `tasks/main.yml` "Kill dhclient on data-plane interfaces" task runs AFTER `interface_configure()` and BEFORE the `meta: flush_handlers` that triggers `restart frr`. Net effect: when zebra starts (or restarts), dhclient is dead on every vmx1+, so zebra's connected-route view is clean and OSPF route installation works.
+
+2. **Runtime kill** — the `airfield_iface_watchdog.sh` daemon now runs `pkill -f "dhclient.*vmx[1-9]"` at the start of each 30-second loop iteration. If pfSense (or some image-side script) respawns dhclient between deploys, the watchdog kills it within 30s. Logged to syslog with tag `airfield-iface-watchdog` when a kill occurs.
+
+Manual recovery if a deploy precedes the fix landing on the live firewall: `pkill -f "dhclient.*vmx[1-9]"; pkill -9 zebra; pkill -9 ospfd; sleep 3; /usr/local/sbin/zebra -d -A 127.0.0.1 -s 90000000 -f /var/etc/frr/frr.conf; sleep 4; /usr/local/sbin/ospfd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf`. After the zebra+ospfd restart, the OSPF routes install correctly and Eng/SOC hosts can reach the vcab DCs.
+
+---
+
 <!-- New entries go above this line, newest first. -->

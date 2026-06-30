@@ -330,9 +330,38 @@
   notify: restart frr
   when: pfsense_interfaces is defined and (pfsense_interfaces | length) > 0
 
+# SimSpace's RC_pfSense:1.0.0 image spawns dhclient on EVERY vmxN interface
+# at boot, even after our role configures them as static. The transient
+# DHCP leases dhclient acquires (we've seen 10.41.240.x and 192.168.1.x
+# from the SimSpace backend network) get baked into zebra's connected-route
+# view when zebra starts, and zebra then silently refuses to install any
+# OSPF routes via that interface in the kernel FIB. End result: OSPF
+# neighbors Full, FRR's RIB shows the routes as O>* (selected + installed),
+# but `netstat -rn` doesn't have them and `route get` returns "not found".
+#
+# Fix: kill dhclient on every data-plane interface (vmx1+) BEFORE zebra
+# starts. The mgmt interface (vmx0) keeps its dhclient -- SimSpace's
+# platform assigns the mgmt IP via DHCP from 10.255.240.0/20. Watchdog
+# loop also does this on every 30s cycle so a respawn doesn't re-poison.
+# See airfield-range/UPSTREAM_FIXES.md 2026-06-30 entry.
+- name: Kill dhclient on data-plane interfaces (prevents zebra route-install poisoning)
+  ansible.builtin.shell: |
+    set +e
+    pkill -f "dhclient.*vmx[1-9]" 2>/dev/null
+    sleep 1
+    if pgrep -f "dhclient.*vmx[1-9]" >/dev/null 2>&1; then
+      echo "WARN: dhclient still running on a data-plane interface after pkill"
+      exit 0
+    fi
+    echo "CHANGED: dhclient cleared from vmx1+"
+  register: pfsense_dhclient_kill
+  changed_when: "'CHANGED' in pfsense_dhclient_kill.stdout"
+
 # Force handler flush so FRR is up by the end of the play rather than
 # waiting until after every subsequent task. Some plays in the playbook
-# (notably the syslog client) depend on routing being live.
+# (notably the syslog client) depend on routing being live. By killing
+# dhclient FIRST (the task above), the FRR-restart handler runs against
+# clean interface state and zebra installs OSPF routes correctly.
 - name: Flush FRR restart handler if pending
   ansible.builtin.meta: flush_handlers
 
