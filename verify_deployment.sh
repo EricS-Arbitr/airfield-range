@@ -297,19 +297,22 @@ done
 section "6. SOC tier — Splunk SIEM"
 
 # Indexer service active and listening on receiver (9997) + web (8000) + REST (8089).
+# Pattern: emit a sentinel from the remote shell then grep for it -- avoids
+# the trap where `ss` multi-line output is joined with literal "\n" in
+# ansible's --one-line format, defeating ^/$ anchors in the controller regex.
 check_pf_shell soc-splunk \
   'systemctl is-active splunk' \
   'active' \
   "soc-splunk Splunk indexer service active"
 
 check_pf_shell soc-splunk \
-  'ss -lnt | awk "{print \$4}"' \
-  ':9997$|:9997[[:space:]]' \
+  'ss -lnt | grep -qE ":9997\\b" && echo OK_9997 || echo MISSING_9997' \
+  'OK_9997' \
   "soc-splunk listening on :9997 (receiver — UF target)"
 
 check_pf_shell soc-splunk \
-  'ss -lnt | awk "{print \$4}"' \
-  ':8000$|:8000[[:space:]]' \
+  'ss -lnt | grep -qE ":8000\\b" && echo OK_8000 || echo MISSING_8000' \
+  'OK_8000' \
   "soc-splunk listening on :8000 (Splunk Web)"
 
 # soc-syslog forwarder up + has an ESTABLISHED conn to the indexer on 9997.
@@ -320,8 +323,8 @@ check_pf_shell soc-syslog \
   "soc-syslog SplunkForwarder service active"
 
 check_pf_shell soc-syslog \
-  'ss -ant | grep "172.31.7.19:9997" | grep -c ESTAB' \
-  '^[1-9]' \
+  'c=$(ss -ant | grep "172.31.7.19:9997" | grep -c ESTAB); [ "$c" -ge 1 ] && echo OK_ESTAB || echo NO_ESTAB' \
+  'OK_ESTAB' \
   "soc-syslog UF has ESTABLISHED connection to indexer :9997"
 
 # =========================================================================
