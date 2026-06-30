@@ -847,3 +847,24 @@
   tags:
     - splunk
     - splunk_indexer
+
+# Splunk universal forwarder rollout on every Linux host except the
+# indexer itself. The highest-value target is soc-syslog: it tails
+# /var/log/remote/<host>/syslog.log and is the ONLY source feeding the
+# netfw index (pfSense + VyOS events forwarded over UDP 514 to soc-syslog,
+# then UF tails the files and ships into Splunk). Other Linux hosts feed
+# their /var/log/{syslog,auth.log} into the linux index.
+#
+# Run scoped for fast first-feedback:
+#   --tags splunk_forwarder_linux --limit soc-syslog   # syslog visible in UI
+#   --tags splunk_forwarder_linux                       # full Linux rollout
+- name: Splunk universal forwarder — Linux
+  hosts: linux:!siem
+  gather_facts: true
+  become: true
+  roles:
+    - splunk-forwarder
+  tags:
+    - splunk
+    - splunk_forwarder
+    - splunk_forwarder_linux
