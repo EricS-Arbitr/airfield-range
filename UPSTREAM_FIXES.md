@@ -301,4 +301,14 @@ When any rebind fires, watch `/var/log/messages` on the pfSense for an `airfield
 
 ---
 
+## 2026-06-29 · bug · roles/pfsense_firewall/files/airfield_iface_watchdog.sh — skipped vmx1 on bs-ops-fw
+
+**Symptom.** Even after the watchdog daemon (layer 4 above) was installed and verified running, every full deploy still produced "domain not contacted" failures on the 10 Eng/SOC hosts behind `bs-ops-fw`. vmx1 (172.31.1.14, SWITCH_3 transit toward bs-ops-rtr) stayed dropped indefinitely — the watchdog never logged a rebind for it.
+
+**Root cause.** The watchdog script started with `if ($key === "lan" || $key === "wan") continue;` — intended to skip the management interface and the (non-existent on a transit firewall) WAN interface. But pfSense's `config.xml` assigns the key `wan` to whichever interface holds the **default gateway**. On `bs-ops-fw`, vmx1 is the default-gateway-facing interface (`GW_OPS_RTR` toward bs-ops-rtr), so pfSense keys it `wan`. The watchdog therefore deliberately skipped the very interface that keeps dropping.
+
+**Fix (overlay).** Changed the skip condition from `$key === "lan" || $key === "wan"` to `$phys === "vmx0"`. Per CLAUDE.md §3 row 10, vmx0 is the management NIC on every pfSense firewall in this build, so excluding by physical name (rather than by config-key) reliably skips only the mgmt plane while supervising all data-plane interfaces — including the default-gateway-facing one. The lan-vs-wan keying inside pfSense is irrelevant to whether an interface is data-plane.
+
+---
+
 <!-- New entries go above this line, newest first. -->

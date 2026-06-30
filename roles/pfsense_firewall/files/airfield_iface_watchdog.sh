@@ -18,11 +18,11 @@ while :; do
     require_once("/etc/inc/interfaces.inc");
     $ifs = config_get_path("interfaces", []);
     foreach ($ifs as $key => $cfg) {
-      if ($key === "lan" || $key === "wan") continue;
-      $want_ip = $cfg["ipaddr"] ?? "";
       $phys    = $cfg["if"]     ?? "";
+      $want_ip = $cfg["ipaddr"] ?? "";
       $subnet  = $cfg["subnet"] ?? "";
       $descr   = $cfg["descr"]  ?? $key;
+      if ($phys === "vmx0") continue;
       if (!$want_ip || $want_ip === "dhcp" || !$phys || !$subnet) continue;
       $cur = trim(shell_exec("ifconfig " . escapeshellarg($phys) .
         " 2>/dev/null | awk \"/inet /{print \\$2; exit}\""));
