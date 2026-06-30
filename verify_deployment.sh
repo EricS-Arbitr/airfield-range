@@ -240,6 +240,28 @@ for fs in bs-file01:vcab.lan fops-file01:flightops.lan; do
 done
 
 # =========================================================================
+# 5. SOC tier — syslog collector
+# =========================================================================
+section "5. SOC tier — syslog collector"
+
+# rsyslog collector listens on UDP+TCP 514 (per syslog_server role).
+check_pf_shell soc-syslog \
+  'ss -lnu | grep -qE ":514\\b" && ss -lnt | grep -qE ":514\\b" && echo LISTENERS_OK || echo LISTENERS_MISSING' \
+  'LISTENERS_OK' \
+  "soc-syslog listening on UDP+TCP 514"
+
+# Each pfSense firewall has a per-host log file under /var/log/remote/, and
+# that file was written to within the last 5 minutes. "Stale or missing"
+# would mean either rsyslog stopped routing pfSense messages correctly or
+# pfSense lost its remote-syslog config.
+for fw in bs-edge-fw bs-ops-fw; do
+  check_pf_shell soc-syslog \
+    "test -f /var/log/remote/$fw/syslog.log && age=\$((\$(date +%s) - \$(stat -c %Y /var/log/remote/$fw/syslog.log))) && [ \$age -lt 300 ] && echo OK_FRESH || echo STALE_OR_MISSING" \
+    'OK_FRESH' \
+    "soc-syslog receiving from $fw (log mtime <5min)"
+done
+
+# =========================================================================
 # Summary
 # =========================================================================
 section "Summary"
