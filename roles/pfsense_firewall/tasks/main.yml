@@ -424,6 +424,56 @@
   changed_when: "'POST-HANDLER FIXED' in pfsense_iface_postrestart.stdout"
   when: pfsense_interfaces is defined and (pfsense_interfaces | length) > 0
 
+# Remote syslog forwarding to the SOC collector. pfSense's config.xml uses
+# presence-as-enable semantics (an empty <enable/> tag means on, the tag
+# being absent means off), so we set the four fields together:
+#   enable      — turn on remote syslog
+#   remoteserver — collector IP (group_vars/all.yml: syslog_server_ip)
+#   logall      — forward everything (filter/firewall, system, DHCP, routing,
+#                 ntpd, resolver, captive portal, etc.). Lab posture.
+#   ipproto     — pin to ipv4; pfSense will otherwise try ipv6 first and the
+#                 box has IPv6 disabled (see below).
+# Then call system_syslogd_start() to re-launch syslogd with the new config.
+- name: Configure remote syslog forwarding
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/system.inc");
+            $target = getenv("PFS_SYSLOG_TARGET");
+            if (!$target) { echo "OK: no remote syslog target defined\n"; exit; }
+            $cur_target  = config_get_path("syslog/remoteserver", "");
+            $cur_enable  = config_get_path("syslog/enable", null);
+            $cur_logall  = config_get_path("syslog/logall", null);
+            $cur_ipproto = config_get_path("syslog/ipproto", "");
+            $changed = false;
+            if ($cur_target !== $target) {
+              config_set_path("syslog/remoteserver", $target);
+              $changed = true;
+            }
+            if ($cur_enable === null) {
+              config_set_path("syslog/enable", "");
+              $changed = true;
+            }
+            if ($cur_logall === null) {
+              config_set_path("syslog/logall", "");
+              $changed = true;
+            }
+            if ($cur_ipproto !== "ipv4") {
+              config_set_path("syslog/ipproto", "ipv4");
+              $changed = true;
+            }
+            if ($changed) {
+              write_config("Enable remote syslog forwarding to " . $target);
+              system_syslogd_start();
+              echo "CHANGED: remote syslog → " . $target . "\n";
+            } else {
+              echo "OK: remote syslog already → " . $target . "\n";
+            }'
+  environment:
+    PFS_SYSLOG_TARGET: "{{ syslog_server_ip | default('') }}"
+  register: pfsense_syslog_cfg
+  changed_when: "'CHANGED' in pfsense_syslog_cfg.stdout"
+  when: syslog_server_ip is defined
+
 # Start zebra and bgpd DIRECTLY rather than via `watchfrr` / `service frr`.
 # Confirmed on pfSense 2.8.1 (pkg pfSense-pkg-frr-2.0.2_6 / frr9-9.1.2_1):
 # both watchfrr and the rc.d/frr script claim "Starting watchfrr." and
