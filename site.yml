@@ -868,3 +868,27 @@
     - splunk
     - splunk_forwarder
     - splunk_forwarder_linux
+
+# Splunk universal forwarder rollout on every Windows host. Pulls the
+# 8.2.6 MSI from the customer nexus (version skew vs Linux's 9.4.1 deb is
+# inherited from PowerPlant; flagged in group_vars/windows.yml). Each host
+# reboots after MSI install -- with 48 Windows hosts this is the longest
+# play in the tier. The forwarder role's templates/inputs.conf.j2 ships:
+#   - Windows / System / Application / Firewall / PowerShell-Operational
+#     event logs → index=windows (sourcetype = XmlWinEventLog:*)
+#   - Microsoft-Windows-Sysmon/Operational                 → index=sysmon
+# Sysmon doesn't have to be installed yet -- the stanza is a no-op until
+# the Sysmon service exists on the host. Sysmon rollout is a future slice.
+#
+# Run scoped for a one-host pilot before the full sweep:
+#   --tags splunk_forwarder_windows --limit bs-hq01      # ~5 min, validates
+#   --tags splunk_forwarder_windows                       # full Windows fleet
+- name: Splunk universal forwarder — Windows
+  hosts: windows
+  gather_facts: true
+  roles:
+    - splunk-forwarder
+  tags:
+    - splunk
+    - splunk_forwarder
+    - splunk_forwarder_windows

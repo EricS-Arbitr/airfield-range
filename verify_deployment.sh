@@ -262,6 +262,39 @@ for fw in bs-edge-fw bs-ops-fw; do
 done
 
 # =========================================================================
+# 6. SOC tier — Splunk SIEM
+# =========================================================================
+section "6. SOC tier — Splunk SIEM"
+
+# Indexer service active and listening on receiver (9997) + web (8000) + REST (8089).
+check_pf_shell soc-elastic \
+  'systemctl is-active splunk' \
+  'active' \
+  "soc-elastic Splunk indexer service active"
+
+check_pf_shell soc-elastic \
+  'ss -lnt | awk "{print \$4}"' \
+  ':9997$|:9997[[:space:]]' \
+  "soc-elastic listening on :9997 (receiver — UF target)"
+
+check_pf_shell soc-elastic \
+  'ss -lnt | awk "{print \$4}"' \
+  ':8000$|:8000[[:space:]]' \
+  "soc-elastic listening on :8000 (Splunk Web)"
+
+# soc-syslog forwarder up + has an ESTABLISHED conn to the indexer on 9997.
+# Catches "service running but indexer unreachable" silently-broken state.
+check_pf_shell soc-syslog \
+  'systemctl is-active SplunkForwarder' \
+  'active' \
+  "soc-syslog SplunkForwarder service active"
+
+check_pf_shell soc-syslog \
+  'ss -ant | grep "172.31.7.15:9997" | grep -c ESTAB' \
+  '^[1-9]' \
+  "soc-syslog UF has ESTABLISHED connection to indexer :9997"
+
+# =========================================================================
 # Summary
 # =========================================================================
 section "Summary"
