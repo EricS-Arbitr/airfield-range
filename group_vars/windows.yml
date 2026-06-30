@@ -37,5 +37,12 @@ defender_windows_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw
 cs_windows_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Crowdstrike/WindowsSensor.exe"
 s1_windows_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/sentinelone/SentinelInstaller.exe"
 
-# --- Wazuh agent (Windows) -----------------------------------
+# --- Wazuh agent (Windows) -- DEFERRED, see project siem-choice memo
 wazuh_agent_installer_win: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/wazuh/wazuh-agent.msi"
+
+# --- Splunk universal forwarder (Windows) --------------------
+# Note: Windows installer is on 8.2.6 while Linux deb is on 9.4.1 — version
+# skew inherited from PowerPlant. Bump Windows to 9.x once a newer .msi is
+# staged on the customer Nexus.
+splunk_forwarder_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Splunk/Forwarder/8.2.6/splunkforwarder-8.2.6.msi"
+splunk_forwarder_win_dir: "C:\\Program Files\\SplunkUniversalForwarder"

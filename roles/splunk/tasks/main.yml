@@ -1,0 +1,120 @@
+---
+- name: Ensure Splunk Tmp Directory Exists
+  ansible.builtin.file:
+    path: "{{ staging_dir_linux }}/splunk"
+    state: directory
+    mode: '0755'
+  register: tmp_directory_check
+
+- name: Download splunk server installer
+  ansible.builtin.get_url:
+    url: "{{ splunk_server_installer }}"
+    dest: "{{ staging_dir_linux }}/splunk/splunk.deb"
+    use_proxy: yes
+    timeout: 300
+    validate_certs: no
+  environment:
+    http_proxy: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+    https_proxy: "https://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+
+- name: Copy Splunk Installer 
+  ansible.builtin.copy:
+    src: "{{ ansible_installers }}/splunk/splunk.deb"
+    dest: "{{ staging_dir_linux }}/splunk/splunk.deb"
+    mode: '0755'
+
+- name: Install Splunk
+  ansible.builtin.apt:
+    deb: "{{ staging_dir_linux }}/splunk/splunk.deb"
+    state: present
+  register: splunk_install
+  notify: Initialize Splunk
+
+- name: Write imits.conf Template
+  ansible.builtin.template:
+    src: limits.conf.j2
+    dest: /opt/splunk/etc/system/local/limits.conf
+    mode: '0644'
+
+- name: Write inputs.conf Template
+  ansible.builtin.template:
+    src: inputs.conf.j2
+    dest: /opt/splunk/etc/system/local/inputs.conf
+    mode: '0644'
+
+- name: Write server.conf Template
+  ansible.builtin.template:
+    src: server.conf.j2
+    dest: /opt/splunk/etc/system/local/server.conf
+    mode: '0644'
+
+- name: Write in web.conf Template
+  ansible.builtin.template:
+    src: web.conf.j2
+    dest: /opt/splunk/etc/system/local/web.conf
+    mode: '0644'
+
+# Flush handlers before setting license
+- name: Flush handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Create License Directory
+  ansible.builtin.file:
+    path: "/opt/splunk/etc/licenses"
+    state: directory
+    mode: '0755'
+
+- name: Download splunk license
+  ansible.builtin.get_url:
+    url: "{{ splunk_license }}"
+    dest: "/opt/splunk/etc/licenses/splunk.license"
+    use_proxy: yes
+    timeout: 300
+    validate_certs: no
+  environment:
+    http_proxy: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+    https_proxy: "https://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+
+- name: Check License Status
+  ansible.builtin.shell: |
+    /opt/splunk/bin/splunk list license -auth "{{ splunk_admin }}:{{ splunk_admin_password }}" 
+  register: license_check
+  changed_when: false
+  failed_when: false
+
+- name: Apply Splunk License
+  ansible.builtin.shell: >
+    /opt/splunk/bin/splunk add license /opt/splunk/etc/licenses/splunk.license
+    -auth "{{ splunk_admin }}:{{ splunk_admin_password }}"
+  when: "'stack_id:enterprise' not in license_check.stdout"
+  register: license_result
+  changed_when: "'already exists' not in license_result.stdout"
+  notify: Restart Splunk Service
+
+- name: Check Index Status
+  ansible.builtin.shell: |
+    /opt/splunk/bin/splunk list index -auth "{{ splunk_admin }}:{{ splunk_admin_password }}"| grep "^[a-zA-Z]" | cut -f1
+  register: existing_indices
+  changed_when: false
+
+- name: Create Indices
+  ansible.builtin.shell: >
+    /opt/splunk/bin/splunk add index "{{ item.name }}"
+    -auth "{{ splunk_admin }}:{{ splunk_admin_password }}"
+  loop: "{{ indices }}"
+  when: item.name not in existing_indices.stdout_lines
+  register: index_result
+  changed_when: "'already exists' not in index_result.stdout"
+
+- name: Disable syslog host extraction transforms
+  ansible.builtin.blockinfile:
+    path: /opt/splunk/etc/system/local/props.conf
+    block: |
+      [syslog]
+      TRANSFORMS-syslog-host =
+      TRANSFORMS-syslog-host-full =
+    marker: ""
+    owner: root
+    group: root
+    mode: '0644'
+    create: yes

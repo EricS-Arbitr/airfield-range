@@ -820,3 +820,30 @@
   tags:
     - syslog
     - syslog_client
+
+# Splunk indexer + search head on soc-elastic. Base `splunk` role from
+# PowerPlant/range-development-ansible/roles/splunk (copied per role-sourcing
+# policy; see project memory `siem-choice`). Downloads splunk.deb from the
+# customer nexus, applies the license, writes limits/inputs/server/web
+# configs, creates the indices declared in group_vars/all.yml (windows,
+# sysmon, linux, netfw, ot, wec), starts the splunkd service. Forwarders
+# in subsequent plays will point at `splunk_server_ip` (= siem_server_ip,
+# 172.31.7.15) on TCP 9997.
+#
+# Splunk Enterprise Security (premium SIEM saved searches/dashboards) is
+# DEFERRED to a later slice — the splunk-es role needs splunk-es.spl plus
+# six template files at /etc/ansible/templates/splunkapps/ that don't ship
+# in either PowerPlant repo. Splunk Core alone is plenty for indexer + UF
+# ingest + basic search.
+#
+# gather_facts: true because templates/limits.conf.j2 references
+# `ansible_processor_vcpus` to size httpServer.maxThreads.
+- name: Splunk indexer + search head — soc-elastic
+  hosts: splunk
+  gather_facts: true
+  become: true
+  roles:
+    - splunk
+  tags:
+    - splunk
+    - splunk_indexer

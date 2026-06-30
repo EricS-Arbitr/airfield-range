@@ -212,7 +212,7 @@ cloud-image default (`/etc/netplan/50-cloud-init.yaml`) so it doesn't override t
 | Historian | **InfluxDB 2.7** + Telegraf + Grafana | **in-enclave** (sim `/24`); pin `influxdb:2.7` (never `:latest` = v3 Core, ~72 h window); optional RO replica at Engineering `172.31.8.5` |
 | Audit DB | PostgreSQL 16 + TimescaleDB | in the OT sim `/24` segments |
 | PACS | Leosac | controller `.48`, door points, pin pads, mock door sim |
-| SOC / SIEM | SIEM (Security Onion-based; baseline `JDMSS SO`), syslog, OpenVAS | fed by WEC + sensors; Wazuh agents on hosts |
+| SOC / SIEM | **Splunk Enterprise** (`splunk` + `splunk-es` from PowerPlant), syslog, OpenVAS | Splunk universal forwarder on every Linux/Windows host; Elastic / Security Onion under evaluation as future add-on stacks |
 | Replay | Python harnesses | 48 h deterministic, loopable, seeded datasets |
 
 ---
@@ -237,7 +237,7 @@ airfield-range/
 │   ├── 10-foundation.yml         # NTP, both AD domains + trust, CA, DNS, DHCP
 │   ├── 20-enterprise.yml         # vcab: Services/HQ/IT/Supply, DMZ
 │   ├── 30-flightops.yml          # flightops: Services/FCC/Users (incl. ATC, weather)
-│   ├── 40-soc.yml                # SOC sensors, WEC subscriptions, Wazuh agents
+│   ├── 40-soc.yml                # SOC sensors, WEC subscriptions, Splunk indexer + UF rollout
 │   ├── 50-pacs.yml               # Leosac + door sims
 │   ├── 60-ot.yml                 # modbus-gw → MTU/HMI → PLCs → sims → in-enclave historians (fuel, power)
 │   └── 70-injection.yml          # replay harnesses (weather, ATC, fuel, power)

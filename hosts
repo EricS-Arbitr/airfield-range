@@ -200,6 +200,12 @@ soc-openvas
 soc-elastic
 soc-syslog
 
+# Splunk indexer + search head (base splunk role from PowerPlant).
+# Single-host group; co-located with the Ubuntu host that already runs the
+# rsyslog collector. See project memory `siem-choice`.
+[splunk]
+soc-elastic
+
 [soc:children]
 soc_analysts
 soc_servers

@@ -37,8 +37,35 @@ ntp_server_hostname: "bs-ntp.vcab.lan"
 # soc-syslog runs rsyslog (UDP+TCP 514) and forwards to the SIEM.
 syslog_server_ip: "172.31.7.13"    # soc-syslog (SOC /24)
 
-# --- SIEM (Elastic-based) ------------------------------------
-siem_server_ip: "172.31.7.15"      # soc-elastic (SOC /24)
+# --- SIEM stack (Splunk now; Elastic / Security Onion potentially later) ----
+# Indexer + search head + ES suite run on soc-elastic. Universal forwarders
+# on every Linux/Windows managed host point at this IP:port to ship events.
+# `soc-elastic` retains its name even though we're on Splunk — easier than
+# renaming the host across host_vars, blueprint, and SimSpace platform.
+siem_server_ip: "172.31.7.15"           # soc-elastic (SOC /24)
+splunk_server_ip: "{{ siem_server_ip }}"
+splunk_forwarder_port: "9997"
+
+# Splunk admin credentials. Matches PowerPlant convention (`simspace1`).
+# Used by base splunk role for initial admin seed + REST API auth, and by
+# splunk-forwarder for outputs.conf indexer auth. Rotate before any
+# real-adversary scenario.
+splunk_admin: "admin"
+splunk_admin_password: "simspace1"
+splunk_user: "{{ splunk_admin }}"        # forwarder reuses admin creds
+splunk_password: "{{ splunk_admin_password }}"
+
+# Splunk indices created by the base splunk role on soc-elastic. Grouped by
+# CIM data model / log volume. Forwarder templates route events into these.
+# Sysmon is split out from generic windows to ease volume-based retention
+# tuning later; netfw covers pfSense + VyOS syslog forwarded via soc-syslog.
+indices:
+  - name: "windows"     # AD events, security/system/application + Sysmon for now
+  - name: "sysmon"      # reserved for future Sysmon split
+  - name: "linux"       # Linux syslog (Ubuntu hosts)
+  - name: "netfw"       # pfSense + VyOS syslog (relayed by soc-syslog UF)
+  - name: "ot"          # OT historian + audit DB events (when fuel/power tiers land)
+  - name: "wec"         # Windows Event Collector subscriptions (vcab + flightops)
 
 # --- WEC collectors (Windows Event Collectors) ---------------
 # Two: one per domain. Domain members forward to their domain's WEC.
@@ -50,6 +77,9 @@ wec_flightops_ip: "172.31.3.20"    # fops-wec01 (Flight-Ops-Services)
 # Rotate before any deployment that simulates real adversary behavior.
 ad_trust_secret: "Airfield-Trust-2026!"
 
-# --- Wazuh manager (TBD where it lives) ----------------------
-# Likely co-located with the SIEM stack on soc-elastic.
+# --- Wazuh manager (DEFERRED — SIEM tier on Splunk for now) --
+# `wazuh_manager_ip` and the wazuh_agent_installer URLs in linux.yml /
+# windows.yml are dangling references from an earlier draft. Kept so vault
+# resolutions don't fail; safe to delete once a future cleanup confirms
+# nothing consumes them. See project memory `siem-choice`.
 wazuh_manager_ip: "{{ siem_server_ip }}"

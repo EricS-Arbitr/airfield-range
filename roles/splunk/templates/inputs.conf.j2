@@ -1,0 +1,12 @@
+[default]
+host = {{ inventory_hostname }}
+queueSize = 64MB
+
+[splunktcp://9997]
+persistentQueueSize = 128MB
+
+[tcp://:]
+persistentQueueSize = 128MB
+
+[udp://:]
+persistentQueueSize = 128MB

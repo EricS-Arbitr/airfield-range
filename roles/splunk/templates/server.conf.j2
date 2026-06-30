@@ -1,0 +1,15 @@
+[httpServer]
+maxThreads = {{ ansible_processor_vcpus * 2 }}
+
+[indexer]
+max_concurrent_optimizers = 4
+
+[indexer_tuning]
+max_sync_size = 2097152
+maxDataSize = 1000
+maxHotBuckets = 10
+
+[proxyConfig]
+http_proxy = {{ inet_proxy_addr }}:{{ inet_proxy_port }}
+https_proxy = {{ inet_proxy_addr }}:{{ inet_proxy_port }}
+no_proxy = localhost,127.0.0.1,site.lan
