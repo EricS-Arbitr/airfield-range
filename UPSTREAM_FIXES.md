@@ -371,4 +371,18 @@ Manual recovery if a deploy precedes the fix landing on the live firewall: `pkil
 
 ---
 
+## 2026-07-01 · bug · roles/pfsense_firewall/tasks/main.yml — dhclient-kill shell task rc=-15
+
+**Symptom.** After the fresh-range dhclient poisoning fix landed (2026-06-30 entry above), the first end-to-end deploy on the next range failed on the pfSense play with:
+```
+fatal: [bs-ops-fw]: FAILED! => {"cmd": "set +e\npkill -f 'dhclient.*vmx[1-9]'...", "rc": -15, "delta": "0:00:01.006324", "stdout": "", "stderr": ""}
+```
+`rc=-15` = SIGTERM to the Python subprocess wrapping the SSH command. Delta of exactly 1.006 seconds pins the kill to just after `sleep 1`, before the follow-up pgrep/echo could run. Empty stdout+stderr means the shell died mid-script.
+
+**Root cause (best understanding).** The original task was `ansible.builtin.shell` running a multi-line script (`set +e; pkill; sleep 1; pgrep; if...`). On pfSense 2.8.1 (FreeBSD 14 base), the pkill occasionally severs the running task's own SSH session lineage even though the `dhclient.*vmx[1-9]` regex doesn't match Ansible's connection process. Cause suspected: pfSense's `/usr/local/sbin/watchfrr` or `sysrc` respawn logic tracks process trees and can SIGTERM adjacent shell descendants when it kills+restarts dhclient. The 1-second sleep window is enough for that cascade to reach our task's shell.
+
+**Fix (overlay).** Switch from `shell: |` (multi-line script with sleep) to `command:` (single atomic pkill invocation). No sleep, no follow-up pgrep, no nested shell. `pkill -f 'dhclient.*vmx[1-9]'` returns 0 if it killed something, 1 if no matches, >1 on error. `failed_when: false` + `changed_when: rc == 0` absorbs both non-error rc values cleanly. The watchdog daemon (already running from the previous deploy) handles any respawn within 30s.
+
+---
+
 <!-- New entries go above this line, newest first. -->

@@ -659,12 +659,17 @@
     - disable_firewall
     - secpol
 
-# Hunt tier — forensic / analyst tooling on non-domain-joined workstations
-# (soc-flare = FLARE-VM, soc-sift = SIFT, soc-openvas). Just Chrome + auto
-# login so analysts can jump into a session. NOT in [linux]/[windows]
-# baseline groups because their specialized images ship pre-configured.
+# Hunt tier — forensic / analyst tooling on non-domain-joined workstations.
+# The [hunt] group is a mix of OSes (soc-flare = FLARE-VM/Windows, soc-sift
+# and soc-openvas = Ubuntu). The chrome + autologin roles are Windows-only,
+# so intersect with [windows] via `hunt:&windows` so Ansible skips the
+# Ubuntu hunt hosts cleanly. soc-flare has to be explicitly listed in the
+# [windows] group in `hosts` for it to be picked up here -- and FLARE-VM
+# has to have WinRM enabled inside the image itself before this play can
+# actually reach it (typically: `Enable-PSRemoting -Force` from a local
+# admin session on the FLARE-VM console the first time).
 - name: configure hunt
-  hosts: hunt
+  hosts: hunt:&windows
   gather_facts: false
   roles:
     - chrome

@@ -345,17 +345,18 @@
 # loop also does this on every 30s cycle so a respawn doesn't re-poison.
 # See airfield-range/UPSTREAM_FIXES.md 2026-06-30 entry.
 - name: Kill dhclient on data-plane interfaces (prevents zebra route-install poisoning)
-  ansible.builtin.shell: |
-    set +e
-    pkill -f "dhclient.*vmx[1-9]" 2>/dev/null
-    sleep 1
-    if pgrep -f "dhclient.*vmx[1-9]" >/dev/null 2>&1; then
-      echo "WARN: dhclient still running on a data-plane interface after pkill"
-      exit 0
-    fi
-    echo "CHANGED: dhclient cleared from vmx1+"
+  # Use `command` (not shell) to avoid nested-shell rc=-15 SIGTERM behavior
+  # observed on pfSense 2.8.1 when a script sleeps and then pgrep-loops --
+  # the pkill occasionally severs the running task's own SSH lineage even
+  # though the regex excludes vmx0. Straight pkill invocation is atomic
+  # and doesn't have the race.
+  # pkill returns 0 if it killed something, 1 if no matches (idempotent),
+  # >1 on error. failed_when:false absorbs both non-error outcomes.
+  ansible.builtin.command:
+    cmd: pkill -f 'dhclient.*vmx[1-9]'
   register: pfsense_dhclient_kill
-  changed_when: "'CHANGED' in pfsense_dhclient_kill.stdout"
+  failed_when: false
+  changed_when: pfsense_dhclient_kill.rc == 0
 
 # Force handler flush so FRR is up by the end of the play rather than
 # waiting until after every subsequent task. Some plays in the playbook
