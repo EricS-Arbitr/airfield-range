@@ -152,7 +152,7 @@ check_pf_shell bs-ops-fw \
 # (the vcab-DC-reachability route from behind bs-ops-fw). Divergence here
 # would break Eng + SOC domain joins.
 check_pf_shell bs-ops-fw \
-  'frr_installed=$(vtysh -c "show ip route 172.31.2.0/24" 2>/dev/null | grep -c ">\\*"); kernel_has=$(netstat -rn -f inet 2>/dev/null | grep -c "^172.31.2.0"); if [ "$frr_installed" -ge 1 ] && [ "$kernel_has" -ge 1 ]; then echo "OK_MATCH frr=$frr_installed kernel=$kernel_has"; elif [ "$frr_installed" -ge 1 ] && [ "$kernel_has" -eq 0 ]; then echo "DIVERGENCE frr=$frr_installed kernel=0 (dhclient poisoning? see UPSTREAM_FIXES.md 2026-06-30)"; else echo "NO_ROUTE frr=$frr_installed kernel=$kernel_has"; fi' \
+  'frr_installed=$(vtysh -c "show ip route" 2>/dev/null | grep "172.31.2.0/24" | grep -c ">"); kernel_has=$(netstat -rn -f inet 2>/dev/null | grep -c "^172.31.2.0"); if [ "$frr_installed" -ge 1 ] && [ "$kernel_has" -ge 1 ]; then echo "OK_MATCH frr=$frr_installed kernel=$kernel_has"; elif [ "$frr_installed" -ge 1 ] && [ "$kernel_has" -eq 0 ]; then echo "DIVERGENCE frr=$frr_installed kernel=0 (dhclient poisoning? see UPSTREAM_FIXES.md 2026-06-30)"; else echo "NO_ROUTE frr=$frr_installed kernel=$kernel_has"; fi' \
   'OK_MATCH' \
   "bs-ops-fw FRR-RIB and kernel-FIB agree on 172.31.2.0/24 (no zebra poisoning)"
 
