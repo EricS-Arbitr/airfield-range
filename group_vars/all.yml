@@ -11,6 +11,21 @@
 domain_admin: "simspace"
 domain_admin_password: "Simspace1!Simspace1!"
 
+# --- Auto-login (shared password across every workstation) ---
+# Per-host `logon_user` in host_vars maps each workstation to its notional
+# occupant from DomainUsers (see group_vars/{vcab,flightops}.yml). The
+# `autologin` role uses these to seed HKLM\...\Winlogon Default* keys so
+# analysts opening an RDP session don't get a login prompt.
+logon_user_password: "{{ domain_admin_password }}"
+
+# --- Enterprise squid proxy ----------------------------------
+# bs-proxy runs squid on 172.31.2.15:3128 (Services subnet, vcab.lan).
+# Referenced by the customer `squid` role's proxy.conf.j2 for downstream
+# hosts that want an in-scenario HTTP/HTTPS proxy. Distinct from
+# inet_proxy_addr (10.255.240.1:3128 -- SimSpace mgmt-plane egress used
+# only by Ansible/apt for nexus fetches, per CLAUDE.md §8).
+proxy_server: "172.31.2.15"
+
 # --- Certs (customer Nexus) ----------------------------------
 cs_certs:
   - "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/DigiCertHighAssuranceEVRootCA.crt"
@@ -24,7 +39,25 @@ inet_proxy_addr: "10.255.240.1"
 inet_proxy_port: "3128"
 
 # --- Global DNS simulator ------------------------------------
+# is-inet runs an unbound container that resolves any name in this list
+# to a lab-simulated public IP. Extend as scenarios need new public-facing
+# names (military domains, weather services, adversary infrastructure).
+# Consumed by the `global_dns` role's simspace_includes.conf.j2 template.
 global_dns_container_name: "is-inet"
+global_dns_records:
+  # Aviation / DoD scenario domains (subset — expand as exercises call for)
+  - { name: "www",       type: "A", value: "70.39.65.10",  zone: "faa.gov" }
+  - { name: "www",       type: "A", value: "70.39.65.11",  zone: "weather.gov" }
+  - { name: "www",       type: "A", value: "70.39.65.12",  zone: "aviationweather.gov" }
+  - { name: "www",       type: "A", value: "70.39.65.13",  zone: "airnav.com" }
+  - { name: "www",       type: "A", value: "70.39.65.14",  zone: "arbitrsecurity.com" }
+  # Commodity internet (browser default homepages, package repos)
+  - { name: "www",       type: "A", value: "70.39.65.194", zone: "google.com" }
+  - { name: "www",       type: "A", value: "70.39.65.195", zone: "microsoft.com" }
+  - { name: "www",       type: "A", value: "70.39.65.196", zone: "github.com" }
+  # Mail domains (Exchange/Outlook simulation)
+  - { name: "mail",      type: "A", value: "52.96.223.2",  zone: "outlook.com" }
+  - { type: "MX", priority: 10, value: "mail.outlook.com", zone: "outlook.com" }
 
 # --- Time discipline (CLAUDE.md §3 — NTP server in-range) ----
 # bs-ntp is not yet in the blueprint; once added, every host's

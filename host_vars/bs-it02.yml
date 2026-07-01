@@ -18,3 +18,8 @@ network_interfaces:
     dns:
       - "172.31.2.7"
       - "172.31.2.8"
+
+# --- Auto-login (autologin role, aue play) ------------------
+# Per-host notional occupant, drawn from group_vars/*.yml DomainUsers.
+# Password comes from logon_user_password in group_vars/all.yml.
+logon_user: "dale.hays"

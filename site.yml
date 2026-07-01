@@ -599,6 +599,82 @@
     - network_discovery
 
 # =============================================================================
+# Enterprise services — root cert trust, AUE/AE workstation posture, hunt tools
+# =============================================================================
+# The `root_certs` role installs the SimSpace lab-CA + scenario TLS certs
+# into every Windows host's Trusted Root store so browsers don't error when
+# hitting is-inet-simulated HTTPS sites (outlook.com, faa.gov, etc.). Runs
+# BEFORE the AUE/AE plays because Chrome + browsing simulation depend on it.
+- name: Install root certs — Windows Trusted Root store
+  hosts: windows
+  gather_facts: false
+  roles:
+    - root_certs
+  tags:
+    - root_certs
+
+# AUE (Attack User Experience) — locks down Windows workstations for user
+# simulation. `[aue]` group is the RDP-facing workstations (bs-hq*, bs-it*,
+# bs-supply*, bs-eng*, soc-analyst*, fops-flight*, fops-ops*). Roles:
+#   disable_uac / disable_firewall  — remove interactive prompts blocking sim
+#   autologin                       — HKLM\Winlogon\Default* per host_vars
+#   ue                              — user-experience baseline (start menu, etc.)
+#   chrome                          — browser install + defaults
+#   sysmon (already applied earlier via its own play — no-op idempotent)
+#   aue_agent                       — Attack User Experience agent + drainhole
+#   secpol                          — local security policy tweaks
+#   drainhole                       — traffic shaping harness
+- name: apply AUE settings
+  hosts: aue
+  gather_facts: false
+  roles:
+    - disable_uac
+    - disable_firewall
+    - autologin
+    - ue
+    - chrome
+    - aue_agent
+    - secpol
+    - drainhole
+  tags:
+    - aue
+    - disable_uac
+    - disable_firewall
+
+# AE (Attack Emulation) — high-value AD targets (DCs, file servers, WEC).
+# Subset of AUE: no autologin/ue/chrome (these are servers, not workstation
+# sim targets), but same tooling agents so red-team scenarios can pivot.
+- name: apply AE settings
+  hosts: ae
+  gather_facts: false
+  roles:
+    - disable_uac
+    - disable_firewall
+    - secpol
+    - aue_agent
+    - drainhole
+  tags:
+    - ae
+    - disable_uac
+    - disable_firewall
+    - secpol
+
+# Hunt tier — forensic / analyst tooling on non-domain-joined workstations
+# (soc-flare = FLARE-VM, soc-sift = SIFT, soc-openvas). Just Chrome + auto
+# login so analysts can jump into a session. NOT in [linux]/[windows]
+# baseline groups because their specialized images ship pre-configured.
+- name: configure hunt
+  hosts: hunt
+  gather_facts: false
+  roles:
+    - chrome
+    - autologin
+  tags:
+    - hunt
+    - chrome
+    - autologin
+
+# =============================================================================
 # Cross-forest trust — vcab.lan TRUSTS flightops.lan (one-way external)
 # =============================================================================
 # Asymmetric access pattern from CLAUDE.md §4:
@@ -757,6 +833,40 @@
   tags:
     - cross_forest_trust
     - trust_verify
+
+# =============================================================================
+# =============================================================================
+# Infrastructure services — internet-simulator DNS + enterprise squid proxy
+# =============================================================================
+# global_dns writes /opt/simspace_includes/simspace_includes.conf inside
+# is-inet's unbound container from `global_dns_records` (group_vars/all.yml)
+# so scenario names (faa.gov, weather.gov, arbitrsecurity.com, etc.) resolve
+# to lab-simulated public IPs. Reload triggered via the `reload unbound`
+# handler (roles/handlers/handlers/main.yml).
+- name: global_dns — populate is-inet's unbound zone
+  hosts: global_dns
+  gather_facts: true
+  become: true
+  roles:
+    - global_dns
+  tags:
+    - global_dns
+    - dns
+
+# Enterprise-internal HTTP/HTTPS proxy. bs-proxy runs the customer `squid`
+# role (Ubuntu Desktop 22.04, 172.31.2.15:3128, Services subnet). Downstream
+# hosts that want an in-scenario proxy point at proxy.vcab.lan:3128. Not
+# used for Ansible/apt egress -- that stays on the mgmt-plane
+# inet_proxy_addr (10.255.240.1:3128) per CLAUDE.md §8.
+- name: squid — enterprise HTTP/HTTPS proxy on bs-proxy
+  hosts: proxy
+  gather_facts: true
+  become: true
+  roles:
+    - squid
+  tags:
+    - squid
+    - proxy
 
 # =============================================================================
 # SOC tier — syslog backbone

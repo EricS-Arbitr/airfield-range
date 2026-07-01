@@ -1,0 +1,13 @@
+- name: Set secpol
+  ansible.windows.win_user_right:
+    name: SeSecurityPrivilege
+    users:
+      - "{{ domain_name }}\\Domain Admins"
+    action: add
+  register: secpol
+  
+- name: Gpupdate
+  ansible.windows.win_command: gpupdate /force
+  when: secpol.changed
+  notify: Reboot Windows
+

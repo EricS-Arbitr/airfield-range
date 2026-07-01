@@ -1,0 +1,30 @@
+- name: Set auto login reg keys
+  ansible.windows.win_regedit:
+    path: 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    name: "{{ item.name }}"
+    data: "{{ item.value }}"
+    type: string
+  with_items:
+    - { name: "AutoAdminLogon", value: "1" }
+    - { name: "DefaultUserName", value: "{{ logon_user }}" }
+    - { name: "DefaultPassword", value: "{{ logon_user_password }}" }
+    - { name: 'DefaultDomainName', value: "{{ domain_name | default(inventory_hostname) }}" }
+  when: logon_user is defined
+  notify: Reboot Windows
+
+- name: Flush handlers
+  meta: flush_handlers
+
+- name: Re-apply auto login reg keys post-reboot - win enterprise fix
+  ansible.windows.win_regedit:
+    path: 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    name: "{{ item.name }}"
+    data: "{{ item.value }}"
+    type: string
+  with_items:
+    - { name: "AutoAdminLogon", value: "1" }
+    - { name: "DefaultUserName", value: "{{ logon_user }}" }
+    - { name: "DefaultPassword", value: "{{ logon_user_password }}" }
+    - { name: 'DefaultDomainName', value: "{{ domain_name | default(inventory_hostname) }}" }
+  when: logon_user is defined
+  notify: Reboot Windows

@@ -1,0 +1,18 @@
+function FindProxyForURL(url, host)
+{
+	if (
+		isPlainHostName(host) ||
+		shExpMatch(host, "10.10.*") ||
+		    		shExpMatch(host, "172.16.*") ||
+		    		dnsDomainIs(host, ".{{ domain_name }}")
+	){
+		return "DIRECT";
+	} else {
+		if (dnsDomainIs(host, ".crowdstrike.com")) return "PROXY 10.10.0.50:8080";
+		if (dnsDomainIs(host, ".cloudsink.net")) return "PROXY 10.10.0.50:8080";
+		if (dnsDomainIs(host, ".paloaltonetworks.com")) return "PROXY 10.10.0.50:8080";
+	
+        return "PROXY {{ proxy_server }}:8080";
+	}
+}
+

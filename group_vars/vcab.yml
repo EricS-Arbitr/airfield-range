@@ -29,6 +29,7 @@ internal_dns_records:
   - { name: "file02",   type: "A", value: "172.31.2.11", zone: "{{ domain_name }}" }
   - { name: "wec",      type: "A", value: "172.31.2.17", zone: "{{ domain_name }}" }
   - { name: "ntp",      type: "A", value: "172.31.2.6",  zone: "{{ domain_name }}" }  # bs-ntp (pending)
+  - { name: "proxy",    type: "A", value: "172.31.2.15", zone: "{{ domain_name }}" }  # bs-proxy (squid)
   # DMZ services advertised inward via internal DNS:
   - { name: "www",      type: "A", value: "172.31.12.3", zone: "{{ domain_name }}" }
   - { name: "ftp",      type: "A", value: "172.31.12.2", zone: "{{ domain_name }}" }

@@ -62,6 +62,7 @@ bs-dc02
 bs-file01
 bs-file02
 bs-wec
+bs-proxy
 
 # Windows Engineering + SOC workstations joining vcab.lan (per CLAUDE.md §4
 # best-judgment, confirmed 2026-06-25). Linux engineering (bs-eng05/06) +
@@ -288,6 +289,17 @@ is-inet
 elgg
 ansible
 
+# Internet simulator's unbound DNS resolver -- target for the global_dns
+# role (drops /opt/simspace_includes/simspace_includes.conf with the
+# range's internal A/AAAA/CNAME/PTR/SRV records).
+[global_dns]
+is-inet
+
+# Enterprise-internal HTTP/HTTPS proxy (squid on Ubuntu Desktop 22.04).
+# Distinct from the SimSpace mgmt-plane egress at 10.255.240.1:3128.
+[proxy]
+bs-proxy
+
 # ============================================================
 # Cross-cutting groups
 # ============================================================
@@ -435,6 +447,7 @@ fops-app01
 fops-app02
 fops-app03
 soc-splunk
+bs-proxy
 
 [ubuntu24]
 bs-ftp
@@ -464,6 +477,7 @@ atc-station
 bs-ro-hist
 soc-openvas
 soc-splunk
+bs-proxy
 bs-eng05
 bs-eng06
 

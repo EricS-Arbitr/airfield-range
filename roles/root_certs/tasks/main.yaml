@@ -1,0 +1,20 @@
+---
+- name: Copy certificates to Windows
+  ansible.windows.win_copy:
+    src: "{{ item }}"
+    dest: "C:\\temp\\"
+  with_fileglob:
+    - "files/*.crt"
+    - "files/*.cer"
+    - "files/*.pem"
+
+- name: Install certificates to Trusted Root store
+  ansible.windows.win_certificate_store:
+    path: "C:\\temp\\{{ item | basename }}"
+    store_name: Root
+    store_location: LocalMachine
+    state: present
+  with_fileglob:
+    - "files/*.crt"
+    - "files/*.cer"
+    - "files/*.pem"

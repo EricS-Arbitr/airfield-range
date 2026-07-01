@@ -1,0 +1,180 @@
+---
+- name: Disable Windows Screen Lock, Auto Lock, and Console Lock
+  hosts: win10,win11
+  gather_facts: true
+  tasks:
+
+    - name: Get Windows version
+      win_shell: (Get-CimInstance -ClassName Win32_OperatingSystem).Version
+      register: windows_version
+      changed_when: false
+
+    - name: Set Windows version facts
+      set_fact:
+        is_windows_11: "{{ windows_version.stdout_lines[0].startswith('10.0.2') }}"
+        is_windows_10: "{{ windows_version.stdout_lines[0].startswith('10.0.1') }}"
+
+    - name: Ensure Personalization registry key exists
+      win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization
+        state: present
+
+    - name: Disable lock screen
+      win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization
+        name: NoLockScreen
+        data: 1
+        type: dword
+        state: present
+
+    - name: Prevent disconnected sessions from locking
+      win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon
+        name: ForceUnlockLogon
+        data: 1
+        type: dword
+        state: present
+
+    - name: Prevent Screen / Session Locking on disconnected
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon
+        name: DisableLockWorkstation
+        data: 1
+        type: dword
+        state: present
+  
+    - name: Disable screen saver
+      win_regedit:
+        path: HKCU:\Control Panel\Desktop
+        name: ScreenSaveActive
+        data: "0"
+        type: string
+        state: present
+
+    - name: Set screen saver timeout to zero
+      win_regedit:
+        path: HKCU:\Control Panel\Desktop
+        name: ScreenSaveTimeOut
+        data: "0"
+        type: string
+        state: present
+
+    - name: Ensure System Policies registry key exists
+      win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+        state: present
+
+    - name: Disable automatic locking when idle
+      win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+        name: InactivityTimeoutSecs
+        data: 0
+        type: dword
+        state: present 
+
+    - name: Ensure user System Policies registry key exists
+      win_regedit:
+        path: HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\System
+        state: present
+
+    - name: Set power scheme to High Performance
+      win_shell: powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+      changed_when: true
+
+    - name: Disable display timeout (AC power)
+      win_shell: powercfg /change monitor-timeout-ac 0
+      changed_when: true
+
+    - name: Disable display timeout (battery)
+      win_shell: powercfg /change monitor-timeout-dc 0
+      changed_when: true
+
+    - name: Disable sleep timeout (AC power)
+      win_shell: powercfg /change standby-timeout-ac 0
+      changed_when: true
+
+    - name: Disable sleep timeout (battery)
+      win_shell: powercfg /change standby-timeout-dc 0
+      changed_when: true
+
+    - name: Disable console lock display off timeout (AC power)
+      win_shell: powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_NONE CONSOLELOCK 0
+      changed_when: true
+
+    - name: Disable console lock display off timeout (battery)
+      win_shell: powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_NONE CONSOLELOCK 0
+      changed_when: true
+
+    - name: Apply the power settings changes
+      win_shell: powercfg /S SCHEME_CURRENT
+      changed_when: true
+
+    - name: Disable Windows 10 power settings
+      win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\7516b95f-f776-4464-8c53-06167f40cc99\8EC4B3A5-6868-48c2-BE75-4F3044BE88A7
+        name: ACSettingIndex
+        data: 0
+        type: dword
+        state: present
+      when: is_windows_10
+
+    - name: Disable Windows 11 modern standby
+      win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\238C9FA8-0AAD-41ED-83F4-97BE242C8F20\7bc4a2f9-d8fc-4469-b07b-33eb785aaca0
+        name: Attributes
+        data: 2
+        type: dword
+        state: present
+      when: is_windows_11
+
+    - name: Ensure Windows 11 SessionInfo registry key exists
+      win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SessionInfo\1
+        state: present
+      ignore_errors: true
+      when: is_windows_11
+
+    - name: Disable Windows 11 lock screen timeout
+      win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SessionInfo\1
+        name: LockScreenDisplayTimeoutOverrideActive
+        data: 1
+        type: dword
+        state: present
+      ignore_errors: true
+      when: is_windows_11
+
+    - name: Load default user registry hive
+      win_shell: reg load HKU\DefaultProfile C:\Users\Default\NTUSER.DAT
+      changed_when: true
+
+    - name: Disable screen saver for default user profile
+      win_regedit:
+        path: HKU:\DefaultProfile\Control Panel\Desktop
+        name: ScreenSaveActive
+        data: "0"
+        type: string
+        state: present
+
+    - name: Set screen saver timeout to zero for default user profile
+      win_regedit:
+        path: HKU:\DefaultProfile\Control Panel\Desktop
+        name: ScreenSaveTimeOut
+        data: "0"
+        type: string
+        state: present
+
+    - name: Ensure System Policies key exists for default profile
+      win_regedit:
+        path: HKU:\DefaultProfile\Software\Microsoft\Windows\CurrentVersion\Policies\System
+        state: present
+
+    - name: Unload default user registry hive
+      win_shell: reg unload HKU\DefaultProfile
+      changed_when: true
+
+#    - name: Reboot to take affect
+#      win_reboot:
+#        msg: "Rebooting after Power/Registry Changes"
+#        pre_reboot_delay: 15
+#        post_reboot_delay: 60

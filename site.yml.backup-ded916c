@@ -1,0 +1,926 @@
+---
+# airfield-range site.yml
+#
+# Play order is deliberate: management-plane plays (Init, adapter/NM
+# pre-config, common baseline, GNOME suppression) run FIRST while the data
+# plane is still un-routed. Ansible reaches every host on the mgmt subnet
+# (10.255.240.0/20), which is L2-flat and does not depend on VyOS/pfSense
+# state, so these plays succeed even before the network play runs.
+#
+# Network plays (VyOS, pfSense) then bring the data plane up so the
+# foundation tier (NTP, AD, DNS, DHCP) and everything downstream can land.
+#
+# Deviates from CLAUDE.md §10's documented network-first order by design.
+
+- name: Init
+  hosts: windows
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - init
+  tags:
+    - init
+
+- name: Windows adapter rename pre-config
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: Rename Windows adapters to canonical Ethernet0/EthernetN by ifIndex order
+      ansible.windows.win_powershell:
+        script: |
+          $adapters = @(Get-NetAdapter | Sort-Object ifIndex)
+          $names = @($adapters | ForEach-Object { $_.Name })
+          $count = $adapters.Count
+
+          # If all expected canonical names already exist among the adapters,
+          # the image's naming is correct — leave it alone. Doing otherwise
+          # risks swapping the mgmt/data-plane mapping when ifIndex ordering
+          # doesn't match the image's existing Name ordering (which it often
+          # doesn't on SimSpace Windows 10/11 images).
+          $allCanonical = $true
+          for ($i = 0; $i -lt $count; $i++) {
+            if ($names -notcontains "Ethernet$i") { $allCanonical = $false; break }
+          }
+          if ($allCanonical) {
+            $Ansible.Changed = $false
+            Write-Output "All adapter names already canonical; no rename."
+            return
+          }
+
+          # Non-canonical naming (e.g. Server 2019 image ships with
+          # "Ethernet"/"Ethernet 2"). Rename via a temp-name pass first so
+          # the final names can't collide with existing names mid-loop.
+          $tempPrefix = "_ppRename_"
+          $tempIdx = 0
+          foreach ($a in $adapters) {
+            Rename-NetAdapter -Name $a.Name -NewName "$tempPrefix$tempIdx" -ErrorAction Stop
+            $tempIdx++
+          }
+          $renamed = @()
+          $idx = 0
+          foreach ($a in $adapters) {
+            $target = "Ethernet$idx"
+            Rename-NetAdapter -Name "$tempPrefix$idx" -NewName $target -ErrorAction Stop
+            $renamed += "$($a.Name) -> $target"
+            $idx++
+          }
+          $Ansible.Changed = $true
+          Write-Output ($renamed -join '; ')
+  tags:
+    - common
+    - win_adapter_rename
+
+- name: Linux NM managed-devices pre-config
+  hosts: linux
+  gather_facts: false
+  become: true
+  tasks:
+    # apt needs the corp proxy reachable before any Ubuntu archive call.
+    # `common` drops this same file later but runs in a later play; do it
+    # here too so this play's `apt install network-manager` can reach Nexus.
+    - name: Set apt proxy from group_vars/all.yml
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/95-airfield-proxy
+        content: |
+          Acquire::http::Proxy "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}";
+          Acquire::https::Proxy "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}";
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Ensure NetworkManager is installed
+      ansible.builtin.apt:
+        name: network-manager
+        state: present
+
+    - name: Opt eth* devices into NetworkManager management
+      ansible.builtin.copy:
+        dest: /etc/NetworkManager/conf.d/99-airfield-eth-managed.conf
+        content: |
+          [keyfile]
+          unmanaged-devices=
+
+          [device-eth-managed]
+          match-device=interface-name:eth*
+          managed=true
+        owner: root
+        group: root
+        mode: '0644'
+      register: nm_managed_conf
+
+    - name: Restart NetworkManager if config changed
+      ansible.builtin.systemd:
+        name: NetworkManager
+        state: restarted
+        enabled: true
+      when: nm_managed_conf.changed
+
+    - name: Wait for NetworkManager to settle after restart
+      ansible.builtin.pause:
+        seconds: 3
+      when: nm_managed_conf.changed
+
+    # Drive the loop from facts so multi-NIC OT bridges (e.g. control-room-hmi
+    # with eth0/eth1/eth2) get every eth managed, not just eth0/eth1.
+    - name: Gather network facts for eth* enumeration
+      ansible.builtin.setup:
+        gather_subset: network
+
+    - name: Force every eth device into managed state at runtime
+      ansible.builtin.shell: |
+        nmcli device set "{{ item }}" managed yes
+      loop: "{{ ansible_interfaces | select('match', '^eth[0-9]+$') | list }}"
+      register: nmcli_set_managed
+      changed_when: "'successfully' in (nmcli_set_managed.stdout | default(''))"
+      failed_when: false
+  tags:
+    - common
+    - nm_managed_eth
+
+- name: Common Role
+  hosts: windows,linux
+  gather_facts: true
+  roles:
+    - common
+  tags:
+    - common
+
+# The Ubuntu Desktop images ship with gnome-initial-setup enabled, which
+# pops the "Connect Your Online Accounts" / Welcome wizard the first time
+# anyone logs into the GUI. Drop the documented "wizard already seen" flag
+# file under each existing user's ~/.config and in /etc/skel so future
+# users inherit it. gnome-initial-setup checks for this file and exits
+# silently when it contains "yes".
+- name: Suppress GNOME initial-setup wizard on Linux desktops
+  hosts: linux
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Find user home directories under /home
+      ansible.builtin.find:
+        paths: /home
+        file_type: directory
+        depth: 1
+      register: gnome_user_homes
+
+    - name: Ensure ~/.config exists for each user
+      ansible.builtin.file:
+        path: "{{ item.path }}/.config"
+        state: directory
+        owner: "{{ item.pw_name }}"
+        group: "{{ item.gr_name }}"
+        mode: '0755'
+      loop: "{{ gnome_user_homes.files }}"
+
+    - name: Mark GNOME initial-setup done for each existing user
+      ansible.builtin.copy:
+        dest: "{{ item.path }}/.config/gnome-initial-setup-done"
+        content: "yes\n"
+        owner: "{{ item.pw_name }}"
+        group: "{{ item.gr_name }}"
+        mode: '0644'
+      loop: "{{ gnome_user_homes.files }}"
+
+    - name: Ensure /etc/skel/.config exists for future users
+      ansible.builtin.file:
+        path: /etc/skel/.config
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Mark GNOME initial-setup done in /etc/skel
+      ansible.builtin.copy:
+        dest: /etc/skel/.config/gnome-initial-setup-done
+        content: "yes\n"
+        owner: root
+        group: root
+        mode: '0644'
+  tags:
+    - common
+    - gnome_initial_setup
+
+- name: Vyos Role
+  hosts: vyos
+  gather_facts: false
+  roles:
+    - vyos
+  tags:
+    - vyos
+
+# The customer's vyos role's `static_route` field is a single dict, not a
+# list. Hosts that need more than one static (e.g. an OT umbrella back-stop
+# alongside the default) declare them in host_vars as
+# `extra_static_routes: [{network, next_hop, descr}]`. This play pushes them
+# via vyos_config; the role's auto `redistribute static` picks them up.
+- name: Additional VyOS static routes
+  hosts: vyos
+  gather_facts: false
+  tasks:
+    - name: Push extra static routes via vyos_config
+      vyos.vyos.vyos_config:
+        match: line
+        lines:
+          - "set protocols static route {{ item.network }} next-hop {{ item.next_hop }}"
+        save: true
+      loop: "{{ extra_static_routes | default([]) }}"
+      when: extra_static_routes is defined and (extra_static_routes | length) > 0
+  tags:
+    - vyos
+    - extra_static_routes
+
+# The SimSpace VyOS image bakes a stale `0.0.0.0/0 next-hop <X>` entry
+# for every /24 "departmental" interface IP on the box. On routers with
+# multiple such interfaces (bs-core-rtr, bs-ops-rtr, bs-sec-rtr, etc.) this
+# creates competing equal-cost defaults whose next-hops resolve to the
+# router's OWN connected IPs. FRR refuses to install a default whose
+# next-hop is a local interface and ECMPs the whole route out of the FIB —
+# leaving the router with no default at all. Symptom: `show ip route` has
+# no `S>* 0.0.0.0/0` line; downstream subnets see "destination unreachable".
+#
+# Each affected host declares `extra_static_routes_remove: [{network,
+# next_hop}]` in host_vars. This play issues the matching `delete` so the
+# only default left is the one the customer `vyos` role just set from
+# `static_route`. Log all new self-loop discoveries in UPSTREAM_FIXES.md.
+- name: Remove stale VyOS static routes (image-baked self-loop defaults)
+  hosts: vyos
+  gather_facts: false
+  tasks:
+    - name: Delete stale static routes via vyos_config
+      vyos.vyos.vyos_config:
+        match: line
+        lines:
+          - "delete protocols static route {{ item.network }} next-hop {{ item.next_hop }}"
+        save: true
+      loop: "{{ extra_static_routes_remove | default([]) }}"
+      when: extra_static_routes_remove is defined and (extra_static_routes_remove | length) > 0
+  tags:
+    - vyos
+    - extra_static_routes_remove
+
+# Architectural shift (CLAUDE.md §3 row 8): corp IGP is OSPF area 0 + eBGP
+# at the WAN edge only — no internal iBGP mesh. Setting `bgp: []` in
+# host_vars stops new pushes but doesn't remove BGP a prior run may have
+# left in the running config. This play deletes the entire `protocols bgp`
+# subtree on hosts that opt in via `remove_vyos_bgp: true`. bs-edge-rtr
+# (eBGP AS 65002 to bs-edge-fw) intentionally keeps its `bgp:` block.
+- name: Remove stale VyOS iBGP (architectural shift to OSPF-IGP)
+  hosts: vyos
+  gather_facts: false
+  tasks:
+    - name: Delete protocols bgp via vyos_config
+      vyos.vyos.vyos_config:
+        lines:
+          - "delete protocols bgp"
+        save: true
+      when: remove_vyos_bgp | default(false)
+  tags:
+    - vyos
+    - remove_vyos_bgp
+
+- name: pfSense firewalls
+  hosts: pfsense
+  gather_facts: false
+  roles:
+    - pfsense_firewall
+  tags:
+    - pfsense
+
+# Belt-and-suspenders rebind that fires BETWEEN the pfSense play and the AD
+# plays. The pfsense_firewall role's own post-flight + post-handler tasks
+# only catch drift that happens DURING the play; pfSense's write_config()
+# can trigger a background interface refresh that drops a data-plane vmx
+# IP seconds-to-minutes AFTER the play ends. We've hit this 3+ times on
+# vmx1 (SWITCH_3) on bs-ops-fw, and each time Eng/SOC hosts then fail to
+# join vcab.lan with "domain not contacted" because the OSPF-learned route
+# can't install through an interface with no kernel IP.
+#
+# This play: brief settle pause + same rebind PHP, scheduled right before
+# anything that needs routing-through-pfSense.
+- name: pfSense — pre-AD interface re-verify (catches delayed vmx drop)
+  hosts: pfsense
+  gather_facts: false
+  tasks:
+    - name: Settle pause for any delayed pfSense reconfig
+      ansible.builtin.pause:
+        seconds: 20
+      run_once: true
+
+    - name: Re-bind any data-plane interface whose kernel IP has drifted
+      ansible.builtin.shell: |
+        php -r 'require_once("/etc/inc/config.inc");
+                require_once("/etc/inc/interfaces.inc");
+                $want_descrs = json_decode(getenv("PFS_DESCRS"), true);
+                $ifs = config_get_path("interfaces", []);
+                $fixed = [];
+                foreach ($ifs as $key => $cfg) {
+                  if ($key === "lan") continue;
+                  $descr = $cfg["descr"] ?? "";
+                  $want_ip = $cfg["ipaddr"] ?? "";
+                  $phys = $cfg["if"] ?? "";
+                  $subnet = $cfg["subnet"] ?? "";
+                  if (!in_array($descr, $want_descrs, true)) continue;
+                  if (!$want_ip || $want_ip === "dhcp" || !$phys || !$subnet) continue;
+                  $cur = trim(shell_exec("ifconfig " . escapeshellarg($phys) .
+                    " 2>/dev/null | awk \"/inet /{print \\$2; exit}\""));
+                  if ($cur !== $want_ip) {
+                    shell_exec("pkill -f \"dhclient.*" . escapeshellarg($phys) . "\" 2>/dev/null");
+                    interface_configure($key);
+                    shell_exec("ifconfig " . escapeshellarg($phys) . " inet " .
+                      escapeshellarg($want_ip) . "/" . intval($subnet) . " up 2>&1");
+                    $fixed[] = $key . "(" . $descr . ":" . $phys . ":" . $cur . "->" . $want_ip . ")";
+                  }
+                }
+                if (count($fixed) > 0) {
+                  echo "PRE-AD FIXED: " . implode(",", $fixed) . "\n";
+                } else {
+                  echo "PRE-AD OK: all data-plane interfaces still bound\n";
+                }'
+      environment:
+        PFS_DESCRS: "{{ pfsense_interfaces | map(attribute='descr') | list | to_json }}"
+      register: pfsense_pre_ad
+      changed_when: "'PRE-AD FIXED' in pfsense_pre_ad.stdout"
+      when: pfsense_interfaces is defined and (pfsense_interfaces | length) > 0
+  tags:
+    - pfsense
+    - pfsense_pre_ad_rebind
+    # Pull this rebind into any AD-foundation tag scope so it's unmissable —
+    # we've been hitting the case where users tag `domain_member_retry` and
+    # the rebind sits silently outside the scope while Eng/SOC fail.
+    - strip_apipa
+    - domain_member_retry
+    - dcpromo
+    - join_vcab
+    - join_flightops
+    - create_users
+    - dns
+
+# =============================================================================
+# Foundation tier — Active Directory (vcab.lan + flightops.lan)
+# =============================================================================
+# Two-domain build: bs-dc01 promotes vcab.lan, fops-dc01 promotes flightops.lan.
+# Each host in [pdc] picks up its own `domain_name` from group_vars/{vcab,
+# flightops}.yml via inventory-group precedence, so a single `hosts: pdc` play
+# fans out cleanly across both forests.
+
+- name: dcpromo
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - dcpromo
+  tags:
+    - dcpromo
+
+- name: Create Users
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - create_users
+  tags:
+    - create_users
+
+- name: dns
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - dns
+  tags:
+    - dns
+
+# The customer's `dns` role creates AD zones and records but doesn't touch
+# DNS forwarders, so anything outside vcab.lan / flightops.lan is unresolvable
+# on the domain workstations. Point both DCs at is-inet's simulated public DNS
+# (unbound binds the 8.8.8.8 / 8.8.4.4 / 1.1.1.1 aliases on is-inet — see
+# PowerPlant ss-pp-ab/UPSTREAM_FIXES.md 2026-05-22 entry).
+- name: Configure DNS forwarders to is-inet
+  hosts: domain_controllers
+  gather_facts: false
+  tasks:
+    - name: Point Windows DNS forwarder at is-inet
+      ansible.windows.win_powershell:
+        script: |
+          $current = @((Get-DnsServerForwarder).IPAddress.IPAddressToString | Sort-Object)
+          $desired = @('8.8.8.8', '8.8.4.4', '1.1.1.1') | Sort-Object
+          if (-not (Compare-Object $current $desired -SyncWindow 0)) {
+            $Ansible.Changed = $false
+            Write-Output "DNS forwarder already set to: $($desired -join ', ')"
+          } else {
+            Set-DnsServerForwarder -IPAddress $desired -UseRootHint $false -Timeout 3
+            $Ansible.Changed = $true
+            Write-Output "DNS forwarder updated to: $($desired -join ', ')"
+          }
+  tags:
+    - dns
+    - dns_forwarder
+
+# Pre-emptively strip 169.254.x.x APIPA addresses Windows assigns when the
+# DHCP→static handoff lags (most common on .3 host in every subnet during
+# PowerPlant). If APIPA stays, domain join fails with "The specified domain
+# either does not exist or could not be contacted."
+- name: Strip APIPA
+  hosts: windows
+  gather_facts: false
+  roles:
+    - strip_apipa
+  tags:
+    - strip_apipa
+
+# Two Join Domain plays — one per forest. Each member host inherits its own
+# `domain_name` from the vcab/flightops group_vars (members_vcab hosts are
+# also in [vcab] via the vcab_workstations / vcab_services / vcab_engineering
+# / vcab_soc subgroups; members_flightops hosts similarly under [flightops]).
+- name: Join Domain — vcab.lan
+  hosts: members_vcab
+  gather_facts: false
+  roles:
+    - domain_member_retry
+  tags:
+    - domain_member_retry
+    - join_vcab
+
+- name: Join Domain — flightops.lan
+  hosts: members_flightops
+  gather_facts: false
+  roles:
+    - domain_member_retry
+  tags:
+    - domain_member_retry
+    - join_flightops
+
+# Promotes bs-dc02 into vcab.lan and fops-dc02 into flightops.lan. The
+# additional_dc role joins each VM as a workstation first (using its
+# domain_name from group_vars), then runs Install-ADDSDomainController.
+- name: Additional DC
+  hosts: additional_dc
+  gather_facts: false
+  roles:
+    - additional_dc
+  tags:
+    - additional_dc
+
+- name: dc_status
+  hosts: domain_controllers
+  gather_facts: false
+  roles:
+    - dc_status
+  tags:
+    - dc_status
+
+# The customer's common/tasks/windows.yml "Disable control net DNS
+# registration" task is a double-no-op (typo `Ehternet0` + misspelled
+# `RegisterThisConnectionAddress` cmdlet param). Net result: every Windows
+# host DDNS-registers BOTH Ethernet0 (mgmt 10.255.240.0/20) AND the
+# data-plane adapter, so name resolution round-robins onto the mgmt IP
+# (which is supposed to be out of play in-scenario).
+#
+# Disable DDNS on Ethernet0 on every Windows host and force a re-register
+# so the data-plane record stays. The next play purges any 10.255.240.0/20
+# records already in AD DNS. Logged in UPSTREAM_FIXES.md.
+- name: Strip mgmt interface from AD DNS registration
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: Disable DDNS on Ethernet0 (mgmt adapter)
+      ansible.windows.win_powershell:
+        script: |
+          $iface = 'Ethernet0'
+          $c = Get-DnsClient -InterfaceAlias $iface -ErrorAction SilentlyContinue
+          if ($null -eq $c) {
+            $Ansible.Changed = $false
+            Write-Output "No $iface adapter present; nothing to do."
+            return
+          }
+          if ($c.RegisterThisConnectionsAddress) {
+            Set-DnsClient -InterfaceAlias $iface -RegisterThisConnectionsAddress $false
+            ipconfig /registerdns | Out-Null
+            $Ansible.Changed = $true
+            Write-Output "Disabled DDNS on $iface; re-registered."
+          } else {
+            $Ansible.Changed = $false
+            Write-Output "DDNS already disabled on $iface."
+          }
+  tags:
+    - strip_mgmt_dns
+
+# Scrub any 10.255.240.0/20 A records that already snuck into AD DNS before
+# the strip_mgmt_dns play landed. Runs against both PDCs — each one targets
+# its own forest's zone (`vcab.lan` on bs-dc01, `flightops.lan` on fops-dc01)
+# via the per-host `domain_name`. PTR records in 240.255.10.in-addr.arpa are
+# scoped to whatever reverse zones the dns role created — we don't expect
+# any to be present yet, but log_only here to be safe.
+- name: Purge mgmt-subnet A records from AD DNS
+  hosts: pdc
+  gather_facts: false
+  tasks:
+    - name: Remove A records in {{ domain_name }} whose IPv4 falls in 10.255.240.0/20
+      ansible.windows.win_powershell:
+        script: |
+          $zone = '{{ domain_name }}'
+          # 10.255.240.0/20 = 10.255.240.0 .. 10.255.255.255 (third octet 240..255)
+          $stale = Get-DnsServerResourceRecord -ZoneName $zone -RRType A -ErrorAction SilentlyContinue |
+            Where-Object {
+              $ip = $_.RecordData.IPv4Address.ToString()
+              if ($ip -notlike '10.255.*') { return $false }
+              $third = [int]($ip.Split('.')[2])
+              ($third -ge 240) -and ($third -le 255)
+            }
+          foreach ($r in $stale) {
+            Remove-DnsServerResourceRecord -ZoneName $zone -InputObject $r -Force -ErrorAction Stop
+          }
+          if ($stale.Count -eq 0) {
+            $Ansible.Changed = $false
+            Write-Output "No stale 10.255.240.0/20 A records in $zone."
+          } else {
+            $Ansible.Changed = $true
+            Write-Output "Removed $($stale.Count) stale A record(s) in $zone."
+          }
+  tags:
+    - purge_mgmt_dns
+
+# =============================================================================
+# File services tier — fileserver + mapped drive (per domain)
+# =============================================================================
+# Mapped Drive depends on File Share existing first. Two Mapped Drive plays
+# (one per forest) so each domain's letter/path stays explicit in the playbook
+# even though the customer role reads per-host vars from group_vars.
+
+- name: File Share
+  hosts: fileservers
+  gather_facts: false
+  roles:
+    - fileserver
+  tags:
+    - file_share
+
+# mapped_drive uses win_dsc with the GroupPolicy DSC resource — must run on
+# a DC, which has RSAT-GPMC + the GroupPolicy DSC module installed.
+# GP replication propagates the GPO to every member at next login.
+# (Previously targeted `members_*` directly, which failed on every member
+#  with "Resource 'GroupPolicy' not found" / "Get-GPO not recognized".)
+- name: Mapped Drive — vcab.lan
+  hosts: pdc_vcab
+  gather_facts: false
+  roles:
+    - mapped_drive
+  tags:
+    - mapped_drive
+    - mapped_drive_vcab
+
+- name: Mapped Drive — flightops.lan
+  hosts: pdc_flightops
+  gather_facts: false
+  roles:
+    - mapped_drive
+  tags:
+    - mapped_drive
+    - mapped_drive_flightops
+
+# =============================================================================
+# Windows-side polish (matches PowerPlant pattern, doubled for two forests)
+# =============================================================================
+
+- name: ae_gpo
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - ae_gpo
+  tags:
+    - ae_gpo
+
+# Suppress the Win10/11 "Set network location (Public/Private)" popup that
+# blocks AUE simulation, reclassify any Public profiles as Private, and
+# enable Network Discovery + File & Printer Sharing firewall rule groups.
+- name: Enable network discovery and suppress the Public/Private popup
+  hosts: windows
+  gather_facts: false
+  roles:
+    - network_discovery
+  tags:
+    - network_discovery
+
+# =============================================================================
+# Cross-forest trust — vcab.lan TRUSTS flightops.lan (one-way external)
+# =============================================================================
+# Asymmetric access pattern from CLAUDE.md §4:
+#   - flightops users authenticate against vcab resources (corp services)
+#   - vcab users are default-denied into flightops (selective exceptions later)
+# Trust object lives in BOTH forests:
+#   - on vcab.lan:    "Outgoing" trust toward flightops (vcab is TRUSTING)
+#   - on flightops.lan: "Incoming" trust from vcab (flightops is TRUSTED)
+# Both halves use the same `ad_trust_secret` (group_vars/all.yml).
+
+- name: Cross-forest trust — vcab side (TRUSTING)
+  hosts: pdc_vcab
+  gather_facts: false
+  tasks:
+    # Prereq: bs-dc01 must be able to resolve flightops.lan for netdom to
+    # reach the partner PDC. vcab's DNS is authoritative for vcab.lan only,
+    # so we install a conditional forwarder pointing flightops.lan at
+    # fops-dc01 (172.31.3.11). Without this, netdom fails with "The
+    # specified domain either does not exist or could not be contacted."
+    - name: Ensure conditional DNS forwarder for flightops.lan exists
+      ansible.windows.win_powershell:
+        script: |
+          $name = 'flightops.lan'
+          $master = '172.31.3.11'
+          $z = Get-DnsServerZone -Name $name -ErrorAction SilentlyContinue
+          if ($z) {
+            $Ansible.Changed = $false
+            Write-Output "Conditional forwarder for $name already present"
+          } else {
+            Add-DnsServerConditionalForwarderZone -Name $name `
+              -MasterServers $master -ReplicationScope 'Domain' -ErrorAction Stop
+            $Ansible.Changed = $true
+            Write-Output "Created conditional forwarder $name -> $master"
+          }
+
+    # Forest.GetAllTrustRelationships() misses one-side-only trusts that
+    # netdom can leave behind. Get-ADTrust queries trustedDomain objects
+    # directly and catches the trust regardless of which API created it.
+    - name: Check whether trust toward flightops.lan already exists
+      ansible.windows.win_powershell:
+        script: |
+          $t = Get-ADTrust -Filter 'Target -eq "flightops.lan"' -ErrorAction SilentlyContinue
+          if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
+      register: vcab_trust_state
+      changed_when: false
+
+    # netdom /OneSide:Trusting works here but errored "Access is denied" on
+    # the flightops side under WinRM (token-filtering quirk specific to
+    # netdom's trusted-side operation). Use DirectoryServices.Forest directly
+    # — netdom is just a wrapper around this API and the API call is honored
+    # under the same WinRM session that ran the precheck above.
+    #
+    # TrustDirection.Inbound on the trusting domain = "users from the
+    # remote domain can access local resources". For vcab→flightops:
+    #   vcab is the trusting/local domain; flightops users can access vcab.
+    - name: Add one-way trusting side on vcab.lan (vcab TRUSTS flightops)
+      ansible.windows.win_powershell:
+        script: |
+          try {
+            $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+            $f.CreateLocalSideOfTrustRelationship(
+              'flightops.lan',
+              [System.DirectoryServices.ActiveDirectory.TrustDirection]::Inbound,
+              '{{ ad_trust_secret }}'
+            )
+            $Ansible.Changed = $true
+            Write-Output "Created inbound trust on vcab.lan from flightops.lan"
+          } catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectExistsException] {
+            # Trust already existed (likely from a prior netdom run); no-op.
+            $Ansible.Changed = $false
+            Write-Output "Trust already exists between vcab.lan and flightops.lan; skipping create"
+          } catch {
+            $Ansible.Failed = $true
+            throw
+          }
+      when: "'absent' in vcab_trust_state.output"
+  tags:
+    - cross_forest_trust
+    - trust_vcab
+
+- name: Cross-forest trust — flightops side (TRUSTED)
+  hosts: pdc_flightops
+  gather_facts: false
+  tasks:
+    # Mirror conditional forwarder on the flightops side — fops-dc01 must
+    # be able to resolve vcab.lan so netdom's other half can connect.
+    - name: Ensure conditional DNS forwarder for vcab.lan exists
+      ansible.windows.win_powershell:
+        script: |
+          $name = 'vcab.lan'
+          $master = '172.31.2.7'
+          $z = Get-DnsServerZone -Name $name -ErrorAction SilentlyContinue
+          if ($z) {
+            $Ansible.Changed = $false
+            Write-Output "Conditional forwarder for $name already present"
+          } else {
+            Add-DnsServerConditionalForwarderZone -Name $name `
+              -MasterServers $master -ReplicationScope 'Domain' -ErrorAction Stop
+            $Ansible.Changed = $true
+            Write-Output "Created conditional forwarder $name -> $master"
+          }
+
+    - name: Check whether trust from vcab.lan already exists
+      ansible.windows.win_powershell:
+        script: |
+          $t = Get-ADTrust -Filter 'Target -eq "vcab.lan"' -ErrorAction SilentlyContinue
+          if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
+      register: fops_trust_state
+      changed_when: false
+
+    # TrustDirection.Outbound on the trusted domain = "local users can
+    # access remote resources". For our trust (vcab trusts flightops):
+    #   flightops is the trusted/local domain; flightops users can access
+    #   vcab — i.e., outbound flow from flightops's perspective.
+    - name: Add one-way trusted side on flightops.lan (flightops is TRUSTED)
+      ansible.windows.win_powershell:
+        script: |
+          try {
+            $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+            $f.CreateLocalSideOfTrustRelationship(
+              'vcab.lan',
+              [System.DirectoryServices.ActiveDirectory.TrustDirection]::Outbound,
+              '{{ ad_trust_secret }}'
+            )
+            $Ansible.Changed = $true
+            Write-Output "Created outbound trust on flightops.lan to vcab.lan"
+          } catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectExistsException] {
+            $Ansible.Changed = $false
+            Write-Output "Trust already exists between flightops.lan and vcab.lan; skipping create"
+          } catch {
+            $Ansible.Failed = $true
+            throw
+          }
+      when: "'absent' in fops_trust_state.output"
+  tags:
+    - cross_forest_trust
+    - trust_flightops
+
+- name: Cross-forest trust — verify both sides
+  hosts: pdc
+  gather_facts: false
+  tasks:
+    - name: List established trust relationships
+      ansible.windows.win_powershell:
+        script: |
+          $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+          $f.GetAllTrustRelationships() | ForEach-Object {
+            "{0,-25} target={1,-20} direction={2}" -f $f.Name, $_.TargetName, $_.TrustDirection
+          }
+      register: trust_summary
+      changed_when: false
+
+    - name: Show trust summary
+      ansible.builtin.debug:
+        var: trust_summary.output
+  tags:
+    - cross_forest_trust
+    - trust_verify
+
+# =============================================================================
+# SOC tier — syslog backbone
+# =============================================================================
+# Central rsyslog collector on soc-syslog (172.31.7.13), receives over UDP+TCP
+# 514, writes per-host files at /var/log/remote/<hostname>/syslog.log. Linux
+# hosts and VyOS routers forward into it. pfSense + Wazuh + SIEM ingest come
+# in the next batch.
+
+- name: Syslog collector — soc-syslog
+  hosts: soc-syslog
+  gather_facts: false
+  become: true
+  roles:
+    - syslog_server
+  tags:
+    - syslog
+    - syslog_server
+
+- name: Syslog client — Linux
+  hosts: linux:!syslog
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Drop rsyslog forwarder snippet
+      ansible.builtin.copy:
+        dest: /etc/rsyslog.d/00-forward.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Forward all logs to soc-syslog (the central rsyslog collector).
+          # Managed by Ansible (site.yml). UDP — accepted on both UDP+TCP by
+          # the server; UDP avoids the queue-up failure mode if soc-syslog
+          # is briefly unreachable.
+          *.* @{{ syslog_server_ip }}:514
+      register: rsyslog_forward
+
+    - name: Restart rsyslog if forwarder snippet changed
+      ansible.builtin.systemd:
+        name: rsyslog
+        state: restarted
+      when: rsyslog_forward.changed
+  tags:
+    - syslog
+    - syslog_client
+
+# VyOS client config: push the syslog remote-host line.
+# `set system syslog host` is idempotent under vyos_config; level "info"
+# matches what the GUI default sets.
+- name: Syslog client — VyOS
+  hosts: vyos
+  gather_facts: false
+  tasks:
+    - name: Configure remote syslog host
+      vyos.vyos.vyos_config:
+        match: line
+        lines:
+          - "set system syslog host {{ syslog_server_ip }} facility all level info"
+        save: true
+  tags:
+    - syslog
+    - syslog_client
+
+# Splunk indexer + search head on soc-splunk (Ubuntu Desktop 22.04, SOC
+# subnet 172.31.7.19). Base `splunk` role from PowerPlant/range-development-
+# ansible/roles/splunk (copied per role-sourcing policy; see project memory
+# `siem-choice`). Downloads splunk.deb from the customer nexus, applies the
+# license, writes limits/inputs/server/web configs, creates the indices
+# declared in group_vars/all.yml (windows, sysmon, linux, netfw, ot, wec),
+# starts the splunkd service. Forwarders in subsequent plays will point at
+# `splunk_server_ip` (172.31.7.19) on TCP `splunk_forwarder_port` (9997).
+#
+# Splunk Enterprise Security (premium SIEM saved searches/dashboards) is
+# DEFERRED to a later slice — the splunk-es role needs splunk-es.spl plus
+# six template files at /etc/ansible/templates/splunkapps/ that don't ship
+# in either PowerPlant repo. Splunk Core alone is plenty for indexer + UF
+# ingest + basic search.
+#
+# gather_facts: true because templates/limits.conf.j2 references
+# `ansible_processor_vcpus` to size httpServer.maxThreads.
+- name: Splunk indexer + search head — soc-splunk
+  hosts: splunk
+  gather_facts: true
+  become: true
+  roles:
+    - splunk
+  tags:
+    - splunk
+    - splunk_indexer
+
+# Splunk universal forwarder rollout on every Linux host except (a) the
+# indexer itself (soc-splunk) and (b) the future-Elastic placeholder
+# (soc-elastic). The highest-value target is soc-syslog: it tails
+# /var/log/remote/<host>/syslog.log and is the ONLY source feeding the
+# netfw index (pfSense + VyOS events forwarded over UDP 514 to soc-syslog,
+# then UF tails the files and ships into Splunk). Other Linux hosts feed
+# their /var/log/{syslog,auth.log} into the linux index.
+#
+# soc-elastic is intentionally excluded (`:!elastic`) — it stays bare for
+# the future Elastic / Security Onion stack so we don't have to disentangle
+# a Splunk UF from that host when Elastic comes online. See project memory
+# `siem-choice`.
+#
+# Run scoped for fast first-feedback:
+#   --tags splunk_forwarder_linux --limit soc-syslog   # syslog visible in UI
+#   --tags splunk_forwarder_linux                       # full Linux rollout
+- name: Splunk universal forwarder — Linux
+  hosts: linux:!splunk:!elastic
+  gather_facts: true
+  become: true
+  roles:
+    - splunk-forwarder
+  tags:
+    - splunk
+    - splunk_forwarder
+    - splunk_forwarder_linux
+
+# Splunk universal forwarder rollout on every Windows host. Pulls the
+# 8.2.6 MSI from the customer nexus (version skew vs Linux's 9.4.1 deb is
+# inherited from PowerPlant; flagged in group_vars/windows.yml). Each host
+# reboots after MSI install -- with 48 Windows hosts this is the longest
+# play in the tier. The forwarder role's templates/inputs.conf.j2 ships:
+#   - Windows / System / Application / Firewall / PowerShell-Operational
+#     event logs → index=windows (sourcetype = XmlWinEventLog:*)
+#   - Microsoft-Windows-Sysmon/Operational                 → index=sysmon
+# Sysmon doesn't have to be installed yet -- the stanza is a no-op until
+# the Sysmon service exists on the host. Sysmon rollout is a future slice.
+#
+# Run scoped for a one-host pilot before the full sweep:
+#   --tags splunk_forwarder_windows --limit bs-hq01      # ~5 min, validates
+#   --tags splunk_forwarder_windows                       # full Windows fleet
+- name: Splunk universal forwarder — Windows
+  hosts: windows
+  gather_facts: true
+  roles:
+    - splunk-forwarder
+  tags:
+    - splunk
+    - splunk_forwarder
+    - splunk_forwarder_windows
+
+# Sysmon (Microsoft Sysinternals) — endpoint telemetry beyond what Windows
+# Event Log ships by default. Once installed, events land in
+# Microsoft-Windows-Sysmon/Operational which the Splunk UF's inputs.conf
+# already tails and ships into index=sysmon.
+#
+# Role copied from PowerPlant/range-development-ansible/roles/sysmon.
+# Config: templates/sysmon-config.xml.j2 (1200-line rules file inherited
+# from PowerPlant; a comprehensive detection baseline). Installer URL:
+# `sysmon_installer` (group_vars/windows.yml) — nexus-staged sysmon64.exe.
+# The role is idempotent via `creates_service: Sysmon64` on win_package,
+# so re-runs against already-Sysmon'd hosts are no-ops. To force a config
+# refresh later, uninstall via `sysmon64.exe -u` then re-run this play.
+#
+# Runs AFTER the Splunk Windows UF play so events start flowing to the
+# sysmon index immediately once Sysmon starts writing them. Scoped runs:
+#   --tags sysmon --limit bs-hq01     # single-host pilot
+#   --tags sysmon                      # full Windows fleet
+- name: Sysmon — Windows endpoint telemetry
+  hosts: windows
+  gather_facts: true
+  roles:
+    - sysmon
+  tags:
+    - sysmon
+    - endpoint

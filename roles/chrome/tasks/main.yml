@@ -1,0 +1,25 @@
+---
+- name: Ensure Temp Directory Exists
+  ansible.windows.win_file:
+    path: "C:\\temp"
+    state: directory
+
+- name: Download Chrome installer using win_get_url with proxy settings
+  ansible.windows.win_get_url:
+    url: "{{ chrome_installer }}"
+    dest: "C:\\temp\\googlechrome.msi"
+    method: GET
+    follow_redirects: all
+    use_proxy: yes
+    proxy_url: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+    proxy_use_default_credential: yes
+    timeout: 300
+    validate_certs: no
+    headers:
+      User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36"
+
+- name: Install Google Chrome
+  ansible.windows.win_package:
+    path: "C:\\temp\\googlechrome.msi"
+    state: present
+  register: chrome_install

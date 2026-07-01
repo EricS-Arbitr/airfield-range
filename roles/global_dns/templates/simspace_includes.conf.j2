@@ -1,0 +1,23 @@
+# Ansible managed - DNS records for unbound
+# Generated: {{ ansible_date_time.iso8601 }}
+
+{% for record in global_dns_records %}
+{% if record.type|upper == 'A' %}
+# A record for {{ record.name }}
+local-data: "{{ record.name }}.{{ record.zone | default(domain_name) }}. A {{ record.value }}"
+# Auto-generated PTR for {{ record.value }}
+local-data-ptr: "{{ record.value }} {{ record.name }}.{{ record.zone | default(domain_name) }}."
+{% elif record.type|upper == 'CNAME' %}
+# CNAME record for {{ record.name }}
+local-data: "{{ record.name }}.{{ record.zone | default(domain_name) }}. CNAME {{ record.value }}{% if not record.value.endswith('.') %}.{% endif %}"
+{% elif record.type|upper == 'MX' %}
+# MX record for {{ record.zone | default(domain_name) }}
+local-data: "{{ record.zone | default(domain_name) }}. MX {{ record.priority | default(10) }} {{ record.value }}{% if not record.value.endswith('.') %}.{% endif %}"
+{% elif record.type|upper == 'PTR' %}
+# PTR record
+local-data: "{{ record.name }} PTR {{ record.value }}{% if not record.value.endswith('.') %}.{% endif %}"
+{% elif record.type|upper == 'NS' %}
+# NS record for {{ record.zone | default(domain_name) }}
+local-data: "{{ record.zone | default(domain_name) }}. NS {{ record.value }}{% if not record.value.endswith('.') %}.{% endif %}"
+{% endif %}
+{% endfor %}

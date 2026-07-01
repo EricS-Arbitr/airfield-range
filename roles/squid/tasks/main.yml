@@ -1,0 +1,41 @@
+- name: Add apt inet proxy conf
+  ansible.builtin.template:
+    src: proxy.conf.j2
+    dest: /etc/apt/apt.conf.d/proxy.conf
+    mode: '0644'
+
+- name: apt update
+  ansible.builtin.apt:
+    update_cache: yes
+  ignore_errors: true
+
+- name: Install apache2
+  ansible.builtin.apt:
+    name: apache2
+    state: present
+
+- name: Add apache2.conf
+  ansible.builtin.template:
+    src: apache2.conf.j2
+    dest: /etc/apache2/apache2.conf
+    mode: '0644'
+
+- name: Add wpad.dat
+  ansible.builtin.template:
+    src: wpad.dat.j2
+    dest: /var/www/html/wpad.dat
+    mode: '0644'
+  when: proxy_server is defined
+  notify: Restart apache2
+
+- name: Install squid proxy
+  ansible.builtin.apt:
+    name: squid
+    state: present
+
+- name: Add squid.conf
+  ansible.builtin.copy:
+    src: squid.conf
+    dest: /etc/squid/squid.conf
+    mode: '0644'
+  notify: Restart squid

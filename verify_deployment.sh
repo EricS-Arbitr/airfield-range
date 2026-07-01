@@ -375,6 +375,58 @@ check_ps fops-ops01 \
   "fops-ops01 (flightops): Sysmon64 service running"
 
 # =========================================================================
+# 7. Enterprise services — root certs, AUE lockdown, autologin, squid, global_dns
+# =========================================================================
+section "7. Enterprise services"
+
+# root_certs role installed the SimSpace lab-CA (root_ca.crt) into every
+# Windows host's Trusted Root store. Spot-check on bs-hq01.
+check_ps bs-hq01 \
+  'if (Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue | Where-Object {$_.Subject -match "SimSpace|root_ca|simspace"}) { "PRESENT" } else { "MISSING" }' \
+  '\(stdout\)[[:space:]]+PRESENT' \
+  "bs-hq01 (vcab): SimSpace root CA installed in Trusted Root store"
+
+# AUE lockdown -- disable_uac role sets EnableLUA=0
+check_ps bs-hq01 \
+  '(Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -ErrorAction SilentlyContinue).EnableLUA' \
+  '\(stdout\)[[:space:]]+0' \
+  "bs-hq01 (vcab): UAC disabled (proves disable_uac / AUE lockdown ran)"
+
+# autologin role sets DefaultUserName in Winlogon to the host's logon_user
+# (host_vars mapping: bs-hq01 -> ahmed.ortega).
+check_ps bs-hq01 \
+  '(Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -ErrorAction SilentlyContinue).DefaultUserName' \
+  '\(stdout\)[[:space:]]+ahmed\.ortega' \
+  "bs-hq01 (vcab): autologin configured for ahmed.ortega"
+
+# Chrome role installed the browser. Test-Path is more portable than
+# Get-ItemProperty for install detection.
+check_ps bs-hq01 \
+  'if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe") { "INSTALLED" } elseif (Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") { "INSTALLED" } else { "MISSING" }' \
+  '\(stdout\)[[:space:]]+INSTALLED' \
+  "bs-hq01 (vcab): Chrome installed (proves chrome / AUE ran)"
+
+# bs-proxy — squid service active + listening on :3128
+check_pf_shell bs-proxy \
+  'systemctl is-active squid' \
+  'active' \
+  "bs-proxy: squid service active"
+
+check_pf_shell bs-proxy \
+  'ss -lnt | grep -qE ":3128\\b" && echo OK_3128 || echo MISSING_3128' \
+  'OK_3128' \
+  "bs-proxy: listening on :3128 (squid HTTP proxy)"
+
+# is-inet global_dns -- unbound should resolve www.faa.gov to the value
+# in group_vars/all.yml global_dns_records (70.39.65.10). Resolves via
+# soc-syslog's configured DNS (vcab DCs -> 8.8.8.8 forwarder alias ->
+# is-inet unbound). Fall back to getent (nss) if dig isn't installed.
+check_pf_shell soc-syslog \
+  'r=$(getent hosts www.faa.gov 2>/dev/null | awk "{print \$1}"); [ "$r" = "70.39.65.10" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'OK_70\.39\.65\.10' \
+  "is-inet: unbound resolves www.faa.gov -> 70.39.65.10 (global_dns loaded)"
+
+# =========================================================================
 # Summary
 # =========================================================================
 section "Summary"

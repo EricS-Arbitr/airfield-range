@@ -1,0 +1,6 @@
+- name: Restart squid
+  listen: Restart squid
+  ansible.builtin.service:
+    name: squid
+    enabled: true
+    state: restarted

