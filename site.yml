@@ -898,3 +898,29 @@
     - splunk
     - splunk_forwarder
     - splunk_forwarder_windows
+
+# Sysmon (Microsoft Sysinternals) — endpoint telemetry beyond what Windows
+# Event Log ships by default. Once installed, events land in
+# Microsoft-Windows-Sysmon/Operational which the Splunk UF's inputs.conf
+# already tails and ships into index=sysmon.
+#
+# Role copied from PowerPlant/range-development-ansible/roles/sysmon.
+# Config: templates/sysmon-config.xml.j2 (1200-line rules file inherited
+# from PowerPlant; a comprehensive detection baseline). Installer URL:
+# `sysmon_installer` (group_vars/windows.yml) — nexus-staged sysmon64.exe.
+# The role is idempotent via `creates_service: Sysmon64` on win_package,
+# so re-runs against already-Sysmon'd hosts are no-ops. To force a config
+# refresh later, uninstall via `sysmon64.exe -u` then re-run this play.
+#
+# Runs AFTER the Splunk Windows UF play so events start flowing to the
+# sysmon index immediately once Sysmon starts writing them. Scoped runs:
+#   --tags sysmon --limit bs-hq01     # single-host pilot
+#   --tags sysmon                      # full Windows fleet
+- name: Sysmon — Windows endpoint telemetry
+  hosts: windows
+  gather_facts: true
+  roles:
+    - sysmon
+  tags:
+    - sysmon
+    - endpoint

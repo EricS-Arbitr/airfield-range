@@ -145,6 +145,17 @@ check_pf_shell bs-ops-fw \
   '172\.31\.1\.13' \
   "bs-ops-fw kernel FIB has 172.31.2.0/24 via 172.31.1.13 (vmx1)"
 
+# FRR-RIB vs kernel-FIB divergence check -- explicitly catches the
+# dhclient-poisoning failure mode (UPSTREAM_FIXES.md 2026-06-30) where FRR
+# reports `O>*` for a route (its "installed" marker) but the kernel FIB
+# doesn't actually have it. Compare the two views for 172.31.2.0/24
+# (the vcab-DC-reachability route from behind bs-ops-fw). Divergence here
+# would break Eng + SOC domain joins.
+check_pf_shell bs-ops-fw \
+  'frr_installed=$(vtysh -c "show ip route 172.31.2.0/24" 2>/dev/null | grep -c ">\\*"); kernel_has=$(netstat -rn -f inet 2>/dev/null | grep -c "^172.31.2.0"); if [ "$frr_installed" -ge 1 ] && [ "$kernel_has" -ge 1 ]; then echo "OK_MATCH frr=$frr_installed kernel=$kernel_has"; elif [ "$frr_installed" -ge 1 ] && [ "$kernel_has" -eq 0 ]; then echo "DIVERGENCE frr=$frr_installed kernel=0 (dhclient poisoning? see UPSTREAM_FIXES.md 2026-06-30)"; else echo "NO_ROUTE frr=$frr_installed kernel=$kernel_has"; fi' \
+  'OK_MATCH' \
+  "bs-ops-fw FRR-RIB and kernel-FIB agree on 172.31.2.0/24 (no zebra poisoning)"
+
 for rtr in bs-edge-rtr bs-core-rtr bs-ops-rtr bs-sec-rtr bs-modbus-gateway; do
   check_vyos "$rtr" \
     "show ip route 0.0.0.0/0" \
@@ -326,6 +337,42 @@ check_pf_shell soc-syslog \
   'c=$(ss -ant | grep "172.31.7.19:9997" | grep -c ESTAB); [ "$c" -ge 1 ] && echo OK_ESTAB || echo NO_ESTAB' \
   'OK_ESTAB' \
   "soc-syslog UF has ESTABLISHED connection to indexer :9997"
+
+# Total forwarder count on soc-splunk. Expected ≥ 30 once the Windows UF
+# rollout is done (Linux UFs alone give us ~10; Windows UFs push us to
+# 50+). Threshold set at 30 to prove Windows UF landed successfully.
+# LOW_UFS_<n> below 30 usually means the Windows UF play never ran or the
+# MSI install failed on most hosts.
+check_pf_shell soc-splunk \
+  'c=$(ss -ant | grep ":9997 " | grep -c ESTAB); [ "$c" -ge 30 ] && echo "OK_UFS_$c" || echo "LOW_UFS_$c"' \
+  'OK_UFS_' \
+  "soc-splunk: ≥ 30 UFs ESTABLISHED on :9997 (Linux + Windows rollout done)"
+
+# Windows UF service spot checks — one per domain. Catches "MSI installed
+# but service failed to start" which the ESTAB count wouldn't distinguish
+# from "host offline."
+check_ps bs-hq01 \
+  '(Get-Service SplunkForwarder -ErrorAction SilentlyContinue).Status' \
+  '\(stdout\)[[:space:]]+Running' \
+  "bs-hq01 (vcab): SplunkForwarder service running"
+
+check_ps fops-ops01 \
+  '(Get-Service SplunkForwarder -ErrorAction SilentlyContinue).Status' \
+  '\(stdout\)[[:space:]]+Running' \
+  "fops-ops01 (flightops): SplunkForwarder service running"
+
+# Sysmon service spot checks — proves the sysmon role landed the config +
+# started Sysmon64 service. Sysmon events land in index=sysmon via the UF's
+# templates/inputs.conf Microsoft-Windows-Sysmon/Operational stanza.
+check_ps bs-hq01 \
+  '(Get-Service Sysmon64 -ErrorAction SilentlyContinue).Status' \
+  '\(stdout\)[[:space:]]+Running' \
+  "bs-hq01 (vcab): Sysmon64 service running"
+
+check_ps fops-ops01 \
+  '(Get-Service Sysmon64 -ErrorAction SilentlyContinue).Status' \
+  '\(stdout\)[[:space:]]+Running' \
+  "fops-ops01 (flightops): Sysmon64 service running"
 
 # =========================================================================
 # Summary
