@@ -371,6 +371,31 @@ Manual recovery if a deploy precedes the fix landing on the live firewall: `pkil
 
 ---
 
+## 2026-07-01 · bug · roles/common/tasks/windows.yml — DDNS disable targets typo'd adapter names
+
+**Symptom.** `Disable control net DNS registration` task in the base `common` role never actually disabled DDNS on the management interface — the mgmt IP (10.255.240.0/20) leaked into AD DNS on every Windows host. `Resolve-DnsName bs-dc01 -DnsOnly` round-robin resolved to the mgmt IP half the time; `Test-NetConnection bs-dc01` would occasionally hit the OOB mgmt interface. Symptom shows up as workstation→server flows that shouldn't work (mgmt is out-of-band) succeeding intermittently.
+
+**Detection.**
+```yaml
+# roles/common/tasks/windows.yml (pre-fix)
+- name: Disable control net DNS registration
+  ansible.windows.win_powershell:
+    script: |
+      Get-NetAdapter {{ item }} | set-DnsClient -RegisterThisConnectionsAddress $false
+  loop:
+    - Ehternet0   # ← typo, never matches real "Ethernet0"
+    - Ethernet2   # ← doesn't exist on airfield hosts (we use Ethernet0=mgmt, Ethernet1=prod)
+```
+`Get-NetAdapter` silently returns an empty pipeline on the misspelled/missing name; the task reports `ok=1` and never modifies anything.
+
+**Root cause.** Upstream customer repo (`range-development-ansible/roles/common/tasks/windows.yml`) has the same typo — it was carried forward when we copied `common` into `airfield-range/roles/` per the role-sourcing policy. PowerPlant/ss-pp-ab flagged this in their `PROJECT_LOG.md` but couldn't fix the base role directly (they don't own the customer repo), so they layered a compensating play in `arbitr_pp_playbook.yaml`. Airfield-range owns its `roles/common/` copy, so we can fix the source.
+
+**Fix (overlay).** Correct `Ehternet0 → Ethernet0` and drop the non-existent `Ethernet2` entry so the loop only touches the real mgmt adapter. Added an inline comment referencing this entry and the belt-and-suspenders `Strip mgmt interface from AD DNS registration` overlay play in `site.yml:479` which handles two additional scenarios (purging already-registered mgmt A records on the PDC + forcing a re-register so the data-plane record stays).
+
+**Fix (upstream).** File an issue against the customer repo — the base `common` role should target the mgmt adapter by ROLE, not by hard-coded interface name, so it's portable across ranges.
+
+---
+
 ## 2026-07-01 · bug · roles/pfsense_firewall/tasks/main.yml — dhclient-kill shell task rc=-15
 
 **Symptom.** After the fresh-range dhclient poisoning fix landed (2026-06-30 entry above), the first end-to-end deploy on the next range failed on the pfSense play with:

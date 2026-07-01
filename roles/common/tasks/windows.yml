@@ -49,12 +49,19 @@
   notify: Reboot Windows
 
 - name: Disable control net DNS registration
+  # Airfield fix: upstream common role had `Ehternet0` (typo) and `Ethernet2`
+  # (adapter that doesn't exist on our hosts). Every airfield Windows host is
+  # dual-homed with `Ethernet0` = mgmt (10.255.240.0/20) and `Ethernet1` =
+  # production. Only the mgmt adapter should skip AD DNS registration --
+  # per CLAUDE.md §8 the mgmt plane is invisible in-scenario. See the
+  # `Strip mgmt interface from AD DNS registration` overlay play in site.yml
+  # for the belt-and-suspenders defense that also purges already-registered
+  # A records on the PDC. Logged in UPSTREAM_FIXES.md 2026-07-01 entry.
   ansible.windows.win_powershell:
     script: |
       Get-NetAdapter {{ item }} | set-DnsClient -RegisterThisConnectionsAddress $false
   loop:
-    - Ehternet0
-    - Ethernet2
+    - Ethernet0
 
 - name: Set DNS search suffix 
   ansible.windows.win_powershell:
