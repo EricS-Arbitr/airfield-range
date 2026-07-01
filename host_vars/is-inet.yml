@@ -1,9 +1,25 @@
 ---
 # host_vars/is-inet.yml — specialized appliance / pre-built image
 # Image:   RC-IS-INET:1.1.0
-# Self-configures from its image; not in [windows]/[linux] OS baseline
-# groups. network_interfaces below is informational only.
+# Self-configures from its image; deliberately kept out of
+# [windows]/[linux] OS baseline groups so the common role doesn't run
+# against it (would clobber the appliance's own networking + resolver
+# state). network_interfaces below is informational only.
 ansible_host: "10.255.240.125"
+
+# Because is-inet is not in [linux], group_vars/linux.yml SSH creds don't
+# apply -- Ansible would default to `root@` with no password and get
+# "Permission denied (publickey,password)". SimSpace's is-inet image ships
+# the same `simspace:simspace1` account as other Ubuntu images
+# (range-development-ansible puts is-inet directly in [linux]). Mirror those
+# creds here so the global_dns role can SSH in to drop the unbound include
+# file + reload the container.
+ansible_connection: ssh
+ansible_user: simspace
+ansible_ssh_pass: simspace1
+ansible_become_method: sudo
+ansible_become_pass: simspace1
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 
 # network_interfaces:
 #   - name: "Ethernet0"
