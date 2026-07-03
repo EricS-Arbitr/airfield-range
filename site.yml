@@ -699,6 +699,24 @@
     - network_discovery
 
 # =============================================================================
+# Public web landing page — bs-www serves www.blackstone.mil
+# =============================================================================
+# External simulated clients resolve www.blackstone.mil to bs-edge-fw's
+# WAN interface (199.252.163.1); pfSense NAT rule DNATs :80/:443 to
+# bs-www (172.31.12.3) where nginx serves the themed landing page from
+# /var/www/blackstone/. Static content for now, ready for CMS-style
+# extensions later.
+- name: Blackstone public web landing — bs-www
+  hosts: bs-www
+  gather_facts: false
+  become: true
+  roles:
+    - blackstone_www
+  tags:
+    - blackstone_www
+    - public_web
+
+# =============================================================================
 # Enterprise services — root cert trust, AUE/AE workstation posture, hunt tools
 # =============================================================================
 # The `root_certs` role installs the SimSpace lab-CA + scenario TLS certs

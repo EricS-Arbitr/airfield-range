@@ -1,0 +1,56 @@
+---
+# blackstone_www — Blackstone Auxiliary Field public web landing on bs-www.
+#
+# Installs nginx and drops a themed static landing page at the DMZ web
+# server. Traffic path for external clients:
+#   client → resolves www.blackstone.mil → 199.252.163.1 (bs-edge-fw WAN)
+#   → pfSense NAT rule DNATs :80/:443 to 172.31.12.3 (bs-www)
+#   → nginx serves this page
+#
+# Intentionally minimal for now -- one static index.html, no dynamic
+# backend. Placeholder sections ("Operations", "Personnel") are here so
+# the layout is ready for real content later without a role rewrite.
+
+- name: Install nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+    update_cache: true
+
+- name: Ensure web root exists
+  ansible.builtin.file:
+    path: /var/www/blackstone
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: '0755'
+
+- name: Drop themed landing page
+  ansible.builtin.template:
+    src: index.html.j2
+    dest: /var/www/blackstone/index.html
+    owner: www-data
+    group: www-data
+    mode: '0644'
+
+- name: Configure nginx vhost for blackstone.mil
+  ansible.builtin.template:
+    src: blackstone_www.conf.j2
+    dest: /etc/nginx/sites-available/blackstone_www.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart nginx
+
+- name: Enable blackstone_www vhost
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/blackstone_www.conf
+    dest: /etc/nginx/sites-enabled/blackstone_www.conf
+    state: link
+  notify: restart nginx
+
+- name: Disable stock nginx default vhost
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: restart nginx

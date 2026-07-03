@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blackstone Auxiliary Field</title>
+<style>
+  :root {
+    --ink: #0f1720;
+    --paper: #f4f2ec;
+    --accent: #6b4423;
+    --muted: #5a6470;
+    --rule: #c9c2b3;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink); font-family: Georgia, 'Times New Roman', serif; line-height: 1.55; }
+  header { border-bottom: 3px double var(--accent); padding: 3rem 1.5rem 2rem; text-align: center; background: linear-gradient(180deg, #ece8dc 0%, var(--paper) 100%); }
+  header .crest { font-size: 3rem; letter-spacing: 0.4em; color: var(--accent); margin-bottom: 0.5rem; }
+  header h1 { margin: 0; font-size: 2.6rem; letter-spacing: 0.04em; }
+  header p.motto { margin: 0.4rem 0 0; color: var(--muted); font-style: italic; font-size: 1.05rem; }
+  main { max-width: 900px; margin: 0 auto; padding: 2.5rem 1.5rem 3.5rem; }
+  section { margin: 2.5rem 0; }
+  section h2 { font-size: 1.4rem; border-bottom: 1px solid var(--rule); padding-bottom: 0.4rem; margin-top: 0; color: var(--accent); }
+  section p { font-size: 1.05rem; color: var(--ink); }
+  .grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
+  @media (min-width: 720px) { .grid { grid-template-columns: 1fr 1fr; } }
+  .card { background: #fff; border: 1px solid var(--rule); padding: 1.25rem 1.4rem; box-shadow: 0 1px 0 rgba(0,0,0,0.02); }
+  .card h3 { margin: 0 0 0.5rem; font-size: 1.1rem; color: var(--accent); }
+  .card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+  footer { border-top: 1px solid var(--rule); text-align: center; color: var(--muted); font-size: 0.85rem; padding: 1.25rem; }
+</style>
+</head>
+<body>
+<header>
+  <div class="crest">&#9733; &#9733; &#9733;</div>
+  <h1>Blackstone Auxiliary Field</h1>
+  <p class="motto">Vigilance &middot; Readiness &middot; Precision</p>
+</header>
+
+<main>
+  <section>
+    <h2>About the Field</h2>
+    <p>
+      Blackstone Auxiliary Field (BAF) is a joint-use military installation supporting rotary and fixed-wing
+      training, aerial refueling operations, and forward logistics. The base maintains a permanent detachment of
+      approximately 1,200 uniformed personnel and 480 civilian contractors across four wings.
+    </p>
+  </section>
+
+  <section>
+    <h2>Operations</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Air Traffic Control</h3>
+        <p>Radar, ground control, and tower services on continuous 24/7 shifts. Weather and airspace deconfliction managed from the Flight Control Center.</p>
+      </div>
+      <div class="card">
+        <h3>Fuel Farm</h3>
+        <p>Automated aviation-fuel storage and delivery, integrated with ground support and airfield vehicle dispatch through the OT segment.</p>
+      </div>
+      <div class="card">
+        <h3>Power Grid</h3>
+        <p>Redundant local power generation and distribution, coordinated via SCADA to sustain flightline and mission operations during external outages.</p>
+      </div>
+      <div class="card">
+        <h3>Access Control</h3>
+        <p>Perimeter security, credentialing, and physical access management through the Physical Security division and integrated badging systems.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Personnel &amp; Directory</h2>
+    <p>
+      Contact information for base leadership, wing commanders, and administrative offices will be published to this
+      page as the directory service comes online. Personnel-affairs inquiries should be routed through the Base
+      Adjutant's office in the interim.
+    </p>
+  </section>
+</main>
+
+<footer>
+  Blackstone Auxiliary Field &middot; This site is a training environment. Content is illustrative and not operational.
+</footer>
+</body>
+</html>

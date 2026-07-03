@@ -1,0 +1,15 @@
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name www.blackstone.mil blackstone.mil _;
+
+    root /var/www/blackstone;
+    index index.html;
+
+    access_log /var/log/nginx/blackstone_www.access.log;
+    error_log  /var/log/nginx/blackstone_www.error.log;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
