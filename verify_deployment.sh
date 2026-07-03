@@ -429,6 +429,54 @@ check_pf_shell soc-syslog \
   "is-inet: unbound resolves www.faa.gov -> 70.39.65.10 (global_dns loaded)"
 
 # =========================================================================
+# 8. Public web + email (Blackstone rebrand)
+# =========================================================================
+section "8. Public web + email"
+
+# bs-www serves the blackstone_www role's index.html. Reachable via the
+# DMZ IP directly (172.31.12.3) or via bs-edge-fw's NAT reflection at
+# 199.252.163.1 (which internal test clients can't easily reach, so we
+# probe the DMZ IP for a smoke test).
+check_pf_shell bs-www \
+  'systemctl is-active nginx' \
+  'active' \
+  "bs-www: nginx service active"
+
+check_pf_shell bs-www \
+  'curl -s -o /dev/null -w "%{http_code}" http://localhost/' \
+  '^200$|200' \
+  "bs-www: landing page returns HTTP 200"
+
+# is-inet unbound has the apex A records for both mail domains + bare
+# blackstone.mil. If any of these are missing, mail login and public
+# name resolution break.
+check_pf_shell soc-syslog \
+  'r=$(getent hosts blackstone.mil 2>/dev/null | awk "{print \$1}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'OK_52\.96\.223\.2' \
+  "is-inet: unbound resolves blackstone.mil apex -> 52.96.223.2"
+
+check_pf_shell soc-syslog \
+  'r=$(getent hosts fops.blackstone.mil 2>/dev/null | awk "{print \$1}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'OK_52\.96\.223\.2' \
+  "is-inet: unbound resolves fops.blackstone.mil apex -> 52.96.223.2"
+
+check_pf_shell soc-syslog \
+  'r=$(getent hosts www.blackstone.mil 2>/dev/null | awk "{print \$1}"); [ "$r" = "199.252.163.1" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'OK_199\.252\.163\.1' \
+  "is-inet: unbound resolves www.blackstone.mil -> 199.252.163.1 (bs-edge-fw WAN)"
+
+# Email container up + Dovecot listening + our bob.burke test user exists.
+check_pf_shell is-inet \
+  'docker ps --filter name=email --format "{{.Status}}" 2>&1 | head -1' \
+  'Up' \
+  "is-inet: email container running"
+
+check_pf_shell is-inet \
+  'docker exec email getent passwd bob.burke 2>&1 | head -1' \
+  'bob.burke' \
+  "is-inet: bob.burke unix user exists in email container (mailbox provisioned)"
+
+# =========================================================================
 # Summary
 # =========================================================================
 section "Summary"
