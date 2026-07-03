@@ -1,9 +1,9 @@
 ---
-# host_vars/bs-ops-rtr.yml — VyOS router (flightops core, AS 65001 OSPF area 0)
+# host_vars/bs-ops-rtr.yml — VyOS router (fops core, AS 65001 OSPF area 0)
 # Image:   RC-VyOS-Router:1.1.0
 # Mgmt:    10.255.240.100/20 (position LAST → eth5; SimSpace-managed)
 #
-# Role: flightops core. OSPF area 0 on every interface (flightops /24s +
+# Role: fops core. OSPF area 0 on every interface (fops /24s +
 # both transit /30s); static default toward bs-core-rtr for the outbound
 # path. No BGP.
 ansible_host: "10.255.240.100"

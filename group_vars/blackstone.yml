@@ -1,17 +1,25 @@
 ---
 # ============================================================
-# vcab.yml — vcab.lan domain configuration
+# blackstone.yml — blackstone.mil domain (forest root) configuration
 # ============================================================
-# Applies to: [vcab] (workstations + services) + any other hosts later
-# explicitly joined to vcab.lan (Engineering / SOC TBD per CLAUDE.md §4).
+# Applies to: [blackstone] (workstations + services) + any other hosts
+# later explicitly joined to blackstone.mil (Engineering / SOC per
+# CLAUDE.md §4).
+#
+# Blackstone Auxiliary Field runs a SINGLE AD forest with:
+#   - blackstone.mil        (forest root -- this file)
+#   - fops.blackstone.mil   (child domain -- group_vars/fops.yml)
+# Parent/child trust is automatic and bidirectional; no manual cross-forest
+# trust setup. Users in either domain can authenticate to resources in
+# either domain by default.
 # ============================================================
-domain_name: "vcab.lan"
-short_domain_name: "vcab"
-domain_tld_name: "lan"
+domain_name: "blackstone.mil"
+short_domain_name: "blackstone"
+domain_tld_name: "mil"
 
 # --- Domain controllers (PDC emulator listed first) ----------
-domain_controllers_vcab:
-  - { name: "bs-dc01", ip: "172.31.2.7" }    # PDC emulator
+domain_controllers_blackstone:
+  - { name: "bs-dc01", ip: "172.31.2.7" }    # PDC emulator (forest root)
   - { name: "bs-dc02", ip: "172.31.2.8" }
 
 # --- File share ----------------------------------------------
@@ -20,7 +28,7 @@ file_server_ip: "172.31.2.10"                # bs-file01
 share_name: "Share"
 share_path: "C:\\Shares\\Share"
 map_drive_letter: "S"
-map_drive_path: "\\\\bs-file01.vcab.lan\\Share"
+map_drive_path: "\\\\bs-file01.blackstone.mil\\Share"
 
 # --- DNS records (skeleton; expand as services come online) ---
 internal_dns_records:
@@ -53,7 +61,7 @@ DomainUsers:
     password: "{{ domain_admin_password }}"
     groups: [ "Domain Admins" ]
 
-  # --- Headquarters (vcab_hq: bs-hq01..06) -------------------
+  # --- Headquarters (blackstone_hq: bs-hq01..06) --------------
   - { name: "ahmed.ortega",      fullname: "Ahmed Ortega",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-hq01
   - { name: "barbara.white",     fullname: "Barbara White",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-hq02
   - { name: "bob.burke",         fullname: "Bob Burke",         password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-hq03
@@ -61,27 +69,27 @@ DomainUsers:
   - { name: "charles.hardy",     fullname: "Charles Hardy",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-hq05
   - { name: "charles.martinez",  fullname: "Charles Martinez",  password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-hq06
 
-  # --- IT (vcab_it: bs-it01..05) -----------------------------
+  # --- IT (blackstone_it: bs-it01..05) -----------------------
   - { name: "ciara.schultz",     fullname: "Ciara Schultz",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-it01
   - { name: "dale.hays",         fullname: "Dale Hays",         password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-it02
   - { name: "david.miller",      fullname: "David Miller",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-it03
   - { name: "diana.johnson",     fullname: "Diana Johnson",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-it04
   - { name: "elizabeth.garcia",  fullname: "Elizabeth Garcia",  password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-it05
 
-  # --- Supply (vcab_supply: bs-supply01..05) -----------------
+  # --- Supply (blackstone_supply: bs-supply01..05) -----------
   - { name: "eunice.gilmore",    fullname: "Eunice Gilmore",    password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-supply01
   - { name: "gavin.horn",        fullname: "Gavin Horn",        password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-supply02
   - { name: "irwin.choi",        fullname: "Irwin Choi",        password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-supply03
   - { name: "jacob.smith",       fullname: "Jacob Smith",       password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-supply04
   - { name: "james.moore",       fullname: "James Moore",       password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-supply05
 
-  # --- Engineering (vcab_engineering: bs-eng01..04) ----------
+  # --- Engineering (blackstone_engineering: bs-eng01..04) ----
   - { name: "janice.durham",     fullname: "Janice Durham",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-eng01
   - { name: "jennifer.davis",    fullname: "Jennifer Davis",    password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-eng02
   - { name: "jessica.robinson",  fullname: "Jessica Robinson",  password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-eng03
   - { name: "joaquin.clayton",   fullname: "Joaquin Clayton",   password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # bs-eng04
 
-  # --- SOC analysts (vcab_soc: soc-analyst01..06) ------------
+  # --- SOC analysts (blackstone_soc: soc-analyst01..06) ------
   - { name: "john.jackson",      fullname: "John Jackson",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # soc-analyst01
   - { name: "joseph.clark",      fullname: "Joseph Clark",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # soc-analyst02
   - { name: "lara.whitaker",     fullname: "Lara Whitaker",     password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # soc-analyst03

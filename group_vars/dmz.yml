@@ -13,7 +13,7 @@ dmz_dns_forwarders:
   - "8.8.4.4"
   - "1.1.1.1"
 
-# --- DMZ services (advertised to internal via vcab.yml) -----
+# --- DMZ services (advertised to internal via blackstone.yml) -----
 dmz_www_ip:  "172.31.12.3"
 dmz_ftp_ip:  "172.31.12.2"
 dmz_ns1_ip:  "172.31.12.5"

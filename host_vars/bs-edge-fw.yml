@@ -15,7 +15,7 @@
 ansible_host: "10.255.240.132"
 
 pfsense_hostname: "bs-edge-fw"
-pfsense_domain: "vcab.lan"
+pfsense_domain: "blackstone.mil"
 
 pfsense_interfaces:
   - descr: "SWITCH_0"               # vmx1 — eBGP transit to bs-edge-rtr

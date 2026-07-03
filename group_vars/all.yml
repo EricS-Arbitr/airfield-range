@@ -13,13 +13,13 @@ domain_admin_password: "Simspace1!Simspace1!"
 
 # --- Auto-login (shared password across every workstation) ---
 # Per-host `logon_user` in host_vars maps each workstation to its notional
-# occupant from DomainUsers (see group_vars/{vcab,flightops}.yml). The
+# occupant from DomainUsers (see group_vars/{blackstone,fops}.yml). The
 # `autologin` role uses these to seed HKLM\...\Winlogon Default* keys so
 # analysts opening an RDP session don't get a login prompt.
 logon_user_password: "{{ domain_admin_password }}"
 
 # --- Enterprise squid proxy ----------------------------------
-# bs-proxy runs squid on 172.31.2.15:3128 (Services subnet, vcab.lan).
+# bs-proxy runs squid on 172.31.2.15:3128 (Services subnet, blackstone.mil).
 # Referenced by the customer `squid` role's proxy.conf.j2 for downstream
 # hosts that want an in-scenario HTTP/HTTPS proxy. Distinct from
 # inet_proxy_addr (10.255.240.1:3128 -- SimSpace mgmt-plane egress used
@@ -64,7 +64,7 @@ global_dns_records:
 # chrony.conf / w32time points at this IP. PDC-emulator on each
 # domain syncs to bs-ntp and is authoritative for its domain.
 ntp_server_ip: "172.31.2.6"        # planned bs-ntp (Services /24)
-ntp_server_hostname: "bs-ntp.vcab.lan"
+ntp_server_hostname: "bs-ntp.blackstone.mil"
 
 # --- Central syslog collector --------------------------------
 # soc-syslog runs rsyslog (UDP+TCP 514) and forwards to the SIEM.
@@ -100,14 +100,14 @@ indices:
   - name: "linux"       # Linux syslog (Ubuntu hosts)
   - name: "netfw"       # pfSense + VyOS syslog (relayed by soc-syslog UF)
   - name: "ot"          # OT historian + audit DB events (when fuel/power tiers land)
-  - name: "wec"         # Windows Event Collector subscriptions (vcab + flightops)
+  - name: "wec"         # Windows Event Collector subscriptions (blackstone + fops)
 
 # --- WEC collectors (Windows Event Collectors) ---------------
 # Two: one per domain. Domain members forward to their domain's WEC.
-wec_vcab_ip: "172.31.2.17"         # bs-wec (Services)
-wec_flightops_ip: "172.31.3.20"    # fops-wec01 (Flight-Ops-Services)
+wec_blackstone_ip: "172.31.2.17"         # bs-wec (Services)
+wec_fops_ip: "172.31.3.20"    # fops-wec01 (Flight-Ops-Services)
 
-# --- Cross-forest trust secret (vcab.lan ↔ flightops.lan) ----
+# --- Cross-forest trust secret (blackstone.mil ↔ fops.blackstone.mil) ----
 # Same secret used on both sides of the one-way external trust.
 # Rotate before any deployment that simulates real adversary behavior.
 ad_trust_secret: "Airfield-Trust-2026!"

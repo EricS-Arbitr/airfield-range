@@ -1,15 +1,15 @@
 # ============================================================
-# JCTE vCity Military Airfield Cyber Range — Ansible Inventory
+# Blackstone Auxiliary Field Cyber Range — Ansible Inventory
 # ============================================================
 # Source: WORK_DIR/ARBITR_MB_011.yml (79 VmInstances)
-# Domains: vcab.lan (enterprise) · flightops.lan (flight ops)
+# Domains: blackstone.mil (enterprise) · fops.blackstone.mil (flight ops)
 # Mgmt plane: 10.255.240.0/20 — ansible_host = mgmt IP (per host_vars)
 # ============================================================
 
 # ------------------------------------------------------------
-# Enterprise (vcab.lan) — workstations
+# Enterprise (blackstone.mil, forest root) — workstations
 # ------------------------------------------------------------
-[vcab_hq]
+[blackstone_hq]
 bs-hq01
 bs-hq02
 bs-hq03
@@ -17,46 +17,46 @@ bs-hq04
 bs-hq05
 bs-hq06
 
-[vcab_it]
+[blackstone_it]
 bs-it01
 bs-it02
 bs-it03
 bs-it04
 bs-it05
 
-[vcab_supply]
+[blackstone_supply]
 bs-supply01
 bs-supply02
 bs-supply03
 bs-supply04
 bs-supply05
 
-[vcab_workstations:children]
-vcab_hq
-vcab_it
-vcab_supply
+[blackstone_workstations:children]
+blackstone_hq
+blackstone_it
+blackstone_supply
 
 # ------------------------------------------------------------
-# Enterprise (vcab.lan) — servers
+# Enterprise (blackstone.mil, forest root) — servers
 # ------------------------------------------------------------
-[vcab_dcs]
+[blackstone_dcs]
 bs-dc01
 bs-dc02
 
-[pdc_vcab]
+[pdc_blackstone]
 bs-dc01
 
-[additional_dc_vcab]
+[additional_dc_blackstone]
 bs-dc02
 
-[vcab_file]
+[blackstone_file]
 bs-file01
 bs-file02
 
-[vcab_wec]
+[blackstone_wec]
 bs-wec
 
-[vcab_services]
+[blackstone_services]
 bs-dc01
 bs-dc02
 bs-file01
@@ -64,17 +64,17 @@ bs-file02
 bs-wec
 bs-proxy
 
-# Windows Engineering + SOC workstations joining vcab.lan (per CLAUDE.md §4
+# Windows Engineering + SOC workstations joining blackstone.mil (per CLAUDE.md §4
 # best-judgment, confirmed 2026-06-25). Linux engineering (bs-eng05/06) +
 # Linux SOC servers (soc-elastic/soc-syslog/soc-tools) intentionally NOT
 # in these groups — they don't AD-join.
-[vcab_engineering]
+[blackstone_engineering]
 bs-eng01
 bs-eng02
 bs-eng03
 bs-eng04
 
-[vcab_soc]
+[blackstone_soc]
 soc-analyst01
 soc-analyst02
 soc-analyst03
@@ -82,14 +82,14 @@ soc-analyst04
 soc-analyst05
 soc-analyst06
 
-[vcab:children]
-vcab_workstations
-vcab_services
-vcab_engineering
-vcab_soc
+[blackstone:children]
+blackstone_workstations
+blackstone_services
+blackstone_engineering
+blackstone_soc
 
 # ------------------------------------------------------------
-# Flight Ops (flightops.lan) — workstations
+# Flight Ops (fops.blackstone.mil, child domain) — workstations
 # ------------------------------------------------------------
 # Flight Control Center: ATC + weather + dispatch
 [flight_control_center]
@@ -101,7 +101,7 @@ fops-flight02
 fops-flight03
 fops-flight04
 
-[flightops_users]
+[fops_users]
 fops-ops01
 fops-ops02
 fops-ops03
@@ -111,36 +111,36 @@ fops-ops06
 fops-ops07
 fops-ops08
 
-[flightops_workstations:children]
+[fops_workstations:children]
 flight_control_center
-flightops_users
+fops_users
 
 # ------------------------------------------------------------
-# Flight Ops (flightops.lan) — servers
+# Flight Ops (fops.blackstone.mil, child domain) — servers
 # ------------------------------------------------------------
-[flightops_dcs]
+[fops_dcs]
 fops-dc01
 fops-dc02
 
-[pdc_flightops]
+[pdc_fops]
 fops-dc01
 
-[additional_dc_flightops]
+[additional_dc_fops]
 fops-dc02
 
-[flightops_file]
+[fops_file]
 fops-file01
 fops-file02
 
-[flightops_wec]
+[fops_wec]
 fops-wec01
 
-[flightops_app]
+[fops_app]
 fops-app01
 fops-app02
 fops-app03
 
-[flightops_services]
+[fops_services]
 fops-dc01
 fops-dc02
 fops-file01
@@ -150,9 +150,9 @@ fops-app01
 fops-app02
 fops-app03
 
-[flightops:children]
-flightops_workstations
-flightops_services
+[fops:children]
+fops_workstations
+fops_services
 
 # ------------------------------------------------------------
 # Engineering Control Center — domain membership TBD (CLAUDE.md §4)
@@ -321,8 +321,8 @@ fops-dc01
 bs-dc02
 fops-dc02
 
-# Windows hosts that join vcab.lan
-[members_vcab]
+# Windows hosts that join blackstone.mil
+[members_blackstone]
 bs-hq01
 bs-hq02
 bs-hq03
@@ -342,12 +342,12 @@ bs-supply05
 bs-file01
 bs-file02
 bs-wec
-# Engineering Win hosts (Eng = vcab.lan, confirmed 2026-06-25)
+# Engineering Win hosts (Eng = blackstone.mil, confirmed 2026-06-25)
 bs-eng01
 bs-eng02
 bs-eng03
 bs-eng04
-# SOC Win analysts (SOC = vcab.lan, confirmed 2026-06-25)
+# SOC Win analysts (SOC = blackstone.mil, confirmed 2026-06-25)
 soc-analyst01
 soc-analyst02
 soc-analyst03
@@ -355,8 +355,8 @@ soc-analyst04
 soc-analyst05
 soc-analyst06
 
-# Windows hosts that join flightops.lan
-[members_flightops]
+# Windows hosts that join fops.blackstone.mil
+[members_fops]
 fops-flight01
 fops-flight02
 fops-flight03
@@ -578,14 +578,14 @@ soc-analyst06
 # Roll-ups
 # ------------------------------------------------------------
 [workstations:children]
-vcab_workstations
-flightops_workstations
+blackstone_workstations
+fops_workstations
 engineering_workstations
 soc_analysts
 
 [servers:children]
-vcab_services
-flightops_services
+blackstone_services
+fops_services
 engineering_servers
 soc_servers
 dmz

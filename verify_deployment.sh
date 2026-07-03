@@ -149,7 +149,7 @@ check_pf_shell bs-ops-fw \
 # dhclient-poisoning failure mode (UPSTREAM_FIXES.md 2026-06-30) where FRR
 # reports `O>*` for a route (its "installed" marker) but the kernel FIB
 # doesn't actually have it. Compare the two views for 172.31.2.0/24
-# (the vcab-DC-reachability route from behind bs-ops-fw). Divergence here
+# (the blackstone-DC-reachability route from behind bs-ops-fw). Divergence here
 # would break Eng + SOC domain joins.
 check_pf_shell bs-ops-fw \
   'frr_installed=$(vtysh -c "show ip route" 2>/dev/null | grep "172.31.2.0/24" | grep -c ">"); kernel_has=$(netstat -rn -f inet 2>/dev/null | grep -c "^172.31.2.0"); if [ "$frr_installed" -ge 1 ] && [ "$kernel_has" -ge 1 ]; then echo "OK_MATCH frr=$frr_installed kernel=$kernel_has"; elif [ "$frr_installed" -ge 1 ] && [ "$kernel_has" -eq 0 ]; then echo "DIVERGENCE frr=$frr_installed kernel=0 (dhclient poisoning? see UPSTREAM_FIXES.md 2026-06-30)"; else echo "NO_ROUTE frr=$frr_installed kernel=$kernel_has"; fi' \
@@ -176,12 +176,12 @@ check_pf_shell bs-edge-fw \
   "bs-edge-fw eBGP session Established to bs-edge-rtr"
 
 # =========================================================================
-# 3. Active Directory — vcab.lan + flightops.lan
+# 3. Active Directory — blackstone.mil + fops.blackstone.mil
 # =========================================================================
 section "3. Active Directory"
 
 # simspace in Domain Admins on each forest
-for dc in bs-dc01:vcab.lan fops-dc01:flightops.lan; do
+for dc in bs-dc01:blackstone.mil fops-dc01:fops.blackstone.mil; do
   host="${dc%%:*}"; forest="${dc##*:}"
   check_ps "$host" \
     'Get-ADGroupMember "Domain Admins" | Where-Object { $_.Name -eq "simspace" } | Select-Object -ExpandProperty Name' \
@@ -190,34 +190,34 @@ for dc in bs-dc01:vcab.lan fops-dc01:flightops.lan; do
 done
 
 # Per-workstation domain users (one per Windows workstation, all in Domain
-# Admins -- see group_vars/{vcab,flightops}.yml DomainUsers lists).
-# vcab.lan expects >= 27 user members (simspace + 26 named workstation users);
-# flightops.lan expects >= 13 (simspace + 12 named). The builtin Administrator
+# Admins -- see group_vars/{blackstone,fops}.yml DomainUsers lists).
+# blackstone.mil expects >= 27 user members (simspace + 26 named workstation users);
+# fops.blackstone.mil expects >= 13 (simspace + 12 named). The builtin Administrator
 # is typically also a DA member -- the floor checks catch a partial create_users
 # run without false-failing on count drift.
 check_ps bs-dc01 \
   '$c=(Get-ADGroupMember "Domain Admins" -Recursive | Where-Object {$_.objectClass -eq "user"}).Count; if ($c -ge 27) {"OK_$c"} else {"LOW_$c"}' \
   '\(stdout\)[[:space:]]+OK_' \
-  "vcab.lan: >= 27 named users in Domain Admins (simspace + 26 workstation users)"
+  "blackstone.mil: >= 27 named users in Domain Admins (simspace + 26 workstation users)"
 
 check_ps fops-dc01 \
   '$c=(Get-ADGroupMember "Domain Admins" -Recursive | Where-Object {$_.objectClass -eq "user"}).Count; if ($c -ge 13) {"OK_$c"} else {"LOW_$c"}' \
   '\(stdout\)[[:space:]]+OK_' \
-  "flightops.lan: >= 13 named users in Domain Admins (simspace + 12 workstation users)"
+  "fops.blackstone.mil: >= 13 named users in Domain Admins (simspace + 12 workstation users)"
 
 # Spot-check one specific named user exists + enabled on each domain.
 # ahmed.ortega is a PowerPlant-roster name (validates the main path);
 # emma.rodriguez is one of the 5 names new to airfield-range (validates
-# the new-names branch in flightops.yml).
+# the new-names branch in fops.yml).
 check_ps bs-dc01 \
   'try { (Get-ADUser ahmed.ortega -Properties Enabled).Enabled } catch { "MISSING" }' \
   '\(stdout\)[[:space:]]+True' \
-  "vcab.lan: ahmed.ortega exists and is enabled (PowerPlant-roster user)"
+  "blackstone.mil: ahmed.ortega exists and is enabled (PowerPlant-roster user)"
 
 check_ps fops-dc01 \
   'try { (Get-ADUser emma.rodriguez -Properties Enabled).Enabled } catch { "MISSING" }' \
   '\(stdout\)[[:space:]]+True' \
-  "flightops.lan: emma.rodriguez exists and is enabled (new airfield-range user)"
+  "fops.blackstone.mil: emma.rodriguez exists and is enabled (new airfield-range user)"
 
 # Both additional DCs promoted (PartOfDomain == True)
 for adc in bs-dc02 fops-dc02; do
@@ -227,19 +227,19 @@ for adc in bs-dc02 fops-dc02; do
     "$adc: PartOfDomain True (additional DC promoted)"
 done
 
-# Cross-forest trust — outgoing on vcab, incoming on flightops
+# Parent-child trust auto-established (blackstone.mil root <-> fops.blackstone.mil child)
 check_ps bs-dc01 \
   'Get-ADTrust -Filter * | Select-Object -ExpandProperty Target' \
   '\(stdout\)[^|]*flightops\.lan' \
-  "Cross-forest trust on vcab side (outgoing to flightops.lan)"
+  "Cross-forest trust on vcab side (outgoing to fops.blackstone.mil)"
 
 check_ps fops-dc01 \
   'Get-ADTrust -Filter * | Select-Object -ExpandProperty Target' \
   '\(stdout\)[^|]*vcab\.lan' \
-  "Cross-forest trust on flightops side (incoming from vcab.lan)"
+  "Cross-forest trust on flightops side (incoming from blackstone.mil)"
 
 # Member join counts (each host echoes True/False to its stdout)
-for grp in members_vcab members_flightops; do
+for grp in members_blackstone members_fops; do
   total=$(n_hosts "$grp")
   joined=$(count_ps_predicate "$grp" \
     '(Get-WmiObject Win32_ComputerSystem).PartOfDomain' \
@@ -264,7 +264,7 @@ done
 # =========================================================================
 section "4. File services"
 
-for dc in bs-dc01:vcab.lan fops-dc01:flightops.lan; do
+for dc in bs-dc01:blackstone.mil fops-dc01:fops.blackstone.mil; do
   host="${dc%%:*}"; forest="${dc##*:}"
   check_ps "$host" \
     'Get-GPO -All | Where-Object { $_.DisplayName -eq "Mapped Network Drives" } | Select-Object -ExpandProperty DisplayName' \
@@ -272,7 +272,7 @@ for dc in bs-dc01:vcab.lan fops-dc01:flightops.lan; do
     "$forest: 'Mapped Network Drives' GPO exists"
 done
 
-for fs in bs-file01:vcab.lan fops-file01:flightops.lan; do
+for fs in bs-file01:blackstone.mil fops-file01:fops.blackstone.mil; do
   host="${fs%%:*}"; forest="${fs##*:}"
   check_ps "$host" \
     'Get-SmbShare -Name "Share" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name' \
@@ -354,12 +354,12 @@ check_pf_shell soc-splunk \
 check_ps bs-hq01 \
   '(Get-Service SplunkForwarder -ErrorAction SilentlyContinue).Status' \
   '\(stdout\)[[:space:]]+Running' \
-  "bs-hq01 (vcab): SplunkForwarder service running"
+  "bs-hq01 (blackstone): SplunkForwarder service running"
 
 check_ps fops-ops01 \
   '(Get-Service SplunkForwarder -ErrorAction SilentlyContinue).Status' \
   '\(stdout\)[[:space:]]+Running' \
-  "fops-ops01 (flightops): SplunkForwarder service running"
+  "fops-ops01 (fops): SplunkForwarder service running"
 
 # Sysmon service spot checks — proves the sysmon role landed the config +
 # started Sysmon64 service. Sysmon events land in index=sysmon via the UF's
@@ -367,12 +367,12 @@ check_ps fops-ops01 \
 check_ps bs-hq01 \
   '(Get-Service Sysmon64 -ErrorAction SilentlyContinue).Status' \
   '\(stdout\)[[:space:]]+Running' \
-  "bs-hq01 (vcab): Sysmon64 service running"
+  "bs-hq01 (blackstone): Sysmon64 service running"
 
 check_ps fops-ops01 \
   '(Get-Service Sysmon64 -ErrorAction SilentlyContinue).Status' \
   '\(stdout\)[[:space:]]+Running' \
-  "fops-ops01 (flightops): Sysmon64 service running"
+  "fops-ops01 (fops): Sysmon64 service running"
 
 # =========================================================================
 # 7. Enterprise services — root certs, AUE lockdown, autologin, squid, global_dns
@@ -384,27 +384,27 @@ section "7. Enterprise services"
 check_ps bs-hq01 \
   'if (Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue | Where-Object {$_.Subject -match "SimSpace|root_ca|simspace"}) { "PRESENT" } else { "MISSING" }' \
   '\(stdout\)[[:space:]]+PRESENT' \
-  "bs-hq01 (vcab): SimSpace root CA installed in Trusted Root store"
+  "bs-hq01 (blackstone): SimSpace root CA installed in Trusted Root store"
 
 # AUE lockdown -- disable_uac role sets EnableLUA=0
 check_ps bs-hq01 \
   '(Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -ErrorAction SilentlyContinue).EnableLUA' \
   '\(stdout\)[[:space:]]+0' \
-  "bs-hq01 (vcab): UAC disabled (proves disable_uac / AUE lockdown ran)"
+  "bs-hq01 (blackstone): UAC disabled (proves disable_uac / AUE lockdown ran)"
 
 # autologin role sets DefaultUserName in Winlogon to the host's logon_user
 # (host_vars mapping: bs-hq01 -> ahmed.ortega).
 check_ps bs-hq01 \
   '(Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -ErrorAction SilentlyContinue).DefaultUserName' \
   '\(stdout\)[[:space:]]+ahmed\.ortega' \
-  "bs-hq01 (vcab): autologin configured for ahmed.ortega"
+  "bs-hq01 (blackstone): autologin configured for ahmed.ortega"
 
 # Chrome role installed the browser. Test-Path is more portable than
 # Get-ItemProperty for install detection.
 check_ps bs-hq01 \
   'if (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe") { "INSTALLED" } elseif (Test-Path "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") { "INSTALLED" } else { "MISSING" }' \
   '\(stdout\)[[:space:]]+INSTALLED' \
-  "bs-hq01 (vcab): Chrome installed (proves chrome / AUE ran)"
+  "bs-hq01 (blackstone): Chrome installed (proves chrome / AUE ran)"
 
 # bs-proxy — squid service active + listening on :3128
 check_pf_shell bs-proxy \
@@ -419,7 +419,7 @@ check_pf_shell bs-proxy \
 
 # is-inet global_dns -- unbound should resolve www.faa.gov to the value
 # in group_vars/all.yml global_dns_records (70.39.65.10). Resolves via
-# soc-syslog's configured DNS (vcab DCs -> 8.8.8.8 forwarder alias ->
+# soc-syslog's configured DNS (blackstone DCs -> 8.8.8.8 forwarder alias ->
 # is-inet unbound). Fall back to getent (nss) if dig isn't installed.
 check_pf_shell soc-syslog \
   'r=$(getent hosts www.faa.gov 2>/dev/null | awk "{print \$1}"); [ "$r" = "70.39.65.10" ] && echo "OK_$r" || echo "GOT_$r"' \

@@ -15,7 +15,7 @@
 
 # --- Domain / OS ---------------------------------------------
 vault_simspace_password:        "Simspace1!Simspace1!"
-vault_ad_trust_secret:          "TRUST_SECRET_PLACEHOLDER"
+blackstone_forest_root_password:          "TRUST_SECRET_PLACEHOLDER"
 
 # --- OT ------------------------------------------------------
 vault_openplc_admin_password:   "OPENPLC_ROTATE_ME"

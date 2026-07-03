@@ -1,9 +1,9 @@
 ---
-# host_vars/bs-core-rtr.yml — VyOS router (vcab core, AS 65001 OSPF area 0)
+# host_vars/bs-core-rtr.yml — VyOS router (blackstone core, AS 65001 OSPF area 0)
 # Image:   RC-VyOS-Router:1.1.0
 # Mgmt:    10.255.240.165/20 (position LAST → eth6; SimSpace-managed)
 #
-# Role: vcab enterprise core. OSPF area 0 on every interface (corp /24
+# Role: blackstone enterprise core. OSPF area 0 on every interface (corp /24
 # LANs + transit /30s); static default toward bs-edge-fw for the outbound
 # path. No BGP (eBGP is at the WAN edge only — see bs-edge-rtr / bs-edge-fw).
 ansible_host: "10.255.240.165"

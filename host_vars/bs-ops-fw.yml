@@ -16,7 +16,7 @@
 ansible_host: "10.255.240.155"
 
 pfsense_hostname: "bs-ops-fw"
-pfsense_domain: "vcab.lan"
+pfsense_domain: "blackstone.mil"
 
 pfsense_interfaces:
   - descr: "SWITCH_3"               # vmx1 — OSPF transit to bs-ops-rtr

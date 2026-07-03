@@ -2,7 +2,7 @@
 # ============================================================
 # soc.yml — SOC enclave (172.31.7.0/24)
 # ============================================================
-# Domain membership TBD (CLAUDE.md §4 — best-judgment vcab.lan).
+# Domain membership TBD (CLAUDE.md §4 — best-judgment blackstone.mil).
 # Hosts split into:
 #   [soc_analysts]  — Win11 analyst workstations
 #   [soc_servers]   — soc-syslog, soc-splunk, soc-elastic
@@ -27,5 +27,5 @@ soc_openvas_ip: "172.31.7.16"     # vuln scanner
 
 # --- WEC subscription targets (Windows Event Collection) ----
 # bs-wec / fops-wec01 collect domain-side events; both forward into the SIEM.
-wec_collector_vcab_ip:      "{{ wec_vcab_ip }}"
-wec_collector_flightops_ip: "{{ wec_flightops_ip }}"
+wec_collector_blackstone_ip:      "{{ wec_blackstone_ip }}"
+wec_collector_fops_ip: "{{ wec_fops_ip }}"

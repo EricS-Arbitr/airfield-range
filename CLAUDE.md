@@ -1,7 +1,7 @@
-# CLAUDE.md — JCTE vCity Military Airfield Cyber Range
+# CLAUDE.md — Blackstone Auxiliary Field Cyber Range
 
 Cross-cutting contract for building this project with Claude Code. Aligned to the **JCTE vCity Military Base
-network map (Baseline DEV v21, domains `vcab.lan` / `flightops.lan`)**, with the project owner's decisions
+network map (Baseline DEV v21, domains `blackstone.mil` / `fops.blackstone.mil`)**, with the project owner's decisions
 applied (see §3). The map is authoritative for topology/zones/production-addressing; this file encodes that
 plus the owner's overrides, conventions, and guardrails. Per-subsystem detail lives in `build-sheets/`.
 Authority order: **owner decisions (§3) → map → CLAUDE.md → build sheet**. Build sheets that predate these
@@ -21,7 +21,7 @@ Everything **deploys and re-deploys via Ansible**, idempotently, resetting to kn
 ## 2. Scope
 
 Foundation: Vyatta/VyOS backbone + **pfSense** firewalls, DMZ, range services, the control plane, and a
-**multi-tier Active Directory** across `vcab.lan` and `flightops.lan` (§4); blue-team SOC instrumentation.
+**multi-tier Active Directory** across `blackstone.mil` and `fops.blackstone.mil` (§4); blue-team SOC instrumentation.
 
 Five bespoke systems (mapped to enclaves in §7):
 1. **Weather radar** — 2 days of recorded weather data fed in and visualized (Flight Control Center).
@@ -56,10 +56,10 @@ Two domains, separated by function:
 
 | Domain | Role | DCs | Member enclaves |
 |---|---|---|---|
-| `vcab.lan` | Enterprise / base | `bs-dc01` `172.31.2.7`, `bs-dc02` `172.31.2.8` | Services, Headquarters, IT, Supply; (Engineering, Security/SOC — best-judgment, confirm) |
-| `flightops.lan` | Flight operations | `bs-ops-dc01` `172.31.3.10`, `bs-ops-dc02` `172.31.3.12` | Flight-Ops-Services, Flight-Control-Center, Flight-Ops-Users |
+| `blackstone.mil` | Enterprise / base | `bs-dc01` `172.31.2.7`, `bs-dc02` `172.31.2.8` | Services, Headquarters, IT, Supply; (Engineering, Security/SOC — best-judgment, confirm) |
+| `fops.blackstone.mil` | Flight operations | `bs-ops-dc01` `172.31.3.10`, `bs-ops-dc02` `172.31.3.12` | Flight-Ops-Services, Flight-Control-Center, Flight-Ops-Users |
 
-- **Trust** between the domains (direction TBD; best-judgment `flightops.lan` → `vcab.lan`).
+- **Trust** between the domains is automatic and bidirectional — `fops.blackstone.mil` is a **child domain** in the same AD forest as `blackstone.mil` (forest root). No manual cross-forest trust setup needed; parent/child trust is built-in and transitive. Users in either domain can authenticate to resources in the other by default.
 - **Tiered admin overlay (recommended):** Tier 0 DCs/identity, Tier 1 member servers, Tier 2 workstations.
   Windows Event Collectors (`bs-wec1 172.31.2.17`, `bs-ops-wec1 172.31.3.17`) forward to the SOC SIEM — keep
   that the audited log path.
@@ -72,9 +72,9 @@ Two domains, separated by function:
 ```
 INTERNET ──199.252.163.0/30── bs-edge-rtr(VyOS) ── bs-edge-fw(pfSense) ──┬── DMZ (172.31.12.0/24)
                                                                          └──172.31.1.4/30── bs-core-rtr(VyOS)
-   bs-core-rtr ─┬─ Services / Headquarters / IT / Supply                       [vcab.lan ENTERPRISE CORE]
+   bs-core-rtr ─┬─ Services / Headquarters / IT / Supply                       [blackstone.mil ENTERPRISE CORE]
                 └─172.31.1.8/30─ bs-ops-rtr(VyOS)
-   bs-ops-rtr ──┬─ Flight-Ops-Services / Flight-Control-Center / Flight-Ops-Users   [flightops.lan]
+   bs-ops-rtr ──┬─ Flight-Ops-Services / Flight-Control-Center / Flight-Ops-Users   [fops.blackstone.mil]
                 └─172.31.1.12/30─ bs-ops-fw(pfSense)         ← L3.5 boundary, default-deny
    bs-ops-fw ───┬─ Engineering-Control-Center (172.31.8.0/24)                  [ENGINEERING]
                 ├─172.31.1.20/30─ bs-sec-rtr(VyOS) ─┬─ Physical-Security (172.31.11.0/24)
@@ -100,13 +100,13 @@ INTERNET ──199.252.163.0/30── bs-edge-rtr(VyOS) ── bs-edge-fw(pfSens
 | Enclave | CIDR | Domain | Key hosts |
 |---|---|---|---|
 | DMZ | `172.31.12.0/24` | — | ftp .6, www .3, smtp .4, ns1 .5 |
-| Services | `172.31.2.0/24` | vcab.lan | dc01 .7, dc02 .8, mail01 .6, file01 .10, file02 .11, wec1 .17 |
-| Headquarters | `172.31.14.0/24` | vcab.lan | 13× Win10 (.3–.15) |
-| IT | `172.31.15.0/24` | vcab.lan | 5× Win10 (.3–.7) |
-| Supply | `172.31.16.0/24` | vcab.lan | 7× Win10 (.3–.9) |
-| Flight-Ops-Services | `172.31.3.0/24` | flightops.lan | dc01 .10, dc02 .12, file01/02, wec1 .17, app01–03 |
-| Flight-Control-Center | `172.31.5.0/24` | flightops.lan | atc-radar .10, atc-weather .11, atc-station .14, flight01–05 |
-| Flight-Ops-Users | `172.31.6.0/24` | flightops.lan | 12× Win10 (.3–.14) |
+| Services | `172.31.2.0/24` | blackstone.mil | dc01 .7, dc02 .8, mail01 .6, file01 .10, file02 .11, wec1 .17 |
+| Headquarters | `172.31.14.0/24` | blackstone.mil | 13× Win10 (.3–.15) |
+| IT | `172.31.15.0/24` | blackstone.mil | 5× Win10 (.3–.7) |
+| Supply | `172.31.16.0/24` | blackstone.mil | 7× Win10 (.3–.9) |
+| Flight-Ops-Services | `172.31.3.0/24` | fops.blackstone.mil | dc01 .10, dc02 .12, file01/02, wec1 .17, app01–03 |
+| Flight-Control-Center | `172.31.5.0/24` | fops.blackstone.mil | atc-radar .10, atc-weather .11, atc-station .14, flight01–05 |
+| Flight-Ops-Users | `172.31.6.0/24` | fops.blackstone.mil | 12× Win10 (.3–.14) |
 | Engineering-Control-Center | `172.31.8.0/24` | (TBD) | 5× wkstns, RO historian replica `bs-ro-hist` .5 (optional, §3.5) |
 | Physical-Security | `172.31.11.0/24` | (TBD) | access points 1–4, access-ctlr .48 |
 | SOC | `172.31.7.0/24` | (TBD) | siem .15, syslog .13, openvas .16, analyst1–10 |
@@ -141,7 +141,7 @@ sequential assignment supersedes them.) Exact per-host control IPs live in `host
 
 `[map]` = host defined in the map; `[+]` = best-judgment addition inside the map's subnets.
 
-**Weather radar** — `flightops.lan`, Flight-Control-Center `172.31.5.0/24`:
+**Weather radar** — `fops.blackstone.mil`, Flight-Control-Center `172.31.5.0/24`:
 `bs-atc-weather` **[map]** `172.31.5.11` (NEXRAD replay + METAR/TAF); `[+]` feed/replay injector `.5.12`;
 displays on `atc-station .14` + flight wkstns `.3–.7`. Control `10.255.242.x`.
 
@@ -229,14 +229,14 @@ airfield-range/
 │                                  #   groups per enclave (see below); ansible_host = mgmt IP per host_vars
 ├── group_vars/
 │   ├── all.yml  vault.yml  net.yml
-│   ├── vcab.yml flightops.yml dmz.yml eng.yml soc.yml pacs.yml
+│   ├── blackstone.yml fops.yml dmz.yml eng.yml soc.yml pacs.yml
 │   └── fuel.yml power.yml weather.yml atc.yml
 ├── host_vars/                    # exact production + management IPs per host
 ├── playbooks/
 │   ├── 00-network.yml            # VyOS routers + pfSense firewalls FIRST
 │   ├── 10-foundation.yml         # NTP, both AD domains + trust, CA, DNS, DHCP
-│   ├── 20-enterprise.yml         # vcab: Services/HQ/IT/Supply, DMZ
-│   ├── 30-flightops.yml          # flightops: Services/FCC/Users (incl. ATC, weather)
+│   ├── 20-enterprise.yml         # blackstone: Services/HQ/IT/Supply, DMZ
+│   ├── 30-fops.yml               # fops: Services/FCC/Users (incl. ATC, weather)
 │   ├── 40-soc.yml                # SOC sensors, WEC subscriptions, Splunk indexer + UF rollout
 │   ├── 50-pacs.yml               # Leosac + door sims
 │   ├── 60-ot.yml                 # modbus-gw → MTU/HMI → PLCs → sims → in-enclave historians (fuel, power)
@@ -250,8 +250,8 @@ airfield-range/
 └── tests/acceptance/
 ```
 
-**Inventory groups:** `dmz`, `vcab_services`, `vcab_hq`, `vcab_it`, `vcab_supply`, `flightops_services`,
-`flight_control_center`, `flightops_users`, `engineering`, `physical_security`, `soc`, `ot_mtu`, `ot_fuel`,
+**Inventory groups:** `dmz`, `blackstone_services`, `blackstone_hq`, `blackstone_it`, `blackstone_supply`,
+`fops_services`, `flight_control_center`, `fops_users`, `engineering`, `physical_security`, `soc`, `ot_mtu`, `ot_fuel`,
 `ot_power`, `net`, `range`.
 
 **Deployment order** (`site.yml`): network → foundation (time, both AD domains + trust, CA, DNS, DHCP) →
@@ -292,16 +292,16 @@ ansible-vault edit group_vars/vault.yml
 **Resolved (§3):** control plane `10.255.240.0/20`; firewalls pfSense; power DNP3; OT segmented; historian
 in-enclave; Ubuntu 24.04 baseline; `.2` reserved; **routing model OSPF + eBGP + static (§3.8)**;
 **pfSense automation = `pfsensible.core` + `php -r` escape hatches, port `roles/pfsense_firewall` from
-PowerPlant (§3.9)**; **pfSense NIC position FIRST (§3.10)**; **AD trust direction = vcab.lan TRUSTS
-flightops.lan, asymmetric access (CLAUDE.md §4 / `group_vars/flightops.yml`)**; **role sourcing = copy
+PowerPlant (§3.9)**; **pfSense NIC position FIRST (§3.10)**; **AD trust direction = blackstone.mil TRUSTS
+fops.blackstone.mil, asymmetric access (CLAUDE.md §4 / `group_vars/fops.yml`)**; **role sourcing = copy
 into `airfield-range/roles/` (memory `project_airfield_role_sourcing`)**.
 
 **Still to confirm / do:**
 - **DNP3 library** — `dnp3-python`/pydnp3 (Python, on EOL opendnp3) vs Step Function I/O `dnp3` (Rust, TLS,
   no Python). Pick before the power build.
-- **AD details still TBD** — domain membership of Engineering and Security/SOC (best-judgment vcab.lan);
-  AD trust **type** (external vs forest — `group_vars/flightops.yml` currently set to external, incoming);
-  cross-forest "specifically permitted corp→flightops" mechanism (FSPs / Shadow Principals / local accounts);
+- **AD details still TBD** — domain membership of Engineering and Security/SOC (best-judgment blackstone.mil);
+  AD trust **type** (external vs forest — `group_vars/fops.yml` currently set to external, incoming);
+  cross-domain access-control model (default is transitive parent/child, so any restriction is an explicit deny at the resource ACL layer);
   whether the tiered-admin overlay is in scope.
 - **`--tags reset` scope** — data-only (TRUNCATE audit DB, wipe historian buckets, reset replay state) vs
   also-config (DROP+CREATE database, regenerate certs, re-init OpenPLC programs).
@@ -328,8 +328,8 @@ into `airfield-range/roles/` (memory `project_airfield_role_sourcing`)**.
 | Subsystem | Enclave | Protocol | Subnet(s) | Build sheet |
 |---|---|---|---|---|
 | Network backbone | net | — | `172.31.1.x/30`, `199.252.163.0/30` | pending |
-| AD / enterprise (vcab.lan) | Services/HQ/IT/Supply | — | `172.31.2/14/15/16.0/24` | pending |
-| Flight ops (flightops.lan) | FOS/FCC/Users | — | `172.31.3/5/6.0/24` | pending |
+| AD / enterprise (blackstone.mil) | Services/HQ/IT/Supply | — | `172.31.2/14/15/16.0/24` | pending |
+| Flight ops (fops.blackstone.mil) | FOS/FCC/Users | — | `172.31.3/5/6.0/24` | pending |
 | SOC / NSM | SOC | — | `172.31.7.0/24` | pending |
 | **Weather radar** | Flight Control Center | NEXRAD/METAR replay | `172.31.5.0/24` | pending |
 | **ATC / flight data** | Flight Control Center | ADS-B replay | `172.31.5.0/24` | pending |

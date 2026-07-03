@@ -1,19 +1,24 @@
 ---
 # ============================================================
-# flightops.yml — flightops.lan domain configuration
+# fops.yml — fops.blackstone.mil child-domain configuration
 # ============================================================
-# Applies to: [flightops] (workstations + services).
-# Trust direction (CLAUDE.md §4): vcab.lan TRUSTS flightops.lan (one-way,
-# outgoing on vcab). flightops users access vcab resources by default;
-# vcab users default-denied into flightops.
+# Applies to: [fops] (workstations + services). Child domain of the
+# blackstone.mil forest root -- see group_vars/blackstone.yml. Parent/child
+# trust is automatic and bidirectional in a single AD forest; there is NO
+# manual cross-forest trust setup (removed in the blackstone rebrand --
+# the earlier vcab.lan / fops.blackstone.mil two-forest design used an
+# explicit external trust, which is unnecessary in a single-forest
+# parent/child arrangement).
 # ============================================================
-domain_name: "flightops.lan"
-short_domain_name: "flightops"
-domain_tld_name: "lan"
+domain_name: "fops.blackstone.mil"
+short_domain_name: "fops"
+# Parent domain (needed by dcpromo to create the child domain via
+# Install-ADDSDomain -DomainType ChildDomain -ParentDomainName ...).
+parent_domain_name: "blackstone.mil"
 
 # --- Domain controllers (PDC emulator listed first) ----------
-domain_controllers_flightops:
-  - { name: "fops-dc01", ip: "172.31.3.11" }    # PDC emulator
+domain_controllers_fops:
+  - { name: "fops-dc01", ip: "172.31.3.11" }    # PDC emulator for fops.blackstone.mil
   - { name: "fops-dc02", ip: "172.31.3.12" }
 
 # --- File share ----------------------------------------------
@@ -22,7 +27,7 @@ file_server_ip: "172.31.3.15"                   # fops-file01
 share_name: "Share"
 share_path: "C:\\Shares\\Share"
 map_drive_letter: "F"
-map_drive_path: "\\\\fops-file01.flightops.lan\\Share"
+map_drive_path: "\\\\fops-file01.fops.blackstone.mil\\Share"
 
 # --- DNS records (skeleton) ---------------------------------
 internal_dns_records:
@@ -39,22 +44,13 @@ internal_dns_records:
   - { name: "fops-app02",  type: "A", value: "172.31.3.31", zone: "{{ domain_name }}" }
   - { name: "fops-app03",  type: "A", value: "172.31.3.32", zone: "{{ domain_name }}" }
 
-# --- Cross-forest trust to vcab.lan -------------------------
-# Implementation: external, one-way, outgoing trust on vcab → incoming on
-# flightops. Wired by the trust-setup play; vault holds the trust secret.
-ad_trust:
-  partner_domain: "vcab.lan"
-  type: "external"
-  direction: "incoming"             # flightops is the TRUSTED domain
-  trust_secret: "{{ vault_ad_trust_secret }}"
-
 # --- Domain users (one per workstation, matches PowerPlant pattern) ----
-# See group_vars/vcab.yml for the convention rationale: one user per
+# See group_vars/blackstone.yml for the convention rationale: one user per
 # workstation, all in Domain Admins (PowerPlant lab posture), shared
 # password via `domain_admin_password`. PowerPlant's roster supplies the
 # first 7 here; the last 5 (amir.patel ... emma.rodriguez) are new to
-# airfield-range because flightops has 12 workstations and we exhausted
-# the PowerPlant list after 33 names (26 spent on vcab).
+# blackstone-range because fops has 12 workstations and we exhausted the
+# PowerPlant list after 33 names (26 spent on blackstone).
 DomainUsers:
   - name: "simspace"
     fullname: "SimSpace Admin"
@@ -71,7 +67,7 @@ DomainUsers:
   - { name: "roxanne.farley",      fullname: "Roxanne Farley",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops01
   - { name: "sean.wilkinson",      fullname: "Sean Wilkinson",      password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops02
   - { name: "tessa.church",        fullname: "Tessa Church",        password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops03
-  - { name: "amir.patel",          fullname: "Amir Patel",          password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops04 (new — not in PowerPlant roster)
+  - { name: "amir.patel",          fullname: "Amir Patel",          password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops04 (new -- not in PowerPlant roster)
   - { name: "bianca.olson",        fullname: "Bianca Olson",        password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops05 (new)
   - { name: "chloe.nguyen",        fullname: "Chloe Nguyen",        password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops06 (new)
   - { name: "darius.washington",   fullname: "Darius Washington",   password: "{{ domain_admin_password }}", groups: ["Domain Admins"] }  # fops-ops07 (new)

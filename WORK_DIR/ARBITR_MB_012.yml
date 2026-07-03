@@ -282,32 +282,20 @@ resources:
     managementInterface:
       ipAddress: "10.255.240.117"
       position: "FIRST"
+- type: "range.resource.configuration.VmConfiguration::1.0.0"
+  name: "deploy-script-execution"
+  dependsOn:
+  - "download-range-vars"
+  properties:
+    selector:
+      matchInstances:
+      - "ansible"
+    configurationResources:
+    - name: "deploy-script"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "control-10"
   properties:
     cidr: "10.10.0.0/16"
-- type: "range.resource.configuration.ScriptDefinition::1.0.0"
-  name: "download-range-vars-script"
-  properties:
-    cwd: "/etc/ansible"
-    user: "root"
-    content: "wget --no-check-certificate --no-cache -e use_proxy=yes -e https_proxy=10.255.240.1:3128\
-      \ -O /etc/ansible/ab_mb.tgz  https://github.com/EricS-Arbitr/airfield-range/raw/main/ab_mb.tgz\
-      \ && tar -xvzf ab_mb.tgz\n"
-    scriptType: "BASH"
-- type: "range.resource.primitive.VmInstance::1.0.0"
-  name: "fuel-hist"
-  metadata: {}
-  properties:
-    image: "global/RDP_Ubuntu_Server_22.04.5:1.1.0"
-    networkInterfaces:
-    - name: "Fuel-Sim"
-      ipAddress: "172.16.46.18"
-      prefix: 24
-    hostname: "fuel-hist"
-    managementInterface:
-      ipAddress: "10.255.240.118"
-      position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-eng02"
   metadata: {}
@@ -359,16 +347,28 @@ resources:
     managementInterface:
       ipAddress: "10.255.240.122"
       position: "FIRST"
-- type: "range.resource.configuration.VmConfiguration::1.0.0"
-  name: "deploy-script-execution"
-  dependsOn:
-  - "download-range-vars"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "fuel-hist"
+  metadata: {}
   properties:
-    selector:
-      matchInstances:
-      - "ansible"
-    configurationResources:
-    - name: "deploy-script"
+    image: "global/RDP_Ubuntu_Server_22.04.5:1.1.0"
+    networkInterfaces:
+    - name: "Fuel-Sim"
+      ipAddress: "172.16.46.18"
+      prefix: 24
+    hostname: "fuel-hist"
+    managementInterface:
+      ipAddress: "10.255.240.118"
+      position: "FIRST"
+- type: "range.resource.configuration.ScriptDefinition::1.0.0"
+  name: "download-range-vars-script"
+  properties:
+    cwd: "/etc/ansible"
+    user: "root"
+    content: "wget --no-check-certificate --no-cache -e use_proxy=yes -e https_proxy=10.255.240.1:3128\
+      \ -O /etc/ansible/ab_mb.tgz  https://github.com/EricS-Arbitr/airfield-range/raw/main/ab_mb.tgz\
+      \ && tar -xvzf ab_mb.tgz\n"
+    scriptType: "BASH"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-hq03"
   metadata: {}
@@ -649,14 +649,6 @@ resources:
     managementInterface:
       ipAddress: "10.255.240.141"
       position: "FIRST"
-- type: "range.resource.configuration.VmConfiguration::1.0.0"
-  name: "download-range-vars"
-  properties:
-    selector:
-      matchInstances:
-      - "ansible"
-    configurationResources:
-    - name: "download-range-vars-script"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-app03"
   metadata: {}
@@ -755,6 +747,18 @@ resources:
   name: "switch-3"
   properties: {}
 - type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "bs-proxy"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    networkInterfaces:
+    - name: "Services"
+      ipAddress: "172.31.2.15"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.181"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
   name: "soc-analyst02"
   metadata: {}
   properties:
@@ -801,6 +805,14 @@ resources:
   name: "Engineering-Control-Center"
   properties:
     cidr: "172.31.8.0/24"
+- type: "range.resource.configuration.ScriptDefinition::1.0.0"
+  name: "deploy-script"
+  properties:
+    cwd: "/etc/ansible"
+    user: "root"
+    content: "./deploy.sh | tee /var/log/playbook_run.log\n"
+    timeout: 7200
+    scriptType: "BASH"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "fops-dc02"
   metadata: {}
@@ -905,14 +917,6 @@ resources:
     managementInterface:
       ipAddress: "10.255.240.158"
       position: "FIRST"
-- type: "range.resource.configuration.ScriptDefinition::1.0.0"
-  name: "deploy-script"
-  properties:
-    cwd: "/etc/ansible"
-    user: "root"
-    content: "./deploy.sh | tee /var/log/playbook_run.log\n"
-    timeout: 7200
-    scriptType: "BASH"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "bs-hq05"
   metadata: {}
@@ -1227,6 +1231,14 @@ resources:
     managementInterface:
       ipAddress: "10.255.240.179"
       position: "FIRST"
+- type: "range.resource.configuration.VmConfiguration::1.0.0"
+  name: "download-range-vars"
+  properties:
+    selector:
+      matchInstances:
+      - "ansible"
+    configurationResources:
+    - name: "download-range-vars-script"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "soc-splunk"
   metadata: {}

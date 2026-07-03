@@ -6,7 +6,7 @@
 # Enterprise-internal HTTP/HTTPS proxy. Runs the `squid` role (from
 # PowerPlant/range-development-ansible) and terminates the enterprise
 # outbound-proxy path on the production plane (172.31.2.0/24 Services).
-# Users' browsers point at bs-proxy.vcab.lan:3128 for lab-simulated
+# Users' browsers point at bs-proxy.blackstone.mil:3128 for lab-simulated
 # internet traffic. Distinct from `inet_proxy_addr` (10.255.240.1:3128)
 # which is the SimSpace platform's mgmt-plane egress used by Ansible for
 # nexus fetches -- never routed through bs-proxy per the CLAUDE.md
@@ -24,7 +24,7 @@ network_interfaces:
       address: "10.255.240.181"
       netmask: "255.255.240.0"
       gateway: ""
-  - name: "eth1"                     # production — vcab Services
+  - name: "eth1"                     # production — blackstone Services
     ipv4:
       type: "ethernet"
       address: "172.31.2.15"

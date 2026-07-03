@@ -371,7 +371,7 @@
 # can trigger a background interface refresh that drops a data-plane vmx
 # IP seconds-to-minutes AFTER the play ends. We've hit this 3+ times on
 # vmx1 (SWITCH_3) on bs-ops-fw, and each time Eng/SOC hosts then fail to
-# join vcab.lan with "domain not contacted" because the OSPF-learned route
+# join blackstone.mil with "domain not contacted" because the OSPF-learned route
 # can't install through an interface with no kernel IP.
 #
 # This play: brief settle pause + same rebind PHP, scheduled right before
@@ -429,18 +429,19 @@
     - strip_apipa
     - domain_member_retry
     - dcpromo
-    - join_vcab
-    - join_flightops
+    - join_blackstone
+    - join_fops
     - create_users
     - dns
 
 # =============================================================================
-# Foundation tier — Active Directory (vcab.lan + flightops.lan)
+# Foundation tier — Active Directory (blackstone.mil + fops.blackstone.mil)
 # =============================================================================
-# Two-domain build: bs-dc01 promotes vcab.lan, fops-dc01 promotes flightops.lan.
-# Each host in [pdc] picks up its own `domain_name` from group_vars/{vcab,
-# flightops}.yml via inventory-group precedence, so a single `hosts: pdc` play
-# fans out cleanly across both forests.
+# Two-domain build: bs-dc01 promotes blackstone.mil, fops-dc01 promotes fops.blackstone.mil.
+# Each host in [pdc] picks up its own `domain_name` from
+# group_vars/{blackstone,fops}.yml via inventory-group precedence, so a
+# single `hosts: pdc` play fans out cleanly across the parent forest root
+# (blackstone.mil) and the fops child domain (fops.blackstone.mil).
 
 - name: dcpromo
   hosts: pdc
@@ -467,7 +468,7 @@
     - dns
 
 # The customer's `dns` role creates AD zones and records but doesn't touch
-# DNS forwarders, so anything outside vcab.lan / flightops.lan is unresolvable
+# DNS forwarders, so anything outside blackstone.mil / fops.blackstone.mil is unresolvable
 # on the domain workstations. Point both DCs at is-inet's simulated public DNS
 # (unbound binds the 8.8.8.8 / 8.8.4.4 / 1.1.1.1 aliases on is-inet — see
 # PowerPlant ss-pp-ab/UPSTREAM_FIXES.md 2026-05-22 entry).
@@ -506,30 +507,30 @@
     - strip_apipa
 
 # Two Join Domain plays — one per forest. Each member host inherits its own
-# `domain_name` from the vcab/flightops group_vars (members_vcab hosts are
-# also in [vcab] via the vcab_workstations / vcab_services / vcab_engineering
-# / vcab_soc subgroups; members_flightops hosts similarly under [flightops]).
-- name: Join Domain — vcab.lan
-  hosts: members_vcab
+# `domain_name` from the blackstone/fops group_vars (members_blackstone hosts are
+# also in [blackstone] via the blackstone_workstations / blackstone_services / blackstone_engineering
+# / blackstone_soc subgroups; members_fops hosts similarly under [fops]).
+- name: Join Domain — blackstone.mil
+  hosts: members_blackstone
   gather_facts: false
   strategy: free                # each host joins + reboots independently
   roles:
     - domain_member_retry
   tags:
     - domain_member_retry
-    - join_vcab
+    - join_blackstone
 
-- name: Join Domain — flightops.lan
-  hosts: members_flightops
+- name: Join Domain — fops.blackstone.mil
+  hosts: members_fops
   gather_facts: false
   strategy: free                # each host joins + reboots independently
   roles:
     - domain_member_retry
   tags:
     - domain_member_retry
-    - join_flightops
+    - join_fops
 
-# Promotes bs-dc02 into vcab.lan and fops-dc02 into flightops.lan. The
+# Promotes bs-dc02 into blackstone.mil and fops-dc02 into fops.blackstone.mil. The
 # additional_dc role joins each VM as a workstation first (using its
 # domain_name from group_vars), then runs Install-ADDSDomainController.
 - name: Additional DC
@@ -586,7 +587,7 @@
 
 # Scrub any 10.255.240.0/20 A records that already snuck into AD DNS before
 # the strip_mgmt_dns play landed. Runs against both PDCs — each one targets
-# its own forest's zone (`vcab.lan` on bs-dc01, `flightops.lan` on fops-dc01)
+# its own forest's zone (`blackstone.mil` on bs-dc01, `fops.blackstone.mil` on fops-dc01)
 # via the per-host `domain_name`. PTR records in 240.255.10.in-addr.arpa are
 # scoped to whatever reverse zones the dns role created — we don't expect
 # any to be present yet, but log_only here to be safe.
@@ -639,23 +640,23 @@
 # GP replication propagates the GPO to every member at next login.
 # (Previously targeted `members_*` directly, which failed on every member
 #  with "Resource 'GroupPolicy' not found" / "Get-GPO not recognized".)
-- name: Mapped Drive — vcab.lan
-  hosts: pdc_vcab
+- name: Mapped Drive — blackstone.mil
+  hosts: pdc_blackstone
   gather_facts: false
   roles:
     - mapped_drive
   tags:
     - mapped_drive
-    - mapped_drive_vcab
+    - mapped_drive_blackstone
 
-- name: Mapped Drive — flightops.lan
-  hosts: pdc_flightops
+- name: Mapped Drive — fops.blackstone.mil
+  hosts: pdc_fops
   gather_facts: false
   roles:
     - mapped_drive
   tags:
     - mapped_drive
-    - mapped_drive_flightops
+    - mapped_drive_fops
 
 # =============================================================================
 # Windows-side polish (matches PowerPlant pattern, doubled for two forests)
@@ -767,29 +768,29 @@
     - autologin
 
 # =============================================================================
-# Cross-forest trust — vcab.lan TRUSTS flightops.lan (one-way external)
+# Cross-forest trust — blackstone.mil TRUSTS fops.blackstone.mil (one-way external)
 # =============================================================================
 # Asymmetric access pattern from CLAUDE.md §4:
 #   - flightops users authenticate against vcab resources (corp services)
 #   - vcab users are default-denied into flightops (selective exceptions later)
 # Trust object lives in BOTH forests:
-#   - on vcab.lan:    "Outgoing" trust toward flightops (vcab is TRUSTING)
-#   - on flightops.lan: "Incoming" trust from vcab (flightops is TRUSTED)
+#   - on blackstone.mil:    "Outgoing" trust toward flightops (vcab is TRUSTING)
+#   - on fops.blackstone.mil: "Incoming" trust from vcab (flightops is TRUSTED)
 # Both halves use the same `ad_trust_secret` (group_vars/all.yml).
 
 - name: Cross-forest trust — vcab side (TRUSTING)
-  hosts: pdc_vcab
+  hosts: pdc_blackstone
   gather_facts: false
   tasks:
-    # Prereq: bs-dc01 must be able to resolve flightops.lan for netdom to
-    # reach the partner PDC. vcab's DNS is authoritative for vcab.lan only,
-    # so we install a conditional forwarder pointing flightops.lan at
+    # Prereq: bs-dc01 must be able to resolve fops.blackstone.mil for netdom to
+    # reach the partner PDC. vcab's DNS is authoritative for blackstone.mil only,
+    # so we install a conditional forwarder pointing fops.blackstone.mil at
     # fops-dc01 (172.31.3.11). Without this, netdom fails with "The
     # specified domain either does not exist or could not be contacted."
-    - name: Ensure conditional DNS forwarder for flightops.lan exists
+    - name: Ensure conditional DNS forwarder for fops.blackstone.mil exists
       ansible.windows.win_powershell:
         script: |
-          $name = 'flightops.lan'
+          $name = 'fops.blackstone.mil'
           $master = '172.31.3.11'
           $z = Get-DnsServerZone -Name $name -ErrorAction SilentlyContinue
           if ($z) {
@@ -805,10 +806,10 @@
     # Forest.GetAllTrustRelationships() misses one-side-only trusts that
     # netdom can leave behind. Get-ADTrust queries trustedDomain objects
     # directly and catches the trust regardless of which API created it.
-    - name: Check whether trust toward flightops.lan already exists
+    - name: Check whether trust toward fops.blackstone.mil already exists
       ansible.windows.win_powershell:
         script: |
-          $t = Get-ADTrust -Filter 'Target -eq "flightops.lan"' -ErrorAction SilentlyContinue
+          $t = Get-ADTrust -Filter 'Target -eq "fops.blackstone.mil"' -ErrorAction SilentlyContinue
           if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
       register: vcab_trust_state
       changed_when: false
@@ -822,22 +823,22 @@
     # TrustDirection.Inbound on the trusting domain = "users from the
     # remote domain can access local resources". For vcab→flightops:
     #   vcab is the trusting/local domain; flightops users can access vcab.
-    - name: Add one-way trusting side on vcab.lan (vcab TRUSTS flightops)
+    - name: Add one-way trusting side on blackstone.mil (vcab TRUSTS flightops)
       ansible.windows.win_powershell:
         script: |
           try {
             $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
             $f.CreateLocalSideOfTrustRelationship(
-              'flightops.lan',
+              'fops.blackstone.mil',
               [System.DirectoryServices.ActiveDirectory.TrustDirection]::Inbound,
               '{{ ad_trust_secret }}'
             )
             $Ansible.Changed = $true
-            Write-Output "Created inbound trust on vcab.lan from flightops.lan"
+            Write-Output "Created inbound trust on blackstone.mil from fops.blackstone.mil"
           } catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectExistsException] {
             # Trust already existed (likely from a prior netdom run); no-op.
             $Ansible.Changed = $false
-            Write-Output "Trust already exists between vcab.lan and flightops.lan; skipping create"
+            Write-Output "Trust already exists between blackstone.mil and fops.blackstone.mil; skipping create"
           } catch {
             $Ansible.Failed = $true
             throw
@@ -848,15 +849,15 @@
     - trust_vcab
 
 - name: Cross-forest trust — flightops side (TRUSTED)
-  hosts: pdc_flightops
+  hosts: pdc_fops
   gather_facts: false
   tasks:
     # Mirror conditional forwarder on the flightops side — fops-dc01 must
-    # be able to resolve vcab.lan so netdom's other half can connect.
-    - name: Ensure conditional DNS forwarder for vcab.lan exists
+    # be able to resolve blackstone.mil so netdom's other half can connect.
+    - name: Ensure conditional DNS forwarder for blackstone.mil exists
       ansible.windows.win_powershell:
         script: |
-          $name = 'vcab.lan'
+          $name = 'blackstone.mil'
           $master = '172.31.2.7'
           $z = Get-DnsServerZone -Name $name -ErrorAction SilentlyContinue
           if ($z) {
@@ -869,10 +870,10 @@
             Write-Output "Created conditional forwarder $name -> $master"
           }
 
-    - name: Check whether trust from vcab.lan already exists
+    - name: Check whether trust from blackstone.mil already exists
       ansible.windows.win_powershell:
         script: |
-          $t = Get-ADTrust -Filter 'Target -eq "vcab.lan"' -ErrorAction SilentlyContinue
+          $t = Get-ADTrust -Filter 'Target -eq "blackstone.mil"' -ErrorAction SilentlyContinue
           if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
       register: fops_trust_state
       changed_when: false
@@ -881,21 +882,21 @@
     # access remote resources". For our trust (vcab trusts flightops):
     #   flightops is the trusted/local domain; flightops users can access
     #   vcab — i.e., outbound flow from flightops's perspective.
-    - name: Add one-way trusted side on flightops.lan (flightops is TRUSTED)
+    - name: Add one-way trusted side on fops.blackstone.mil (flightops is TRUSTED)
       ansible.windows.win_powershell:
         script: |
           try {
             $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
             $f.CreateLocalSideOfTrustRelationship(
-              'vcab.lan',
+              'blackstone.mil',
               [System.DirectoryServices.ActiveDirectory.TrustDirection]::Outbound,
               '{{ ad_trust_secret }}'
             )
             $Ansible.Changed = $true
-            Write-Output "Created outbound trust on flightops.lan to vcab.lan"
+            Write-Output "Created outbound trust on fops.blackstone.mil to blackstone.mil"
           } catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectExistsException] {
             $Ansible.Changed = $false
-            Write-Output "Trust already exists between flightops.lan and vcab.lan; skipping create"
+            Write-Output "Trust already exists between fops.blackstone.mil and blackstone.mil; skipping create"
           } catch {
             $Ansible.Failed = $true
             throw
@@ -947,7 +948,7 @@
 
 # Enterprise-internal HTTP/HTTPS proxy. bs-proxy runs the customer `squid`
 # role (Ubuntu Desktop 22.04, 172.31.2.15:3128, Services subnet). Downstream
-# hosts that want an in-scenario proxy point at proxy.vcab.lan:3128. Not
+# hosts that want an in-scenario proxy point at proxy.blackstone.mil:3128. Not
 # used for Ansible/apt egress -- that stays on the mgmt-plane
 # inet_proxy_addr (10.255.240.1:3128) per CLAUDE.md §8.
 - name: squid — enterprise HTTP/HTTPS proxy on bs-proxy
