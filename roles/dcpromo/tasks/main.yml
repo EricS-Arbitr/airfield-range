@@ -1,4 +1,26 @@
 ---
+# dcpromo — promote a Windows Server to a Domain Controller.
+#
+# Two modes, driven by whether `parent_domain_name` is set for the host:
+#
+#   1. FOREST ROOT (parent_domain_name is NOT defined)
+#      Uses microsoft.ad.domain to create a brand-new forest with the host
+#      as its first DC. Example: bs-dc01 becomes the forest root for
+#      blackstone.mil.
+#
+#   2. CHILD DOMAIN (parent_domain_name IS defined, e.g. fops.yml sets it
+#      to "blackstone.mil")
+#      Uses win_powershell to run Install-ADDSDomain -DomainType ChildDomain
+#      because microsoft.ad.domain doesn't expose the ChildDomain flag as of
+#      collection version 2.x. Example: fops-dc01 joins the existing
+#      blackstone.mil forest as a child, giving fops.blackstone.mil with
+#      automatic parent/child trust.
+#
+# Ordering: run this role against the forest root FIRST, then against the
+# child domain DC. site.yml enforces this by splitting into two plays:
+# `dcpromo (forest root)` targeting [pdc_blackstone], then `dcpromo (child
+# domain)` targeting [pdc_fops].
+
 - name: Install RSAT ADDS
   ansible.windows.win_feature:
     name: "rsat-ADDS"
@@ -8,10 +30,10 @@
   ansible.windows.win_feature:
     name: "rsat-DNS-Server"
     state: present
-    
+
 - name: local admin guest customization fix - Server 2019
   ansible.windows.win_shell: "net user administrator /passwordreq:yes"
-  
+
 - name: local admin guest customization fix - Server 2022
   ansible.windows.win_user:
     name: administrator
@@ -19,10 +41,62 @@
     password_never_expires: yes
     account_disabled: no
 
-- name: Create Primary Domain Controller
+# --- Mode 1: forest root ----------------------------------------------------
+- name: Create forest root domain (this host becomes first DC)
   microsoft.ad.domain:
     dns_domain_name: "{{ domain_name }}"
     safe_mode_password: "{{ domain_admin_password }}"
-  register: dcpromo_task
+  register: dcpromo_forest
   notify: Reboot Windows
+  when: parent_domain_name is not defined
 
+# --- Mode 2: child domain ---------------------------------------------------
+# The child-domain DC needs to reach the parent forest root via DNS to
+# authenticate the domain creation. We set the mgmt IP's primary DNS to
+# point at the forest root's public IP before running Install-ADDSDomain,
+# so name resolution + LDAP find the parent.
+#
+# `Install-ADDSDomain -DomainType ChildDomain` takes:
+#   -NewDomainName <label-only>    (e.g. "fops" for fops.blackstone.mil)
+#   -ParentDomainName <parent FQDN> (e.g. "blackstone.mil")
+#   -Credential <Enterprise Admin> (parent-forest admin required)
+#
+# We derive NewDomainName from domain_name by stripping the parent suffix.
+- name: Compute child-domain label from domain_name minus parent_domain_name
+  ansible.builtin.set_fact:
+    child_domain_label: "{{ domain_name | regex_replace('\\.' + (parent_domain_name | regex_escape) + '$', '') }}"
+  when: parent_domain_name is defined
+
+- name: Check if host is already a DC for {{ domain_name | default('') }}
+  ansible.windows.win_shell: |
+    $cs = Get-WmiObject Win32_ComputerSystem
+    if ($cs.PartOfDomain -and $cs.Domain -eq '{{ domain_name }}') { 'ALREADY_JOINED' } else { 'NEEDS_PROMOTION' }
+  register: child_dc_state
+  changed_when: false
+  when: parent_domain_name is defined
+
+- name: Create child domain (this host becomes first DC of {{ domain_name | default('') }})
+  ansible.windows.win_powershell:
+    script: |
+      Import-Module ADDSDeployment -ErrorAction Stop
+      $pw = ConvertTo-SecureString '{{ domain_admin_password }}' -AsPlainText -Force
+      # Credential must be Enterprise Admin in the PARENT forest. `simspace`
+      # is Domain Admin in the parent (per Create Users play); auto-promoted
+      # into Enterprise Admins on forest-root install.
+      $cred = New-Object System.Management.Automation.PSCredential(
+        '{{ parent_domain_name }}\{{ domain_admin }}', $pw)
+      Install-ADDSDomain `
+        -NewDomainName '{{ child_domain_label }}' `
+        -ParentDomainName '{{ parent_domain_name }}' `
+        -DomainType ChildDomain `
+        -DomainMode 'WinThreshold' `
+        -InstallDns `
+        -Credential $cred `
+        -SafeModeAdministratorPassword $pw `
+        -Force -NoRebootOnCompletion
+      $Ansible.Changed = $true
+  register: dcpromo_child
+  notify: Reboot Windows
+  when:
+    - parent_domain_name is defined
+    - "'NEEDS_PROMOTION' in child_dc_state.stdout"

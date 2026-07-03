@@ -227,16 +227,18 @@ for adc in bs-dc02 fops-dc02; do
     "$adc: PartOfDomain True (additional DC promoted)"
 done
 
-# Parent-child trust auto-established (blackstone.mil root <-> fops.blackstone.mil child)
+# Parent/child trust — automatic in a single AD forest. Query Get-ADTrust
+# from either side; expect the OTHER domain listed as a `ParentChild` trust
+# (direction: BiDirectional). No shared secret involved.
 check_ps bs-dc01 \
-  'Get-ADTrust -Filter * | Select-Object -ExpandProperty Target' \
-  '\(stdout\)[^|]*flightops\.lan' \
-  "Cross-forest trust on vcab side (outgoing to fops.blackstone.mil)"
+  '(Get-ADTrust -Filter * | Where-Object {$_.Target -eq "fops.blackstone.mil"}).TrustType' \
+  '\(stdout\)[[:space:]]+(ParentChild|4)' \
+  "blackstone.mil forest root sees fops child domain via ParentChild trust"
 
 check_ps fops-dc01 \
-  'Get-ADTrust -Filter * | Select-Object -ExpandProperty Target' \
-  '\(stdout\)[^|]*vcab\.lan' \
-  "Cross-forest trust on flightops side (incoming from blackstone.mil)"
+  '(Get-ADTrust -Filter * | Where-Object {$_.Target -eq "blackstone.mil"}).TrustType' \
+  '\(stdout\)[[:space:]]+(ParentChild|4)' \
+  "fops.blackstone.mil child sees blackstone.mil parent via ParentChild trust"
 
 # Member join counts (each host echoes True/False to its stdout)
 for grp in members_blackstone members_fops; do

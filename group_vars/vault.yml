@@ -15,7 +15,10 @@
 
 # --- Domain / OS ---------------------------------------------
 vault_simspace_password:        "Simspace1!Simspace1!"
-blackstone_forest_root_password:          "TRUST_SECRET_PLACEHOLDER"
+# (removed 2026-07-02) Cross-forest trust secret was here. The rebrand to
+# blackstone.mil / fops.blackstone.mil switched to a single-forest
+# parent/child topology where the trust is automatic and no shared secret
+# is required.
 
 # --- OT ------------------------------------------------------
 vault_openplc_admin_password:   "OPENPLC_ROTATE_ME"

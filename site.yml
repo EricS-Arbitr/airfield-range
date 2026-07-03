@@ -437,19 +437,35 @@
 # =============================================================================
 # Foundation tier — Active Directory (blackstone.mil + fops.blackstone.mil)
 # =============================================================================
-# Two-domain build: bs-dc01 promotes blackstone.mil, fops-dc01 promotes fops.blackstone.mil.
-# Each host in [pdc] picks up its own `domain_name` from
-# group_vars/{blackstone,fops}.yml via inventory-group precedence, so a
-# single `hosts: pdc` play fans out cleanly across the parent forest root
-# (blackstone.mil) and the fops child domain (fops.blackstone.mil).
+# Single-forest, two-domain build: bs-dc01 promotes the FOREST ROOT
+# (blackstone.mil), then fops-dc01 promotes the CHILD DOMAIN
+# (fops.blackstone.mil, parent=blackstone.mil). Order matters -- the child
+# domain's Install-ADDSDomain call authenticates against the parent forest,
+# so the parent must be up FIRST. Two separate plays enforce the serial:
+# dcpromo (forest root) completes before dcpromo (child domain) starts.
+#
+# The dcpromo role detects mode based on whether `parent_domain_name` is set
+# in the host's group_vars: absent = forest root (microsoft.ad.domain),
+# present = child domain (win_powershell Install-ADDSDomain -DomainType
+# ChildDomain).
 
-- name: dcpromo
-  hosts: pdc
+- name: dcpromo (forest root — blackstone.mil)
+  hosts: pdc_blackstone
   gather_facts: false
   roles:
     - dcpromo
   tags:
     - dcpromo
+    - dcpromo_forest
+
+- name: dcpromo (child domain — fops.blackstone.mil)
+  hosts: pdc_fops
+  gather_facts: false
+  roles:
+    - dcpromo
+  tags:
+    - dcpromo
+    - dcpromo_child
 
 - name: Create Users
   hosts: pdc
@@ -767,167 +783,6 @@
     - chrome
     - autologin
 
-# =============================================================================
-# Cross-forest trust — blackstone.mil TRUSTS fops.blackstone.mil (one-way external)
-# =============================================================================
-# Asymmetric access pattern from CLAUDE.md §4:
-#   - flightops users authenticate against vcab resources (corp services)
-#   - vcab users are default-denied into flightops (selective exceptions later)
-# Trust object lives in BOTH forests:
-#   - on blackstone.mil:    "Outgoing" trust toward flightops (vcab is TRUSTING)
-#   - on fops.blackstone.mil: "Incoming" trust from vcab (flightops is TRUSTED)
-# Both halves use the same `ad_trust_secret` (group_vars/all.yml).
-
-- name: Cross-forest trust — vcab side (TRUSTING)
-  hosts: pdc_blackstone
-  gather_facts: false
-  tasks:
-    # Prereq: bs-dc01 must be able to resolve fops.blackstone.mil for netdom to
-    # reach the partner PDC. vcab's DNS is authoritative for blackstone.mil only,
-    # so we install a conditional forwarder pointing fops.blackstone.mil at
-    # fops-dc01 (172.31.3.11). Without this, netdom fails with "The
-    # specified domain either does not exist or could not be contacted."
-    - name: Ensure conditional DNS forwarder for fops.blackstone.mil exists
-      ansible.windows.win_powershell:
-        script: |
-          $name = 'fops.blackstone.mil'
-          $master = '172.31.3.11'
-          $z = Get-DnsServerZone -Name $name -ErrorAction SilentlyContinue
-          if ($z) {
-            $Ansible.Changed = $false
-            Write-Output "Conditional forwarder for $name already present"
-          } else {
-            Add-DnsServerConditionalForwarderZone -Name $name `
-              -MasterServers $master -ReplicationScope 'Domain' -ErrorAction Stop
-            $Ansible.Changed = $true
-            Write-Output "Created conditional forwarder $name -> $master"
-          }
-
-    # Forest.GetAllTrustRelationships() misses one-side-only trusts that
-    # netdom can leave behind. Get-ADTrust queries trustedDomain objects
-    # directly and catches the trust regardless of which API created it.
-    - name: Check whether trust toward fops.blackstone.mil already exists
-      ansible.windows.win_powershell:
-        script: |
-          $t = Get-ADTrust -Filter 'Target -eq "fops.blackstone.mil"' -ErrorAction SilentlyContinue
-          if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
-      register: vcab_trust_state
-      changed_when: false
-
-    # netdom /OneSide:Trusting works here but errored "Access is denied" on
-    # the flightops side under WinRM (token-filtering quirk specific to
-    # netdom's trusted-side operation). Use DirectoryServices.Forest directly
-    # — netdom is just a wrapper around this API and the API call is honored
-    # under the same WinRM session that ran the precheck above.
-    #
-    # TrustDirection.Inbound on the trusting domain = "users from the
-    # remote domain can access local resources". For vcab→flightops:
-    #   vcab is the trusting/local domain; flightops users can access vcab.
-    - name: Add one-way trusting side on blackstone.mil (vcab TRUSTS flightops)
-      ansible.windows.win_powershell:
-        script: |
-          try {
-            $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
-            $f.CreateLocalSideOfTrustRelationship(
-              'fops.blackstone.mil',
-              [System.DirectoryServices.ActiveDirectory.TrustDirection]::Inbound,
-              '{{ ad_trust_secret }}'
-            )
-            $Ansible.Changed = $true
-            Write-Output "Created inbound trust on blackstone.mil from fops.blackstone.mil"
-          } catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectExistsException] {
-            # Trust already existed (likely from a prior netdom run); no-op.
-            $Ansible.Changed = $false
-            Write-Output "Trust already exists between blackstone.mil and fops.blackstone.mil; skipping create"
-          } catch {
-            $Ansible.Failed = $true
-            throw
-          }
-      when: "'absent' in vcab_trust_state.output"
-  tags:
-    - cross_forest_trust
-    - trust_vcab
-
-- name: Cross-forest trust — flightops side (TRUSTED)
-  hosts: pdc_fops
-  gather_facts: false
-  tasks:
-    # Mirror conditional forwarder on the flightops side — fops-dc01 must
-    # be able to resolve blackstone.mil so netdom's other half can connect.
-    - name: Ensure conditional DNS forwarder for blackstone.mil exists
-      ansible.windows.win_powershell:
-        script: |
-          $name = 'blackstone.mil'
-          $master = '172.31.2.7'
-          $z = Get-DnsServerZone -Name $name -ErrorAction SilentlyContinue
-          if ($z) {
-            $Ansible.Changed = $false
-            Write-Output "Conditional forwarder for $name already present"
-          } else {
-            Add-DnsServerConditionalForwarderZone -Name $name `
-              -MasterServers $master -ReplicationScope 'Domain' -ErrorAction Stop
-            $Ansible.Changed = $true
-            Write-Output "Created conditional forwarder $name -> $master"
-          }
-
-    - name: Check whether trust from blackstone.mil already exists
-      ansible.windows.win_powershell:
-        script: |
-          $t = Get-ADTrust -Filter 'Target -eq "blackstone.mil"' -ErrorAction SilentlyContinue
-          if ($t) { Write-Output 'present' } else { Write-Output 'absent' }
-      register: fops_trust_state
-      changed_when: false
-
-    # TrustDirection.Outbound on the trusted domain = "local users can
-    # access remote resources". For our trust (vcab trusts flightops):
-    #   flightops is the trusted/local domain; flightops users can access
-    #   vcab — i.e., outbound flow from flightops's perspective.
-    - name: Add one-way trusted side on fops.blackstone.mil (flightops is TRUSTED)
-      ansible.windows.win_powershell:
-        script: |
-          try {
-            $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
-            $f.CreateLocalSideOfTrustRelationship(
-              'blackstone.mil',
-              [System.DirectoryServices.ActiveDirectory.TrustDirection]::Outbound,
-              '{{ ad_trust_secret }}'
-            )
-            $Ansible.Changed = $true
-            Write-Output "Created outbound trust on fops.blackstone.mil to blackstone.mil"
-          } catch [System.DirectoryServices.ActiveDirectory.ActiveDirectoryObjectExistsException] {
-            $Ansible.Changed = $false
-            Write-Output "Trust already exists between fops.blackstone.mil and blackstone.mil; skipping create"
-          } catch {
-            $Ansible.Failed = $true
-            throw
-          }
-      when: "'absent' in fops_trust_state.output"
-  tags:
-    - cross_forest_trust
-    - trust_flightops
-
-- name: Cross-forest trust — verify both sides
-  hosts: pdc
-  gather_facts: false
-  tasks:
-    - name: List established trust relationships
-      ansible.windows.win_powershell:
-        script: |
-          $f = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
-          $f.GetAllTrustRelationships() | ForEach-Object {
-            "{0,-25} target={1,-20} direction={2}" -f $f.Name, $_.TargetName, $_.TrustDirection
-          }
-      register: trust_summary
-      changed_when: false
-
-    - name: Show trust summary
-      ansible.builtin.debug:
-        var: trust_summary.output
-  tags:
-    - cross_forest_trust
-    - trust_verify
-
-# =============================================================================
 # =============================================================================
 # Infrastructure services — internet-simulator DNS + enterprise squid proxy
 # =============================================================================
