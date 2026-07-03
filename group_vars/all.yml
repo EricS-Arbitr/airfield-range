@@ -38,6 +38,25 @@ ms_cert: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/Micro
 inet_proxy_addr: "10.255.240.1"
 inet_proxy_port: "3128"
 
+# --- Email service (is-inet Postfix/Dovecot/webmail via `email` role) ------
+# Multi-domain mail stack on is-inet, driven by this list. Uses BARE-DOMAIN
+# names so webmail login accepts `bob.burke@blackstone.mil` (not the
+# `mail.<domain>` form). The email role uses each entry's `name` as:
+#   - CN/SAN on the Dovecot TLS cert
+#   - webmail domain ini filename (blackstone.mil.ini)
+#   - imap_host / smtp_host inside the ini
+# Container-side IMAP resolution needs the apex A records under
+# `global_dns_records` below.
+#
+# Both `blackstone.mil` and `fops.blackstone.mil` are served by the same
+# Postfix + Dovecot instance on is-inet. Webmail UI is accessed via
+# `mail.outlook.com` (baked into the container image's httpd vhost); the
+# login form accepts any configured email_domain regardless of URL.
+email_domains:
+  - name: "blackstone.mil"
+  - name: "fops.blackstone.mil"
+  - name: "outlook.com"
+
 # --- Global DNS simulator ------------------------------------
 # is-inet runs an unbound container that resolves any name in this list
 # to a lab-simulated public IP. Extend as scenarios need new public-facing

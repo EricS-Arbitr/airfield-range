@@ -279,6 +279,23 @@ pfsense
 # ------------------------------------------------------------
 # Infrastructure — out-of-band sims + Ansible control node
 # ------------------------------------------------------------
+# is-inet mail hosts (Postfix + Dovecot + webmail via `email` role).
+# Direct member of [blackstone] so it inherits DomainUsers from
+# group_vars/blackstone.yml — the users.txt seed for mailbox accounts.
+# Same is-inet host also serves fops.blackstone.mil mail; the role's
+# multi-domain Dovecot config handles both from one instance.
+[email]
+is-inet
+
+# is-inet is added as a direct [blackstone] member (parallel to the
+# existing [blackstone:children]) so it sees DomainUsers -- the email
+# role's users.txt.j2 loops that list to provision mailboxes at
+# blackstone.mil. Matches PowerPlant's [voltgrid] direct-membership fix
+# on 2026-07-02. is-inet stays out of [windows]/[linux] baseline groups
+# so the common role still doesn't run against it.
+[blackstone]
+is-inet
+
 # is-inet: Internet simulator appliance (200.200.200.2/24)
 # elgg:    Vulnerable Ubuntu 16 / Elgg social-platform scenario host
 # ansible: Ansible control node (referenced by blueprint download/deploy

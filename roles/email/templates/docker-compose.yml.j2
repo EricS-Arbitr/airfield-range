@@ -1,0 +1,123 @@
+services:
+  is-inet:
+    container_name: is-inet
+    restart: always
+    network_mode: host
+    privileged: true
+    volumes:
+      - /opt/simspace_includes:/etc/unbound/simspace_includes/
+      - /opt/corpusPackages:/etc/unbound/corpus.d/
+    image: is-inet:6.23.0
+
+  outlook:
+    image: 10.10.254.1:5000/simspace/email:6.17.2
+    container_name: email
+    hostname: email
+    restart: always
+    network_mode: host
+    privileged: true
+    dns:
+      - 8.8.8.8
+    volumes:
+{% for domain in email_domains %}
+      - /opt/email/ssl/certs/{{ domain.name }}.crt:/etc/ssl/certs/{{ domain.name }}.crt
+      - /opt/email/ssl/private/{{ domain.name }}.key:/etc/ssl/private/{{ domain.name }}.key
+{% endfor %}
+      - /opt/email/dovecot/10-ssl.conf:/etc/dovecot/conf.d/10-ssl.conf
+      - /opt/email/webmail/domains:/var/www/html/data/_data_/_default_/domains
+      - /opt/email/users.txt:/users.txt
+      - /opt/email/add_users.sh:/add_users.sh
+
+  rcdb:
+    hostname: rcdb
+    restart: always
+    networks:
+      rocket_net:
+    volumes:
+      - /opt/rocketdv:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+    image: 10.10.254.1:5000/simspace/rocketchat/rocketchat_db:6.17.0
+
+  rocketchat:
+    hostname: rocketchat
+    restart: always
+    networks:
+      rocket_net:
+        ipv4_address: 172.18.0.3
+    image: 10.10.254.1:5000/simspace/rocketchat/rocketchat_app:6.17.0
+    environment:
+      ROOT_URL: http://rocketchat.com:3000
+      MONGO_URL: mongodb://rocketchat:rocketchat-password@rcdb:27017/meteor
+      MONGO_OPLOG_URL: mongodb://rocketchat:rocketchat-password@rcdb:27017/local?authSource=meteor
+      ADMIN_USERNAME: simspace
+      ADMIN_NAME: Simspace
+      ADMIN_EMAIL: simspace@localhost.com
+      ADMIN_PASS: simspace1
+
+  youtube:
+    hostname: youtube
+    restart: always
+    networks:
+      youtube_net:
+        ipv4_address: 172.19.0.3
+    image: 10.10.254.1:5000/simspace/youtube:6.17.0
+
+  pastebin:
+    hostname: pastebin
+    restart: always
+    networks:
+      pastebin_net:
+        ipv4_address: 172.20.0.9
+    image: 10.10.254.1:5000/simspace/pastebin:6.17.0
+
+  twitter:
+    hostname: twitter
+    restart: always
+    networks:
+      x_net:
+        ipv4_address: 172.21.0.3
+    image: 10.10.254.1:5000/simspace/twitter:6.17.0
+
+  misp:
+    hostname: misp
+    restart: always
+    networks:
+      misp_net:
+        ipv4_address: 172.22.0.3
+    image: 10.10.254.1:5000/simspace/misp:6.22.0
+
+
+networks:
+  rocket_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
+          gateway: 172.18.0.1
+  youtube_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+          gateway: 172.19.0.1
+  pastebin_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+  x_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+          gateway: 172.21.0.1
+
+  misp_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/16
+          gateway: 172.22.0.1

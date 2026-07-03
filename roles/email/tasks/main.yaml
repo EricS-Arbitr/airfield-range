@@ -1,0 +1,152 @@
+---
+# --- Host directory setup ---
+- name: Create email config directories on host
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/email/ssl/certs
+    - /opt/email/ssl/private
+    - /opt/email/ca
+    - /opt/email/dovecot
+    - /opt/email/webmail/domains
+
+# --- CA files ---
+- name: Copy root CA certificate to host
+  ansible.builtin.copy:
+    src: root_ca.crt
+    dest: /opt/email/ca/root_ca.crt
+    mode: '0644'
+
+- name: Copy root CA key to host
+  ansible.builtin.copy:
+    src: root_ca.key
+    dest: /opt/email/ca/root_ca.key
+    mode: '0600'
+
+# --- SSL certificates ---
+# community.crypto modules are idempotent: tasks skip if output files
+# already exist with matching parameters. No pre-check loop needed.
+- name: Generate private key for mail domain
+  community.crypto.openssl_privatekey:
+    path: /opt/email/ssl/private/{{ item.name }}.key
+    size: 2048
+  loop: "{{ email_domains }}"
+
+- name: Generate CSR for mail domain
+  community.crypto.openssl_csr:
+    path: /opt/email/ca/{{ item.name }}.csr
+    privatekey_path: /opt/email/ssl/private/{{ item.name }}.key
+    common_name: "{{ item.name }}"
+    subject_alt_name:
+      - "DNS:{{ item.name }}"
+  loop: "{{ email_domains }}"
+
+- name: Sign mail domain certificate with root CA
+  community.crypto.x509_certificate:
+    path: /opt/email/ssl/certs/{{ item.name }}.crt
+    csr_path: /opt/email/ca/{{ item.name }}.csr
+    ownca_path: /opt/email/ca/root_ca.crt
+    ownca_privatekey_path: /opt/email/ca/root_ca.key
+    provider: ownca
+    ownca_not_after: "+365d"
+  loop: "{{ email_domains }}"
+
+# --- Config file deployment ---
+# All bind-mount source files are written after certs exist on the host,
+# so the container starts with every volume file already in its final state.
+- name: Copy add_users.sh to host volume path
+  ansible.builtin.copy:
+    src: add_users.sh
+    dest: /opt/email/add_users.sh
+    mode: '0755'
+
+- name: Deploy users.txt
+  ansible.builtin.template:
+    src: users.txt.j2
+    dest: /opt/email/users.txt
+    mode: '0644'
+  notify: Run add_users in email container
+
+- name: Deploy dovecot SSL config
+  ansible.builtin.template:
+    src: 10-ssl.conf.j2
+    dest: /opt/email/dovecot/10-ssl.conf
+    mode: '0644'
+
+- name: Deploy webmail domain config
+  ansible.builtin.template:
+    src: mail.domain.ini.j2
+    dest: /opt/email/webmail/domains/{{ item.name }}.ini
+    mode: '0644'
+  loop: "{{ email_domains }}"
+
+# Deploy compose file last so all bind-mount source files are guaranteed to exist.
+# Triggers container recreation only when the service definition has changed.
+- name: Deploy docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /home/simspace/docker-compose.yml
+    mode: '0644'
+  notify: Recreate email container
+
+# Flush here so the container is fully up before any docker exec tasks run below.
+- name: Flush handlers
+  ansible.builtin.meta: flush_handlers
+
+# --- Postfix configuration ---
+# /etc/postfix is not volume-mounted to avoid conflicting with Postfix-managed files.
+# These tasks use exec-based guards so they are safe to re-run.
+- name: Check if mail domain is in postfix mydestination
+  community.docker.docker_container_exec:
+    container: email
+    command: grep -q '{{ item.name }}' /etc/postfix/main.cf
+  register: email_postfix_mydestination_checks
+  changed_when: false
+  failed_when: false
+  loop: "{{ email_domains }}"
+
+- name: Add mail domain to postfix mydestination
+  community.docker.docker_container_exec:
+    container: email
+    command: >-
+      sed -i 's/\(mydestination = .*\)/\1, {{ item.name }}/' /etc/postfix/main.cf
+  changed_when: true
+  when: email_postfix_mydestination_checks.results[ansible_loop.index0].rc != 0
+  loop: "{{ email_domains }}"
+  loop_control:
+    extended: true
+  notify: Restart email container
+
+- name: Deploy vmail_ssl.map to host
+  ansible.builtin.template:
+    src: vmail_ssl.map.j2
+    dest: /opt/email/vmail_ssl.map
+    mode: '0644'
+
+- name: Read vmail_ssl.map from email container
+  community.docker.docker_container_exec:
+    container: email
+    command: cat /etc/postfix/vmail_ssl.map
+  register: container_vmail_map
+  changed_when: false
+  failed_when: false
+
+- name: Slurp host vmail_ssl.map
+  ansible.builtin.slurp:
+    src: /opt/email/vmail_ssl.map
+  register: host_vmail_map
+
+- name: Sync vmail_ssl.map into email container
+  community.docker.docker_container_exec:
+    container: email
+    argv:
+      - sh
+      - -c
+      - cat > /etc/postfix/vmail_ssl.map
+    stdin: "{{ host_vmail_map.content | b64decode }}"
+    stdin_add_newline: false
+  when: container_vmail_map.stdout | trim != host_vmail_map.content | b64decode | trim
+  changed_when: true
+  notify: Restart email container

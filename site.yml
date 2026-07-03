@@ -819,6 +819,24 @@
     - global_dns
     - dns
 
+# is-inet Postfix + Dovecot + webmail. Multi-domain: driven by
+# `email_domains` in group_vars/all.yml (blackstone.mil, fops.blackstone.mil,
+# outlook.com). Mailboxes seeded per-domain from that domain's `DomainUsers`
+# list — is-inet is a direct member of [blackstone] so it sees
+# blackstone.yml's users. Certs signed by the range root CA bundled in the
+# role's files/. Runs AFTER global_dns so domain names resolve before
+# Postfix's smtpd_helo checks fire against the domain's own MX record on
+# startup.
+- name: email — is-inet Postfix + Dovecot + webmail
+  hosts: email
+  gather_facts: true
+  become: true
+  roles:
+    - email
+  tags:
+    - email
+    - is-inet
+
 # Enterprise-internal HTTP/HTTPS proxy. bs-proxy runs the customer `squid`
 # role (Ubuntu Desktop 22.04, 172.31.2.15:3128, Services subnet). Downstream
 # hosts that want an in-scenario proxy point at proxy.blackstone.mil:3128. Not

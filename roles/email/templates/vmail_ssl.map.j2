@@ -1,0 +1,3 @@
+{% for domain in email_domains %}
+{{ domain.name }} /etc/ssl/private/{{ domain.name }}.key /etc/ssl/certs/{{ domain.name }}.crt
+{% endfor %}
