@@ -14,6 +14,27 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-06 · gap · roles/dcpromo/tasks/main.yml — child-domain path missing AD-Domain-Services feature install
+
+**Symptom.** On a fresh-range deploy the `dcpromo` role's child-domain task fails on `fops-dc01`:
+```
+TASK [dcpromo : Create child domain (this host becomes first DC of fops.blackstone.mil)]
+fatal: [fops-dc01]: FAILED! => ...
+  "message": "The specified module 'ADDSDeployment' was not loaded because no valid module
+              file was found in any module directory."
+  "target_name": "ADDSDeployment"
+Import-Module ADDSDeployment -ErrorAction Stop
+```
+All 3 deploy.sh attempts fail identically at this task. Forest root (`bs-dc01`) succeeds because that path uses `microsoft.ad.domain`, which internally installs the feature; the child path uses `ansible.windows.win_powershell` directly.
+
+**Root cause.** `Install-ADDSDomain` lives in the `ADDSDeployment` PowerShell module, which ships only once the **`AD-Domain-Services`** Windows Feature is installed on the host. The role installs `rsat-ADDS` (the RSAT client tools bundle — usable for querying an existing DC) but NOT the actual `AD-Domain-Services` role. `microsoft.ad.domain` auto-installs `AD-Domain-Services` as part of its own execution; the child-domain `win_powershell` block does not, so it hits `Import-Module ADDSDeployment` on a host that has only the RSAT client tools.
+
+**Fix (overlay, landed 2026-07-06).** Added an `ansible.windows.win_feature` task for `AD-Domain-Services` with `include_management_tools: true` inside the child-domain gate (`when: parent_domain_name is defined`), followed by a conditional `win_reboot` in case the feature install requires it. Placed just after the "Compute child-domain label" set_fact and before "Check if host is already a DC". Idempotent: on subsequent runs, `win_feature` is a no-op if `AD-Domain-Services` is already present.
+
+**Fix (upstream).** In `range-development-ansible/roles/dcpromo/tasks/main.yml`, make the RSAT install block install BOTH `AD-Domain-Services` (the role/feature) AND `rsat-ADDS` (the tools) unconditionally, before either mode runs. Both paths need the feature, and `microsoft.ad.domain`'s auto-install of it is an undocumented side effect that shouldn't be relied on.
+
+---
+
 ## 2026-06-25 · platform · RC-VyOS-Router image — self-loop default routes per /24 interface IP
 
 **Symptom.** A VyOS router with multiple /24 LAN interfaces (e.g. `bs-core-rtr` with Services/HQ/IT/Supply) loses its default route entirely after deploy. `show ip route` has no `S>* 0.0.0.0/0` line even though `static_route` declares one in host_vars; downstream subnets report "destination net unreachable."

@@ -67,6 +67,27 @@
     child_domain_label: "{{ domain_name | regex_replace('\\.' + (parent_domain_name | regex_escape) + '$', '') }}"
   when: parent_domain_name is defined
 
+# `Install-ADDSDomain` lives in the ADDSDeployment PowerShell module, which
+# only ships once the AD-Domain-Services Windows Feature is installed. The
+# forest-root path uses microsoft.ad.domain which auto-installs the feature;
+# the child-domain path uses win_powershell directly, so we have to install
+# it explicitly here. `include_management_tools: true` gives us the RSAT-ADDS
+# module bundle as well (superset of the `rsat-ADDS` install at the top of
+# this role, but idempotent -- ok to double-install).
+- name: Install AD-Domain-Services + management tools (child-domain path)
+  ansible.windows.win_feature:
+    name: AD-Domain-Services
+    state: present
+    include_management_tools: true
+  register: adds_feature_install
+  when: parent_domain_name is defined
+
+- name: Reboot if AD-Domain-Services install requires it
+  ansible.windows.win_reboot:
+  when:
+    - parent_domain_name is defined
+    - adds_feature_install.reboot_required | default(false)
+
 - name: Check if host is already a DC for {{ domain_name | default('') }}
   ansible.windows.win_shell: |
     $cs = Get-WmiObject Win32_ComputerSystem
