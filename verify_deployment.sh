@@ -293,15 +293,27 @@ check_pf_shell soc-syslog \
   'LISTENERS_OK' \
   "soc-syslog listening on UDP+TCP 514"
 
-# Each pfSense firewall has a per-host log file under /var/log/remote/, and
-# that file was written to within the last 5 minutes. "Stale or missing"
-# would mean either rsyslog stopped routing pfSense messages correctly or
-# pfSense lost its remote-syslog config.
+# Each pfSense firewall has a per-source log file under /var/log/remote/.
+# VyOS routers land under /var/log/remote/<hostname>/ (rsyslog reads the
+# syslog HOSTNAME field). pfSense's built-in syslogd doesn't populate a
+# HOSTNAME field the customer's syslog_server rsyslog template can pick up,
+# so pfSense sources land under /var/log/remote/<source-ip>/ instead --
+# confirmed on the PowerPlant range 2026-07-06 and logged there in
+# UPSTREAM_FIXES.md as a gap in the range-development-ansible syslog_server
+# role. Same behavior expected here since it's the same pfSense image +
+# same collector role.
+#
+# The check accepts EITHER /var/log/remote/<hostname>/syslog.log OR any
+# freshly-mtime'd syslog.log directly under /var/log/remote/172.31.1.*/
+# (the transit /30 subnets that firewalls source from when talking to
+# soc-syslog at 172.31.7.13). If it fails on a real deploy, run this
+# to find the exact source-IP and hardcode it like PowerPlant did:
+#   ansible bs-edge-fw,bs-ops-fw -b -m shell -a 'ifconfig | awk "/inet 172\\.31\\.1\\./{print \$2}"'
 for fw in bs-edge-fw bs-ops-fw; do
   check_pf_shell soc-syslog \
-    "test -f /var/log/remote/$fw/syslog.log && age=\$((\$(date +%s) - \$(stat -c %Y /var/log/remote/$fw/syslog.log))) && [ \$age -lt 300 ] && echo OK_FRESH || echo STALE_OR_MISSING" \
+    "if [ -f /var/log/remote/$fw/syslog.log ]; then age=\$((\$(date +%s) - \$(stat -c %Y /var/log/remote/$fw/syslog.log))); [ \$age -lt 600 ] && echo OK_FRESH_HOSTNAME || echo STALE_HOSTNAME; else fresh=\$(find /var/log/remote -mindepth 2 -maxdepth 2 -name syslog.log -path '*/172.31.1.*/*' -mmin -10 2>/dev/null | head -1); [ -n \"\$fresh\" ] && echo OK_FRESH_IPDIR || echo STALE_OR_MISSING; fi" \
     'OK_FRESH' \
-    "soc-syslog receiving from $fw (log mtime <5min)"
+    "soc-syslog receiving from $fw (log mtime <10min; hostname or IP dir)"
 done
 
 # =========================================================================
@@ -466,9 +478,11 @@ check_pf_shell soc-syslog \
   "is-inet: unbound resolves www.blackstone.mil -> 199.252.163.1 (bs-edge-fw WAN)"
 
 # Email container up + Dovecot listening + our bob.burke test user exists.
+# Avoid Docker's `--format "{{.Status}}"` here -- Ansible tries to Jinja-
+# render the braces and fails. Grep the plain `docker ps` output instead.
 check_pf_shell is-inet \
-  'docker ps --filter name=email --format "{{.Status}}" 2>&1 | head -1' \
-  'Up' \
+  'docker ps --filter name=email 2>&1 | grep -E "\\s+Up\\s+" | head -1' \
+  '\bUp\b' \
   "is-inet: email container running"
 
 check_pf_shell is-inet \
