@@ -7,6 +7,14 @@ ansible_winrm_transport: ntlm
 ansible_port: 5985
 ansible_user: simspace
 ansible_password: Simspace1!Simspace1!
+
+# Bump WinRM timeouts above the pywinrm defaults (operation=20, read=30).
+# A slow-responding host (e.g. mid-dcpromo, mid-reboot, applying group
+# policy) can otherwise time out and burn 30 min in `init`'s wait loop
+# during full deploys -- observed on fops-dc01 2026-07-07. Read must
+# exceed operation, per pywinrm validation. Values are seconds.
+ansible_winrm_operation_timeout_sec: 45
+ansible_winrm_read_timeout_sec: 60
 ansible_python_interpreter: python
 ansible_become_method: runas
 ansible_become_user: simspace
