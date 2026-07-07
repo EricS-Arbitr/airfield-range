@@ -14,6 +14,24 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-07 · gap · roles/dcpromo/tasks/main.yml — child-domain path needs Enterprise Admin on the parent forest
+
+**Symptom.** After the DNS bootstrap fix (below) landed, `Install-ADDSDomain` still failed on fops-dc01. With the surface-errors fix in place (commit 0857a62), the actual message came through:
+```
+PROMOTION_EXCEPTION: Verification of user credential permissions failed.
+You have not supplied user credentials that belong to the Enterprise Admins
+group. The installation may fail with an access denied error.
+```
+`C:\Windows\debug\dcpromoui.log` on fops-dc01 confirmed: `User is not EA`.
+
+**Root cause.** Creating a child domain modifies the Partitions container in the forest's Configuration NC, which only Enterprise Admins can write to. The role uses `simspace` as the promotion credential — `simspace` is a Domain Admin in blackstone.mil (per the `create_users` role) but NOT an Enterprise Admin. Only the built-in `Administrator` gets auto-EA on forest-root install; any subsequently-created domain user needs explicit membership. My role's earlier comment ("`simspace` is Domain Admin in the parent... auto-promoted into Enterprise Admins on forest-root install") was wrong on that second half — the auto-promotion only applies to the account that ran the promotion (Administrator), not to subsequently-created domain users.
+
+**Fix (overlay, landed 2026-07-07).** Added a task in the child-domain path that grants EA to `{{ domain_admin }}` on the parent forest before Install-ADDSDomain runs. `delegate_to: "{{ groups['pdc_blackstone'] | first }}"` so the `Add-ADGroupMember -Identity "Enterprise Admins"` call lands on the forest-root DC where the group lives. Idempotent — catches the "already a member" exception and reports `ALREADY_EA` instead of failing on re-runs.
+
+**Fix (upstream).** In `range-development-ansible/roles/create_users/tasks/main.yml`, if the target user is `simspace` (or any Domain Admin whose role includes forest-management), add them to Enterprise Admins + Schema Admins on the forest root. Alternatively, the customer's dcpromo role should handle this automatically when `parent_domain_name` is set. Right now the customer role only supports single-domain forest creation, so this is one of several gaps around child-domain support.
+
+---
+
 ## 2026-07-07 · gap · roles/dcpromo/tasks/main.yml — child-domain path needs DNS pointed at parent PDC pre-promotion
 
 **Symptom.** After the AD-Domain-Services install fix landed on 2026-07-06, fresh-range deploys got past the ADDSDeployment error but `Install-ADDSDomain` still didn't complete — fops-dc01 remained a WORKGROUP standalone. Later, all 15 fops member hosts failed to join with:

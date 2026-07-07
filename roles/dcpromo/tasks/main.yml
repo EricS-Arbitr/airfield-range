@@ -96,6 +96,32 @@
   changed_when: false
   when: parent_domain_name is defined
 
+# Install-ADDSDomain for a child domain requires Enterprise Admin (EA)
+# credentials in the parent forest -- creating a new domain modifies the
+# Partitions container in the forest's Configuration NC, which only EAs
+# can write to. `simspace` is a Domain Admin (per create_users role) but
+# NOT an EA by default -- only the built-in Administrator gets auto-EA
+# on forest-root install. So we grant EA to `domain_admin` on the parent
+# PDC before running Install-ADDSDomain. Delegated to bs-dc01 (the
+# forest root) so we can call Add-ADGroupMember against the local
+# Enterprise Admins group. Idempotent: Add-ADGroupMember is a no-op if
+# the user is already a member. See UPSTREAM_FIXES.md 2026-07-07.
+- name: Grant Enterprise Admin to {{ domain_admin }} on parent forest ({{ parent_domain_name | default('') }})
+  ansible.windows.win_shell: |
+    try {
+      Add-ADGroupMember -Identity 'Enterprise Admins' -Members '{{ domain_admin }}' -ErrorAction Stop
+      "EA_GRANTED"
+    } catch {
+      if ($_.Exception.Message -match 'already a member') { "ALREADY_EA" }
+      else { throw }
+    }
+  delegate_to: "{{ groups['pdc_blackstone'] | first }}"
+  register: ea_grant
+  changed_when: "'EA_GRANTED' in ea_grant.stdout"
+  when:
+    - parent_domain_name is defined
+    - "'NEEDS_PROMOTION' in child_dc_state.stdout"
+
 # Chicken-and-egg: Install-ADDSDomain needs to resolve
 # _ldap._tcp.{{ parent_domain_name }} SRV records to find the parent
 # forest DC to authenticate against. But fops-dc01's default primary DNS
