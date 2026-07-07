@@ -127,6 +127,7 @@
 - name: Create child domain (this host becomes first DC of {{ domain_name | default('') }})
   ansible.windows.win_powershell:
     script: |
+      $ErrorActionPreference = 'Stop'
       Import-Module ADDSDeployment -ErrorAction Stop
       $pw = ConvertTo-SecureString '{{ domain_admin_password }}' -AsPlainText -Force
       # Credential must be Enterprise Admin in the PARENT forest. `simspace`
@@ -134,16 +135,30 @@
       # into Enterprise Admins on forest-root install.
       $cred = New-Object System.Management.Automation.PSCredential(
         '{{ parent_domain_name }}\{{ domain_admin }}', $pw)
-      Install-ADDSDomain `
-        -NewDomainName '{{ child_domain_label }}' `
-        -ParentDomainName '{{ parent_domain_name }}' `
-        -DomainType ChildDomain `
-        -DomainMode 'WinThreshold' `
-        -InstallDns `
-        -Credential $cred `
-        -SafeModeAdministratorPassword $pw `
-        -Force -NoRebootOnCompletion
-      $Ansible.Changed = $true
+      try {
+        $result = Install-ADDSDomain `
+          -NewDomainName '{{ child_domain_label }}' `
+          -ParentDomainName '{{ parent_domain_name }}' `
+          -DomainType ChildDomain `
+          -DomainMode 'WinThreshold' `
+          -InstallDns `
+          -Credential $cred `
+          -SafeModeAdministratorPassword $pw `
+          -Force -NoRebootOnCompletion -ErrorAction Stop
+        # Install-ADDSDomain returns an object with a Status field on success.
+        # On success it's "Success" (SimSpace: verified 2026-07-07).
+        if ($result.Status -eq 'Success') {
+          $Ansible.Changed = $true
+          Write-Output "PROMOTION_OK"
+        } else {
+          $Ansible.Failed = $true
+          Write-Output "PROMOTION_FAILED status=$($result.Status) msg=$($result.Message)"
+        }
+      } catch {
+        $Ansible.Failed = $true
+        Write-Output "PROMOTION_EXCEPTION: $($_.Exception.Message)"
+        Write-Output "STACK: $($_.ScriptStackTrace)"
+      }
   register: dcpromo_child
   notify: Reboot Windows
   when:
