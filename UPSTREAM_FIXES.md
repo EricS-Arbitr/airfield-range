@@ -14,6 +14,24 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-07 · gap · roles/dcpromo/tasks/main.yml — child-domain path needs DNS pointed at parent PDC pre-promotion
+
+**Symptom.** After the AD-Domain-Services install fix landed on 2026-07-06, fresh-range deploys got past the ADDSDeployment error but `Install-ADDSDomain` still didn't complete — fops-dc01 remained a WORKGROUP standalone. Later, all 15 fops member hosts failed to join with:
+```
+Computer 'fops-flight01' failed to join domain 'fops.blackstone.mil' from its
+current workgroup 'WORKGROUP' with following error message: The specified
+domain either does not exist or could not be contacted.
+```
+Diagnostic on fops-dc01: DomainRole=2 (standalone), ADDS installed, ADDSDeployment module importable, primary DNS = `172.31.3.12,172.31.3.11` (itself + sibling), `Resolve-DnsName blackstone.mil` empty. TCP 389 to bs-dc01 succeeded — network path fine, DNS bootstrap broken.
+
+**Root cause.** `Install-ADDSDomain -DomainType ChildDomain -ParentDomainName blackstone.mil` needs to resolve `_ldap._tcp.blackstone.mil` SRV records to find a parent-forest DC to authenticate against. The default SimSpace image sets fops-dc01's primary DNS to the two designated fops.blackstone.mil DCs (172.31.3.11 = itself, 172.31.3.12 = fops-dc02). Neither can answer for blackstone.mil until child promotion completes — chicken-and-egg. Install-ADDSDomain fails silently (or bails so quickly the overall task appears to succeed), fops-dc01 stays standalone, and every downstream fops member join fails.
+
+**Fix (overlay, landed 2026-07-07).** Added a pre-promotion task in the child-domain path of `roles/dcpromo/tasks/main.yml` that sets fops-dc01's primary DNS to `{{ parent_domain_pdc_ip }}` (172.31.2.7 = bs-dc01) plus 8.8.8.8 fallback, then calls `Clear-DnsClientCache`. Runs after the AD-Domain-Services install + reboot, before the Install-ADDSDomain block, gated by the same `when: parent_domain_name is defined` + `NEEDS_PROMOTION` guards. Introduces new `parent_domain_pdc_ip` variable in `group_vars/fops.yml`. After Install-ADDSDomain finishes and the reboot handler fires, fops-dc01 is itself a DC and its own DNS starts answering; downstream member joins can point at fops-dc01 (172.31.3.11) as designed.
+
+**Fix (upstream).** In `range-development-ansible/roles/dcpromo/tasks/main.yml`, if a `parent_domain_name` var is present, the role should automatically set primary DNS to a parent DC before running Install-ADDSDomain — nobody who runs a child-domain promotion should have to figure this out themselves. The customer's dcpromo role currently only supports single-domain forest creation; a proper child-domain mode with DNS bootstrap would eliminate this whole class of failure.
+
+---
+
 ## 2026-07-06 · gap · site.yml + roles/domain_member_retry — `pause` incompatible with `strategy: free`
 
 **Symptom.** Both Join Domain plays (blackstone + fops) had `strategy: free` for wall-clock parallelism. Deploy fails immediately after the first member's Check-if-already-joined task:

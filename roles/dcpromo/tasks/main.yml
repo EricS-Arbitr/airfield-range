@@ -96,6 +96,34 @@
   changed_when: false
   when: parent_domain_name is defined
 
+# Chicken-and-egg: Install-ADDSDomain needs to resolve
+# _ldap._tcp.{{ parent_domain_name }} SRV records to find the parent
+# forest DC to authenticate against. But fops-dc01's default primary DNS
+# is set to itself + sibling (both fops.blackstone.mil DCs), neither of
+# which can answer for blackstone.mil until child promotion completes.
+# So we point primary DNS at the parent PDC (bs-dc01) for the duration
+# of promotion. After Install-ADDSDomain finishes + reboot, fops-dc01 is
+# itself a DC and hosts fops.blackstone.mil; a later play can restore
+# the intended DNS if needed. See UPSTREAM_FIXES.md 2026-07-07.
+- name: Point primary DNS at parent PDC before Install-ADDSDomain
+  ansible.windows.win_shell: |
+    $iface = Get-DnsClientServerAddress -AddressFamily IPv4 |
+      Where-Object { $_.ServerAddresses.Count -gt 0 } |
+      Select-Object -First 1
+    if ($iface) {
+      Set-DnsClientServerAddress `
+        -InterfaceIndex $iface.InterfaceIndex `
+        -ServerAddresses '{{ parent_domain_pdc_ip }}','8.8.8.8'
+      # Force a fresh SRV resolution on next lookup
+      Clear-DnsClientCache
+      "SET_DNS_OK:$($iface.InterfaceAlias)"
+    } else { "NO_IFACE_FOUND" }
+  register: parent_dns_set
+  changed_when: "'SET_DNS_OK' in parent_dns_set.stdout"
+  when:
+    - parent_domain_name is defined
+    - "'NEEDS_PROMOTION' in child_dc_state.stdout"
+
 - name: Create child domain (this host becomes first DC of {{ domain_name | default('') }})
   ansible.windows.win_powershell:
     script: |

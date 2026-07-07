@@ -16,6 +16,15 @@ short_domain_name: "fops"
 # Install-ADDSDomain -DomainType ChildDomain -ParentDomainName ...).
 parent_domain_name: "blackstone.mil"
 
+# IP of a DC in the parent forest -- used by the dcpromo role to point
+# fops-dc01's primary DNS at bs-dc01 BEFORE running Install-ADDSDomain,
+# so parent-forest SRV lookups (_ldap._tcp.blackstone.mil etc.) succeed.
+# Without this, Install-ADDSDomain fails: "The specified domain either
+# does not exist or could not be contacted." (fops-dc01's default DNS
+# points at itself + sibling, neither of which resolve anything until
+# child promotion completes -- chicken-and-egg.)
+parent_domain_pdc_ip: "172.31.2.7"      # bs-dc01
+
 # --- Domain controllers (PDC emulator listed first) ----------
 domain_controllers_fops:
   - { name: "fops-dc01", ip: "172.31.3.11" }    # PDC emulator for fops.blackstone.mil
