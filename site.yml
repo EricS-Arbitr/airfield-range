@@ -529,7 +529,12 @@
 - name: Join Domain — blackstone.mil
   hosts: members_blackstone
   gather_facts: false
-  strategy: free                # each host joins + reboots independently
+  # NOTE: cannot use `strategy: free` here -- the domain_member_retry role
+  # uses ansible.builtin.pause, which bypasses the host loop and is
+  # unsupported under the free strategy (all 3 deploy.sh attempts crash on
+  # the first Check-if-already-joined task). Same gotcha hit PowerPlant on
+  # 2026-07-03 (see UPSTREAM_FIXES.md there). If wall-clock matters, port
+  # the upstream fix: swap `pause` for a `wait_for` delegated to localhost.
   roles:
     - domain_member_retry
   tags:
@@ -539,7 +544,7 @@
 - name: Join Domain — fops.blackstone.mil
   hosts: members_fops
   gather_facts: false
-  strategy: free                # each host joins + reboots independently
+  # Same reason as above -- pause + strategy: free = hard fail.
   roles:
     - domain_member_retry
   tags:

@@ -14,6 +14,34 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-06 · gap · site.yml + roles/domain_member_retry — `pause` incompatible with `strategy: free`
+
+**Symptom.** Both Join Domain plays (blackstone + fops) had `strategy: free` for wall-clock parallelism. Deploy fails immediately after the first member's Check-if-already-joined task:
+```
+TASK [domain_member_retry : Check if already domain joined]
+changed: [bs-supply03]
+ERROR! The 'pause' module bypasses the host loop, which is currently not
+supported in the free strategy and would instead execute for every host
+in the inventory list.
+```
+All 3 deploy.sh attempts fail identically before any host actually joins.
+
+**Root cause.** `roles/domain_member_retry/tasks/main.yml:22` uses `ansible.builtin.pause` to wait for the post-join NIC flap to settle. Ansible's `free` strategy explicitly rejects `pause` because pause is a per-play blocker, not per-host — under free, it would either block all hosts (defeating the point) or fire N times per host (nonsense). Ansible chose to hard-fail the play rather than pick either behavior. Identical failure hit PowerPlant on 2026-07-03; airfield inherited the same optimization + the same bug when the strategy: free pattern was copied across.
+
+**Fix (overlay).** Reverted `strategy: free` on the two Join Domain plays in `site.yml`. The other 6 `strategy: free` plays keep the speedup — strip_apipa, root_certs, network_discovery, AUE bundle, AE bundle, splunk-forwarder, sysmon — none of them use `pause`.
+
+**Fix (upstream).** In `range-development-ansible/roles/domain_member_retry/tasks/main.yml`, replace `pause: seconds: N` with a delegated `wait_for` on the local Ansible controller:
+```yaml
+- name: Wait for network reconfiguration to complete
+  ansible.builtin.wait_for:
+    timeout: 30
+  delegate_to: localhost
+  become: false
+```
+`wait_for` works under `strategy: free`. This would let Join Domain — the single slowest play in the deploy — parallelize like the other 6 do.
+
+---
+
 ## 2026-07-06 · gap · roles/dcpromo/tasks/main.yml — child-domain path missing AD-Domain-Services feature install
 
 **Symptom.** On a fresh-range deploy the `dcpromo` role's child-domain task fails on `fops-dc01`:
