@@ -14,6 +14,18 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-08 · gap · roles/dcpromo/tasks/main.yml — use parent Administrator for Install-ADDSDomain instead of granting EA to simspace
+
+**Symptom.** On a fresh range's first deploy, dcpromo(child) partially completed Install-ADDSDomain on fops-dc01 — set the machine's Primary DNS Suffix to `fops.blackstone.mil` (systeminfo showed `Domain: fops.blackstone.mil`, `OS Configuration: Member Server`) — then failed. Fops-dc01 was left in a "half-joined" state: registry indicates domain membership, but only local SAM accounts exist (`net users` shows only Administrator/simspace/etc.) and `net group /DOMAIN` returns "domain not contacted". Consequence: unqualified NTLM auth to fops-dc01 fails for `simspace` (server misinterprets it as `fops.blackstone.mil\simspace` which doesn't exist). Only `.\simspace` (explicit local SAM) authenticates. All subsequent playbook plays that target fops-dc01 fail unreachable → 30-minute init hangs on retries.
+
+**Root cause.** The prior (2026-07-07) EA-grant task on this line depended on `simspace` existing as an AD user in the parent forest before dcpromo(child) ran. But in `site.yml`, `Create Users` (line 470) runs AFTER dcpromo(child) (line 461) — so at the moment EA-grant fires, `simspace` may not yet exist in blackstone.mil. Even if `microsoft.ad.domain` migrates the local `simspace` user during forest creation, it's a Domain User (not EA and not DA), and `Install-ADDSDomain -DomainType ChildDomain` requires BOTH memberships — creating a new domain modifies the forest's Partitions container AND alters the schema replication topology. So EA alone was insufficient; the promotion still failed authorization.
+
+**Fix (overlay, landed 2026-07-08).** Deleted the EA-grant task entirely. Changed the Install-ADDSDomain credential from `{{ parent_domain_name }}\{{ domain_admin }}` (= blackstone.mil\simspace) to `{{ parent_domain_name }}\Administrator`. The parent forest's built-in Administrator is auto-EA + auto-DA + Schema Admin as soon as microsoft.ad.domain finishes on bs-dc01; no group-membership manipulation needed. Password is preserved from the local Administrator, which the "local admin guest customization fix" tasks earlier in the dcpromo role already reset to `{{ domain_admin_password }}` (= Simspace1!Simspace1!). Idempotent, no delegate_to, no dependency on create_users having run first.
+
+**Fix (upstream).** In `range-development-ansible/roles/dcpromo/tasks/main.yml`, when adding child-domain support (currently the customer role only handles forest-root creation), use the parent forest's Administrator credential rather than the operator's Ansible user. Alternatively, if using a domain user like `simspace` is preferred, split `create_users` into per-domain runs and enforce ordering: forest-root users must exist BEFORE any child-domain promotion attempts.
+
+---
+
 ## 2026-07-07 · gap · roles/dcpromo/tasks/main.yml — child-domain path needs Enterprise Admin on the parent forest
 
 **Symptom.** After the DNS bootstrap fix (below) landed, `Install-ADDSDomain` still failed on fops-dc01. With the surface-errors fix in place (commit 0857a62), the actual message came through:
