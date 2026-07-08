@@ -16,6 +16,82 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-08 · bug · roles/global_dns/templates/simspace_includes.conf.j2 — corpora `redirect` zone collision aborts unbound
+
+**Symptom.** On a fresh range, corp hosts can't resolve any external name — bs-dc01's forwarders point at 8.8.8.8/8.8.4.4/1.1.1.1 (is-inet lo aliases) but every query times out. Digging into is-inet: unbound isn't running at all. Attempting to start it manually reveals the reason:
+```
+error: local-data in redirect zone must reside at top of zone,
+       not at www.github.com. A 70.39.65.196
+fatal error: Could not set up local zones
+```
+
+**Root cause.** is-inet's `/etc/unbound/corpus.d/*.conf` files ship hundreds of `local-zone: "<domain>." redirect` entries (Ukraine/Russia/US censorship-simulation corpora). Our `global_dns_records` in `group_vars/all.yml` add sub-domain `local-data` entries for some of the same domains (github.com, google.com, microsoft.com, etc. — plus airfield's aviation zones and blackstone.mil). Unbound refuses to accept sub-domain records in a `redirect` zone — the whole config load fails and the daemon exits.
+
+**Fix (overlay).** Extended `roles/global_dns/templates/simspace_includes.conf.j2` to emit `local-zone: "<zone>." transparent` at the top of the file for every unique zone that appears in `global_dns_records`. `transparent` overrides the corpora's `redirect` type so our sub-domain records get honored. Trade-off: the corpora's redirect no longer applies to our overridden zones — fine for scenario purposes since our records are what we want anyway.
+
+**Fix (upstream).** Same patch in `range-development-ansible/roles/global_dns/templates/simspace_includes.conf.j2`. Any range that adds records under a corpora-covered domain hits this bug.
+
+---
+
+## 2026-07-08 · bug · is-inet image — unbound doesn't auto-start; log file + PID file missing
+
+**Symptom.** After range provisioning, corp DNS queries to 8.8.8.8 (is-inet lo alias) time out. Inside the is-inet container, `ss -lnu | grep :53` returns nothing — **unbound isn't running**. Postfix / Dovecot / httpd (for webmail) are all up. Manually running `docker exec -d is-inet /usr/sbin/unbound` fails with `Could not open logfile /var/log/unbound.log: Permission denied`.
+
+**Root cause.** The RC-IS-INET container image's entrypoint launches the mail stack but not unbound. `/etc/unbound/unbound.conf` specifies `logfile: "/var/log/unbound.log"`, but that file doesn't exist inside the container and the `unbound` user can't create it. There's also a stale `/var/run/unbound.pid` on some baselines.
+
+**Fix (overlay).** New `roles/is_inet_fix/` on airfield-range. Deploys three things on the is-inet host:
+1. A shell script at `/usr/local/sbin/airfield-unbound-supervise.sh` that checks whether unbound is listening in the container; if not, creates the logfile with `unbound:unbound` ownership, clears any stale PID, and runs `docker exec -d is-inet /usr/sbin/unbound`.
+2. A systemd oneshot service that runs the script at boot.
+3. A systemd timer that re-runs the script every minute so any container restart re-launches unbound.
+
+Idempotent + self-healing across container/host restarts.
+
+**Fix (upstream / platform).** Either bake `/var/log/unbound.log` (owned by `unbound`) into the container image, or extend the image entrypoint to launch unbound alongside the mail stack. Also worth: the `range-development-ansible/roles/handlers/handlers/main.yml`'s `reload unbound` handler uses `ignore_errors: yes`, which masks this failure silently — either drop the ignore or explicitly probe for a running daemon first.
+
+---
+
+## 2026-07-08 · platform · RC-IS-INET image — eth1 provisioned as /32 with no default gateway
+
+**Symptom.** is-inet's `eth1` (data-plane interface, at 200.200.200.2) comes up with a `/32` mask and no default gateway. `ip route` shows only the host's own /32; is-inet has no connected route to its own 200.200.200.0/24 LAN. Result: replies to any external client get `ENETUNREACH` and are silently dropped.
+
+**Root cause.** RC-IS-INET image bug — same one PowerPlant documented on 2026-05-22. PowerPlant's UPSTREAM_FIXES noted a "planned" `is_inet_fix` role that was never built. Airfield hit the same wall today.
+
+**Fix (overlay).** `roles/is_inet_fix/` drops a netplan supplement at `/etc/netplan/99-airfield-eth1.yaml` with the correct `/24` addressing + default gateway (`200.200.200.1` = bs-edge-rtr eth0). `netplan apply` on change. Persistent across reboots. Values driven from `host_vars/is-inet.yml` variables (`isinet_dataplane_ip`, `_prefix`, `_gateway`) so airfield's exact addressing isn't baked into the role.
+
+**Fix (upstream / SimSpace).** Image cloud-init/netplan should honor the YAML-declared prefix and configure a default gateway pointing at the subnet's GATEWAY-roled neighbor. Same PowerPlant entry from 2026-05-22 applies here — the airfield `is_inet_fix` role should be back-ported to `range-development-ansible/roles/is_inet_fix/` (or PowerPlant/ss-pp-ab).
+
+---
+
+## 2026-07-08 · gap · corp -> is-inet: bs-edge-rtr missing return route to corp
+
+**Symptom.** After is-inet is functional, corp DNS queries reach unbound and unbound replies — but corp hosts still don't get answers. tcpdump on is-inet's eth1 shows queries from `172.31.x.x` arriving and replies going back the way they came. But the replies never reach corp.
+
+**Root cause.** `bs-edge-rtr`'s routing table has only its default route (via `200.200.200.2` = is-inet) plus its two connected /30 (`199.252.163.0/30` toward bs-edge-fw) and /24 (`200.200.200.0/24` toward is-inet). **No route to `172.31.0.0/16`**. eBGP with bs-edge-fw is up but shows `(Policy) (Policy)` for prefix counts — corp routes aren't being advertised due to some route-map/filter on bs-edge-fw's `pfsense_bgp` side. is-inet's reply → bs-edge-rtr → follows default back to is-inet → routing loop → TTL exhaust → drop.
+
+**Fix (overlay).** Added an `extra_static_routes` entry to `host_vars/bs-edge-rtr.yml`:
+```yaml
+extra_static_routes:
+  - route: "172.31.0.0/16"
+    next_hop: "199.252.163.1"        # bs-edge-fw WAN
+```
+Consumed by the customer `vyos` role's "Additional VyOS static routes" overlay play. Combines with bs-edge-fw's outbound NAT (see next entry) so return traffic finds its way home even without eBGP advertising corp routes.
+
+**Fix (upstream).** Either (a) fix the BGP route-map filtering on bs-edge-fw so corp routes actually get sent to bs-edge-rtr, or (b) leave this as a static-route belt-and-suspenders permanently. Static is arguably cleaner at this WAN edge — it works even if BGP goes sideways, and matches CLAUDE.md §3 (item 8) intent.
+
+---
+
+## 2026-07-08 · gap · host_vars/bs-edge-fw.yml — outbound NAT must be `automatic`, not `disabled`
+
+**Symptom.** Even after is-inet is fixed and bs-edge-rtr has a return route, DNS from a random corp host is fragile — depends on bs-edge-rtr's route being present.
+
+**Root cause.** The `pfsense_firewall` role defaults to `pfsense_disable_outbound_nat: true` (correct for INTERNAL transit firewalls like bs-ops-fw). But `bs-edge-fw` is the RANGE-EDGE firewall: corp <-> simulated internet. `172.31.0.0/16` is RFC1918 and not publicly routable, so NAT at the edge is realistic and expected. Without it, is-inet sees corp source IPs and depends entirely on bs-edge-rtr knowing where to route them back.
+
+**Fix (overlay).** Set `pfsense_disable_outbound_nat: false` in `host_vars/bs-edge-fw.yml`. The role's "disable" code becomes a no-op; a fresh pfSense install then keeps its stock `automatic` outbound-NAT mode.
+
+**Fix (upstream).** Consider making the `pfsense_firewall` role's disable-NAT default OFF, or driven by an explicit `pfsense_nat_outbound_mode` variable (accepting `automatic` / `hybrid` / `disabled`). The current all-or-nothing behavior forces every range to think about it per-firewall.
+
+---
+
 ## 2026-07-08 · platform · fresh child DC — GPMC New-GPLink fails with HRESULT 0x8007054B despite AD services healthy
 
 **Symptom.** On a freshly-promoted child DC (fops-dc01 in fops.blackstone.mil), `New-GPLink -Target "DC=fops,DC=blackstone,DC=mil"` returns:

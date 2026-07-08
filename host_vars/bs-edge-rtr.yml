@@ -24,6 +24,18 @@ static_route:
   route: "0.0.0.0/0"
   next_hop: "200.200.200.2"          # is-inet (simulated upstream)
 
+# Return-path route to corp. Without this, is-inet's replies to corp
+# hosts (destination 172.31.x.x) fall to bs-edge-rtr's default, which
+# points BACK at is-inet -- routing loop / TTL exhaust. bs-edge-fw's
+# outbound NAT masks corp source IPs to 199.252.163.1 (WAN), so on
+# the return path we just need bs-edge-rtr to know 172.31.0.0/16 is
+# reached via 199.252.163.1. Consumed by the customer vyos role's
+# "Additional VyOS static routes" overlay play (tag `extra_static_routes`).
+# See airfield-range UPSTREAM_FIXES.md 2026-07-08 entry.
+extra_static_routes:
+  - route: "172.31.0.0/16"
+    next_hop: "199.252.163.1"        # bs-edge-fw WAN (SNAT egress + corp return)
+
 # eBGP AS 65002 toward bs-edge-fw (AS 65001) — the only BGP session in
 # the fabric. The customer vyos role auto-emits `redistribute connected`
 # + `redistribute static` so the corp side learns 200.200.200.0/24 and

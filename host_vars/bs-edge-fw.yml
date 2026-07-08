@@ -106,6 +106,19 @@ pfsense_ospf:
 #
 # `associated_rule: pass` tells pfSense to auto-create the matching filter
 # rule on WAN_ISP so the DNATted traffic isn't blocked by default-deny.
+
+# --- Outbound NAT posture ------------------------------------------------
+# bs-edge-fw is the RANGE-EDGE firewall (corp <-> simulated-internet). At
+# the edge, outbound NAT is realistic: 172.31.0.0/16 is RFC1918, not
+# publicly routable, so it makes sense to SNAT corp source addresses to
+# the WAN IP (199.252.163.1) before packets hit is-inet. bs-ops-fw
+# (INTERNAL transit firewall) keeps the role's default of NAT-disabled.
+# Set `pfsense_disable_outbound_nat: false` to skip the role's "disable
+# outbound NAT" step; a fresh pfSense install then keeps its stock
+# `automatic` outbound-NAT mode.
+# See airfield-range UPSTREAM_FIXES.md 2026-07-08 entry.
+pfsense_disable_outbound_nat: false
+
 pfsense_nat_rules:
   - descr: "HTTP  → bs-www (blackstone.mil public web landing)"
     interface_descr: "SWITCH_0"

@@ -830,11 +830,29 @@
 # =============================================================================
 # Infrastructure services — internet-simulator DNS + enterprise squid proxy
 # =============================================================================
+# is_inet_fix must run BEFORE global_dns. The RC-IS-INET image ships eth1
+# as /32 with no default gateway (unusable for corp -> is-inet reachability)
+# AND the container's entrypoint doesn't launch unbound. See airfield-range
+# UPSTREAM_FIXES.md 2026-07-08 entry. Without is_inet_fix, the global_dns
+# `reload unbound` handler silently fails (`ignore_errors: yes` masks it)
+# and corp DNS queries to 8.8.8.8/8.8.4.4/1.1.1.1 time out.
+- name: is_inet_fix — eth1 netmask + gateway + unbound supervisor
+  hosts: is-inet
+  gather_facts: true
+  become: true
+  roles:
+    - is_inet_fix
+  tags:
+    - is_inet_fix
+    - is_inet
+
 # global_dns writes /opt/simspace_includes/simspace_includes.conf inside
 # is-inet's unbound container from `global_dns_records` (group_vars/all.yml)
 # so scenario names (faa.gov, weather.gov, arbitrsecurity.com, etc.) resolve
-# to lab-simulated public IPs. Reload triggered via the `reload unbound`
-# handler (roles/handlers/handlers/main.yml).
+# to lab-simulated public IPs. Template also emits `local-zone: transparent`
+# for every zone we serve, defeating the corpora files' `redirect` zones
+# that would otherwise abort unbound at startup. Reload triggered via the
+# `reload unbound` handler (roles/handlers/handlers/main.yml).
 - name: global_dns — populate is-inet's unbound zone
   hosts: global_dns
   gather_facts: true
