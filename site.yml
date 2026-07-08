@@ -673,8 +673,19 @@
 - name: Mapped Drive — fops.blackstone.mil
   hosts: pdc_fops
   gather_facts: false
-  roles:
-    - mapped_drive
+  # Fresh child DCs (fops-dc01) sometimes reject GPMC's New-GPLink RPC call
+  # even when LDAP, ADWS, DNS, and SMB all work individually -- observed on
+  # 2026-07-08 with the exact error "The specified domain either does not
+  # exist or could not be contacted" (HRESULT 0x8007054B), reproducible via
+  # `New-GPLink` even as Administrator. Root cause appears to be RPC/GPMI
+  # not yet fully bound on a freshly-promoted child DC. Non-blocking for
+  # range play (mapped drives are convenience), so wrap the role in an
+  # include_role task with ignore_errors -- see UPSTREAM_FIXES.md 2026-07-08.
+  tasks:
+    - name: Attempt mapped_drive on fops.blackstone.mil (non-fatal)
+      ansible.builtin.include_role:
+        name: mapped_drive
+      ignore_errors: true
   tags:
     - mapped_drive
     - mapped_drive_fops

@@ -14,6 +14,33 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-08 · platform · fresh child DC — GPMC New-GPLink fails with HRESULT 0x8007054B despite AD services healthy
+
+**Symptom.** On a freshly-promoted child DC (fops-dc01 in fops.blackstone.mil), `New-GPLink -Target "DC=fops,DC=blackstone,DC=mil"` returns:
+```
+The specified domain either does not exist or could not be contacted.
+(Exception from HRESULT: 0x8007054B)
+```
+Reproducible even as `fops.blackstone.mil\Administrator`. Also `Get-ADPrincipalGroupMembership` returns "The server is not operational" while `Get-ADDomain` and `Get-GPO` succeed — mixed AD subsystem readiness.
+
+**Detection.** All of these work:
+- `Get-Service NTDS, ADWS, DNS` all `Running`
+- `Resolve-DnsName fops.blackstone.mil` returns child DC's A records
+- `Resolve-DnsName _ldap._tcp.pdc._msdcs.fops.blackstone.mil` returns fops-dc01
+- `Get-ADDomain` returns `DC=fops,DC=blackstone,DC=mil`
+- `Get-GPO -Name "Mapped Network Drives"` returns the GPO created earlier in the same role
+
+Yet the specific RPC/GPMI subsystem used by `New-GPLink` (and by ActiveDirectory's `Get-ADPrincipalGroupMembership`) cannot bind to the domain. Points to RPC endpoint mapper or DRSUAPI binding not fully established on the freshly-promoted DC — the same subsystem that hosts DsReplicaGetInfo used by GPMC.
+
+**Fix (overlay).** Wrapped the `Mapped Drive — fops.blackstone.mil` play in an `include_role` task with `ignore_errors: true` so a first-deploy failure doesn't halt the rest of the playbook. Mapped drives are convenience UX, not core range functionality. Re-run `--tags mapped_drive_fops` after the deploy completes; the RPC/GPMI subsystem usually settles within 10-30 minutes of promotion.
+
+**Fix (upstream / platform).** No clean upstream fix. Possible mitigations:
+- Add a `Wait-ForRpcSubsystem`-style task after dcpromo(child) that pings the RPC endpoint until it responds, before running any GPMC operation.
+- Move `mapped_drive` for child domains to run AFTER a `Reboot Windows` cycle post-dcpromo (rebooting the DC forces full re-init of the RPC subsystem).
+- Retry `New-GPLink` internally in the role with a delay loop rather than failing on first attempt.
+
+---
+
 ## 2026-07-08 · gap · roles/mapped_drive/tasks/main.yml — DN builder broke for child domains
 
 **Symptom.** Deploy failed on fops-dc01 with:
