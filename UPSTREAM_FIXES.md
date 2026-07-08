@@ -12,6 +12,8 @@ Severity key:
 
 Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Symptom → Detection (if non-obvious) → Fix (upstream) → Workaround (overlay).
 
+**Historical domain names:** entries dated before 2026-07-02 reference `vcab.lan` / `flightops.lan` and OU groups `pdc_vcab` / `pdc_flightops` / `members_vcab` / `members_flightops` — these were **renamed to `blackstone.mil` / `fops.blackstone.mil` / `pdc_blackstone` / `pdc_fops` / `members_blackstone` / `members_fops` in the Blackstone rebrand on 2026-07-02** (see `[[project_blackstone_rebrand]]` memory). The technical content of every pre-rebrand entry still applies; only the domain/group labels changed. Don't edit those entries retroactively — the labels are preserved as historical fact.
+
 ---
 
 ## 2026-07-08 · platform · fresh child DC — GPMC New-GPLink fails with HRESULT 0x8007054B despite AD services healthy
@@ -32,7 +34,7 @@ Reproducible even as `fops.blackstone.mil\Administrator`. Also `Get-ADPrincipalG
 
 Yet the specific RPC/GPMI subsystem used by `New-GPLink` (and by ActiveDirectory's `Get-ADPrincipalGroupMembership`) cannot bind to the domain. Points to RPC endpoint mapper or DRSUAPI binding not fully established on the freshly-promoted DC — the same subsystem that hosts DsReplicaGetInfo used by GPMC.
 
-**Fix (overlay).** Wrapped the `Mapped Drive — fops.blackstone.mil` play in an `include_role` task with `ignore_errors: true` so a first-deploy failure doesn't halt the rest of the playbook. Mapped drives are convenience UX, not core range functionality. Re-run `--tags mapped_drive_fops` after the deploy completes; the RPC/GPMI subsystem usually settles within 10-30 minutes of promotion.
+**Fix (overlay).** Wrapped the `Mapped Drive — fops.blackstone.mil` play tasks in a `block`/`rescue` structure so a first-deploy failure doesn't halt the rest of the playbook. (Initial attempt used `include_role` with `ignore_errors: true`, but that flag only affects the include-operation itself, NOT the tasks pulled in by the included role — the failing DSC task inside the role still marked the host as failed and aborted the play. `block`/`rescue` is the only reliable way to make in-role tasks non-fatal.) Mapped drives are convenience UX, not core range functionality. Re-run `--tags mapped_drive_fops` after the deploy completes; the RPC/GPMI subsystem usually settles within 10-30 minutes of promotion.
 
 **Fix (upstream / platform).** No clean upstream fix. Possible mitigations:
 - Add a `Wait-ForRpcSubsystem`-style task after dcpromo(child) that pings the RPC endpoint until it responds, before running any GPMC operation.
@@ -70,7 +72,9 @@ FAILED! => 'domain_tld_name' is undefined
 
 ---
 
-## 2026-07-07 · gap · roles/dcpromo/tasks/main.yml — child-domain path needs Enterprise Admin on the parent forest
+## 2026-07-07 · gap · roles/dcpromo/tasks/main.yml — child-domain path needs Enterprise Admin on the parent forest (SUPERSEDED)
+
+> **SUPERSEDED 2026-07-08:** The EA-grant overlay described below was **deleted from the role**. Replaced by the newer 2026-07-08 fix that uses the parent-forest built-in `Administrator` credential (auto-EA + auto-DA + Schema Admin) for `Install-ADDSDomain`, so no group-membership manipulation is needed at all. See the 2026-07-08 `dcpromo` entry above. Entry retained here for historical context and for the root-cause explanation (why simspace-as-DA is not enough for child-domain creation), which the newer entry references.
 
 **Symptom.** After the DNS bootstrap fix (below) landed, `Install-ADDSDomain` still failed on fops-dc01. With the surface-errors fix in place (commit 0857a62), the actual message came through:
 ```
@@ -80,11 +84,11 @@ group. The installation may fail with an access denied error.
 ```
 `C:\Windows\debug\dcpromoui.log` on fops-dc01 confirmed: `User is not EA`.
 
-**Root cause.** Creating a child domain modifies the Partitions container in the forest's Configuration NC, which only Enterprise Admins can write to. The role uses `simspace` as the promotion credential — `simspace` is a Domain Admin in blackstone.mil (per the `create_users` role) but NOT an Enterprise Admin. Only the built-in `Administrator` gets auto-EA on forest-root install; any subsequently-created domain user needs explicit membership. My role's earlier comment ("`simspace` is Domain Admin in the parent... auto-promoted into Enterprise Admins on forest-root install") was wrong on that second half — the auto-promotion only applies to the account that ran the promotion (Administrator), not to subsequently-created domain users.
+**Root cause.** Creating a child domain modifies the Partitions container in the forest's Configuration NC, which only Enterprise Admins can write to. The role uses `simspace` as the promotion credential — `simspace` is a Domain Admin in blackstone.mil (per the `create_users` role) but NOT an Enterprise Admin. Only the built-in `Administrator` gets auto-EA on forest-root install; any subsequently-created domain user needs explicit membership.
 
-**Fix (overlay, landed 2026-07-07).** Added a task in the child-domain path that grants EA to `{{ domain_admin }}` on the parent forest before Install-ADDSDomain runs. `delegate_to: "{{ groups['pdc_blackstone'] | first }}"` so the `Add-ADGroupMember -Identity "Enterprise Admins"` call lands on the forest-root DC where the group lives. Idempotent — catches the "already a member" exception and reports `ALREADY_EA` instead of failing on re-runs.
+**Fix (overlay — REVERTED 2026-07-08).** Originally: added a task in the child-domain path that granted EA to `{{ domain_admin }}` on the parent forest before Install-ADDSDomain, delegated to bs-dc01. That approach was found to be insufficient (EA alone; `Install-ADDSDomain -DomainType ChildDomain` also requires Domain Admin membership) AND fragile (depends on simspace existing as an AD user before create_users runs, which the site.yml ordering did not guarantee). Deleted on 2026-07-08 in favor of using `blackstone.mil\Administrator` directly.
 
-**Fix (upstream).** In `range-development-ansible/roles/create_users/tasks/main.yml`, if the target user is `simspace` (or any Domain Admin whose role includes forest-management), add them to Enterprise Admins + Schema Admins on the forest root. Alternatively, the customer's dcpromo role should handle this automatically when `parent_domain_name` is set. Right now the customer role only supports single-domain forest creation, so this is one of several gaps around child-domain support.
+**Fix (upstream).** See the 2026-07-08 entry.
 
 ---
 
@@ -442,6 +446,16 @@ When any rebind fires, watch `/var/log/messages` on the pfSense for an `airfield
 
 ---
 
+## 2026-06-29 · bug · roles/pfsense_firewall/files/airfield_iface_watchdog.sh — skipped vmx1 on bs-ops-fw
+
+**Symptom.** Even after the watchdog daemon (layer 4 above) was installed and verified running, every full deploy still produced "domain not contacted" failures on the 10 Eng/SOC hosts behind `bs-ops-fw`. vmx1 (172.31.1.14, SWITCH_3 transit toward bs-ops-rtr) stayed dropped indefinitely — the watchdog never logged a rebind for it.
+
+**Root cause.** The watchdog script started with `if ($key === "lan" || $key === "wan") continue;` — intended to skip the management interface and the (non-existent on a transit firewall) WAN interface. But pfSense's `config.xml` assigns the key `wan` to whichever interface holds the **default gateway**. On `bs-ops-fw`, vmx1 is the default-gateway-facing interface (`GW_OPS_RTR` toward bs-ops-rtr), so pfSense keys it `wan`. The watchdog therefore deliberately skipped the very interface that keeps dropping.
+
+**Fix (overlay).** Changed the skip condition from `$key === "lan" || $key === "wan"` to `$phys === "vmx0"`. Per CLAUDE.md §3 row 10, vmx0 is the management NIC on every pfSense firewall in this build, so excluding by physical name (rather than by config-key) reliably skips only the mgmt plane while supervising all data-plane interfaces — including the default-gateway-facing one. The lan-vs-wan keying inside pfSense is irrelevant to whether an interface is data-plane.
+
+---
+
 ## 2026-06-30 · bug (upstream pfSense/FreeBSD) · pfSense syslog forwarding omits HOSTNAME field
 
 **Symptom.** After enabling remote syslog forwarding (`syslog/enable` + `syslog/remoteserver` + `syslog/logall` in pfSense `config.xml`, then `system_syslogd_start()`), packets arrive at the SOC collector but `$hostname` is unparseable, so rsyslog's per-host template writes them to `/var/log/remote/<source-ip>/syslog.log` (e.g. `/var/log/remote/172.31.1.21/` for bs-ops-fw) instead of `/var/log/remote/bs-ops-fw/`.
@@ -463,16 +477,6 @@ VyOS routers on the same collector format correctly (`Jun 30 16:24:03 bs-core-rt
 **Workaround (overlay).** Map source-IP → hostname on the rsyslog side. `roles/syslog_server/templates/30-remote.conf.j2` now iterates `syslog_source_ip_map` (a list of `{ip, name}` dicts from host_vars/soc-syslog.yml) and emits one `if $fromhost-ip == '<ip>' then set $!hostfile = '<name>';` line per entry. Non-pfSense sources still flow through the default `$hostname`-from-message path. The map is small (2 entries today, one per pfSense firewall) and inventory-driven, so adding a third firewall is one host_vars line.
 
 After the fix, restart rsyslog on soc-syslog (the role's handler does this on template change) and any new packets land in `/var/log/remote/<hostname>/`. Stale IP-named directories from before the fix can be deleted manually.
-
----
-
-## 2026-06-29 · bug · roles/pfsense_firewall/files/airfield_iface_watchdog.sh — skipped vmx1 on bs-ops-fw
-
-**Symptom.** Even after the watchdog daemon (layer 4 above) was installed and verified running, every full deploy still produced "domain not contacted" failures on the 10 Eng/SOC hosts behind `bs-ops-fw`. vmx1 (172.31.1.14, SWITCH_3 transit toward bs-ops-rtr) stayed dropped indefinitely — the watchdog never logged a rebind for it.
-
-**Root cause.** The watchdog script started with `if ($key === "lan" || $key === "wan") continue;` — intended to skip the management interface and the (non-existent on a transit firewall) WAN interface. But pfSense's `config.xml` assigns the key `wan` to whichever interface holds the **default gateway**. On `bs-ops-fw`, vmx1 is the default-gateway-facing interface (`GW_OPS_RTR` toward bs-ops-rtr), so pfSense keys it `wan`. The watchdog therefore deliberately skipped the very interface that keeps dropping.
-
-**Fix (overlay).** Changed the skip condition from `$key === "lan" || $key === "wan"` to `$phys === "vmx0"`. Per CLAUDE.md §3 row 10, vmx0 is the management NIC on every pfSense firewall in this build, so excluding by physical name (rather than by config-key) reliably skips only the mgmt plane while supervising all data-plane interfaces — including the default-gateway-facing one. The lan-vs-wan keying inside pfSense is irrelevant to whether an interface is data-plane.
 
 ---
 
@@ -551,4 +555,8 @@ fatal: [bs-ops-fw]: FAILED! => {"cmd": "set +e\npkill -f 'dhclient.*vmx[1-9]'...
 
 ---
 
-<!-- New entries go above this line, newest first. -->
+<!-- Entries are organized in phases: the most recent chronological run is at the top of
+     the file (newest-first within that run), then older phases follow oldest-first. When
+     adding a new entry, place it at the top under a "newest first" convention until the
+     next phase break; then the whole run becomes historical and stays in place. -->
+
