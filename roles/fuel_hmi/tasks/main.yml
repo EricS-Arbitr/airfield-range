@@ -1,0 +1,65 @@
+---
+# fuel_hmi -- FUXA on control-room-hmi (shared bridge host with power).
+# Modbus TCP client polling ff-plc-1's SCADA-bus image on :502.
+# Deployed via the frangoteam/fuxa Docker image (build sheet §5 A).
+
+- name: Install docker + python bindings
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - python3-docker
+    state: present
+    update_cache: yes
+
+- name: Ensure docker daemon running
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Directory for FUXA persistent state + imported project JSON
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/fuxa/appdata
+    - /opt/fuxa/projects
+
+- name: Render FUXA project (device + tag import from build sheet §4)
+  ansible.builtin.template:
+    src: fuxa_project.json.j2
+    dest: /opt/fuxa/projects/fuel_farm.json
+    mode: '0644'
+  register: fuxa_project
+
+- name: Run FUXA container (Modbus TCP client to SCADA-bus PLC)
+  community.docker.docker_container:
+    name: fuxa
+    image: frangoteam/fuxa:latest
+    restart_policy: unless-stopped
+    published_ports:
+      - "{{ fuel_hmi_ip }}:{{ fuxa_port }}:1881"
+    volumes:
+      - /opt/fuxa/appdata:/usr/src/app/FUXA/server/_appdata
+      - /opt/fuxa/projects:/usr/src/app/FUXA/server/_projects
+    state: started
+
+- name: Wait for FUXA UI :1881
+  ansible.builtin.wait_for:
+    host: "{{ fuel_hmi_ip }}"
+    port: "{{ fuxa_port }}"
+    timeout: 60
+
+# Screen definitions in fuxa_project.json.j2 are a scaffold: device
+# config for the Modbus TCP endpoint at ff-plc-1:502 plus one placeholder
+# view. Author the P&ID + loading-rack screens in the FUXA editor after
+# first boot; the /opt/fuxa/projects bind mount preserves them across
+# container restarts.
+- name: TODO — author P&ID + loading-rack screens in FUXA editor
+  ansible.builtin.debug:
+    msg: >-
+      Log in to http://{{ fuel_hmi_ip }}:{{ fuxa_port }}/ as
+      {{ fuxa_admin_user }} and author the Process Overview + Loading Rack
+      Detail screens from build sheet §5.A.
+  when: fuxa_project.changed

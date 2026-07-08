@@ -1,0 +1,17 @@
+[Unit]
+Description=Fuel Farm Simulator (field-bus Modbus slave + physics + replay)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fuelsim
+Group=fuelsim
+WorkingDirectory=/opt/fuelsim
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/fuelsim/venv/bin/python /opt/fuelsim/bin/fuelsim.py --config /opt/fuelsim/config/fuelsim.yml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

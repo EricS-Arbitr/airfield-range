@@ -1,0 +1,53 @@
+# Ansible managed. Polls ff-plc-1's SCADA-bus Modbus TCP server per §4
+# register map; writes into InfluxDB 2.7 bucket `fuel`.
+
+[agent]
+  interval = "1s"
+  round_interval = true
+  flush_interval = "5s"
+  hostname = "fuel-hist"
+  omit_hostname = false
+
+[[outputs.influxdb_v2]]
+  urls   = ["http://localhost:8086"]
+  token  = "{{ influxdb_admin_token }}"
+  organization = "{{ influxdb_org }}"
+  bucket = "{{ influxdb_bucket_fuel }}"
+
+[[inputs.modbus]]
+  name              = "fuel"
+  slave_id          = 1
+  timeout           = "2s"
+  controller        = "tcp://{{ fuel_plc_ip }}:{{ fuel_modbus_port }}"
+
+  # --- Coils (commands) -- FC1
+{% for c in fuel_modbus_coils %}
+  coils = [
+    { name = "{{ c.tag }}", address = [{{ c.addr }}] },
+  ]
+{% endfor %}
+
+  # --- Discrete inputs (status) -- FC2
+{% for d in fuel_modbus_discrete_inputs %}
+  discrete_inputs = [
+    { name = "{{ d.tag }}", address = [{{ d.addr }}] },
+  ]
+{% endfor %}
+
+  # --- Input registers (analog measurements) -- FC4
+{% for r in fuel_modbus_input_registers %}
+  input_registers = [
+    { name = "{{ r.tag }}", byte_order = "AB", data_type = "INT16", scale = {{ r.scale }}, address = [{{ r.addr }}] },
+  ]
+{% endfor %}
+
+  # --- Holding registers (setpoints / assignments) -- FC3
+{% for h in fuel_modbus_holding_registers %}
+  holding_registers = [
+    { name = "{{ h.tag }}", byte_order = "AB", data_type = "INT16", scale = 1.0, address = [{{ h.addr }}] },
+  ]
+{% endfor %}
+
+  # Totalizers: LR*_METER_LO + LR*_METER_HI reassembled downstream in
+  # Flux (or an aggregation transform) using {{ fuel_totalizer_word_order }}
+  # word order. See build sheet §4 note on 32-bit split.

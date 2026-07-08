@@ -1,0 +1,91 @@
+---
+# fuel_plc — OpenPLC v4 runtime as a Docker container on ff-plc-1.
+# Serves the SCADA-bus Modbus TCP image on :502 (per §4 register map)
+# and the OpenPLC Editor web UI on :8080. The role uploads the compiled
+# ST program (files/fuel_farm.st) and rotates the default openplc/openplc
+# creds to the vault-stored password.
+
+- name: Install docker + python bindings
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - python3-docker
+    state: present
+    update_cache: yes
+
+- name: Ensure docker daemon running
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Directory for OpenPLC persistent state + program upload
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/openplc/etc
+    - /opt/openplc/programs
+
+- name: Upload ST program (author in OpenPLC Editor, drop into files/)
+  ansible.builtin.copy:
+    src: fuel_farm.st
+    dest: /opt/openplc/programs/fuel_farm.st
+    mode: '0644'
+  register: st_program
+
+# See build sheet §4: interlocks, coil/discrete/register map, and the
+# SCADA-bus Modbus TCP server on 502. Bind port 502 to the production
+# NIC (Fuel-PLC /29) so the field-bus (polling fuel-farm-sim) and the
+# SCADA-bus (served to control-room-hmi + fuel-hist) both cross
+# bs-modbus-gateway as designed.
+- name: Run OpenPLC v4 runtime container
+  community.docker.docker_container:
+    name: openplc
+    image: openplcproject/openplc_v3:latest
+    # NB: `openplc_v3` image also serves as v4 runtime (Autonomy-Logic
+    # publishes the v4 tag under this repo until they migrate). Confirm
+    # against build sheet §13 checklist before pinning to :v4.
+    restart_policy: unless-stopped
+    published_ports:
+      - "{{ fuel_plc_ip }}:{{ fuel_modbus_port }}:502"        # SCADA-bus
+      - "{{ fuel_plc_ip }}:{{ openplc_web_port }}:8080"       # web UI
+    volumes:
+      - /opt/openplc/etc:/workdir/etc
+      - /opt/openplc/programs:/workdir/programs
+    env:
+      OPENPLC_ADMIN_USER: "{{ openplc_admin_user }}"
+      OPENPLC_ADMIN_PASSWORD: "{{ openplc_admin_password }}"
+    state: started
+  register: openplc_container
+
+- name: Wait for OpenPLC web UI :8080 to answer
+  ansible.builtin.wait_for:
+    host: "{{ fuel_plc_ip }}"
+    port: "{{ openplc_web_port }}"
+    timeout: 60
+
+# Rotating the default openplc/openplc creds via the web API needs a
+# session cookie login. Left as a follow-up task: use ansible.builtin.uri
+# with a form-encoded POST to /login, then PUT /settings to change the
+# admin password. In the meantime, the OPENPLC_ADMIN_PASSWORD env we set
+# above is honored on FIRST container start by the runtime image; if the
+# image was already initialized with defaults, the env is ignored and we
+# need the API dance.  TODO: implement rotate_admin_creds.yml.
+- name: TODO — implement default-cred rotation via web API
+  ansible.builtin.debug:
+    msg: >-
+      OpenPLC admin creds seeded via container env on first start. If this
+      image was previously initialized, rotate manually or extend this role
+      with rotate_admin_creds.yml (see UPSTREAM_FIXES notes).
+
+# Upload the compiled ST program to the runtime. OpenPLC's web UI has a
+# /programs endpoint accepting a multipart form. Left as follow-up: the
+# uri module can POST it after login. For initial builds the operator can
+# upload via the browser once; subsequent runs pick up any edits via the
+# bind-mounted /opt/openplc/programs.
+- name: Note ST program placement (upload via web UI on first run)
+  ansible.builtin.debug:
+    msg: "ST program at /opt/openplc/programs/fuel_farm.st -- upload via OpenPLC web UI /programs on first deploy."
+  when: st_program.changed

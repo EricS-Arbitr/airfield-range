@@ -1,0 +1,39 @@
+# Ansible managed. fuelsim runtime config.
+# Values come from group_vars/fuel.yml -- single source of truth.
+
+modbus_slave:
+  bind:  "{{ fuel_sim_ip }}"
+  port:  {{ fuel_modbus_port }}
+  unit_id: 1
+
+physics:
+  # 500,000 gal tanks; loading rack ~600 gpm typical
+  tick_hz: 5
+
+replay:
+  timeline: /opt/fuelsim/timelines/fuel_ops_timeline.jsonl
+  seed:     {{ replay_seed }}
+  speed:    {{ replay_speed }}
+  loop:     true
+
+audit_db:
+  host:     "{{ fuel_db_ip }}"
+  port:     5432
+  dbname:   "{{ postgres_db_fuel }}"
+  user:     "{{ postgres_user_fuel_rw }}"
+  password: "{{ postgres_password_fuel_rw }}"
+
+plc:
+  # write LR*_ACTIVE_TRUCK / LR*_SRC_TANK holding regs on the SCADA-bus
+  # image on ff-plc-1 during state transitions
+  host: "{{ fuel_plc_ip }}"
+  port: {{ fuel_modbus_port }}
+
+# Register map -- pulled from group_vars/fuel.yml so the sim and PLC
+# share exactly one address book.
+tag_map:
+  coils: {{ fuel_modbus_coils | to_json }}
+  discrete_inputs: {{ fuel_modbus_discrete_inputs | to_json }}
+  input_registers: {{ fuel_modbus_input_registers | to_json }}
+  holding_registers: {{ fuel_modbus_holding_registers | to_json }}
+totalizer_word_order: "{{ fuel_totalizer_word_order }}"

@@ -1,0 +1,98 @@
+---
+# fuel_sim — deploys fuelsim (Python 3.12 systemd service) to
+# fuel-farm-sim. Serves the field-bus Modbus slave (pymodbus) that
+# ff-plc-1 (OpenPLC master) polls, runs the physics model, and drives
+# the logistics state machine from the 48h replay timeline.
+#
+# Build sheet §8. The Python code in files/fuelsim/ is a placeholder
+# scaffold -- flesh out the physics model, state machine, and replay
+# runner iteratively. The Ansible plumbing here (venv, systemd unit,
+# config, timeline file) is complete and idempotent.
+
+- name: Ensure python3.12 + venv + build deps
+  ansible.builtin.apt:
+    name:
+      - python3.12
+      - python3.12-venv
+      - python3-pip
+      - build-essential
+    state: present
+    update_cache: yes
+
+- name: Create fuelsim user + install directory
+  ansible.builtin.user:
+    name: fuelsim
+    system: yes
+    shell: /usr/sbin/nologin
+    home: /opt/fuelsim
+    create_home: yes
+
+- name: Directory layout
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: fuelsim
+    group: fuelsim
+    mode: '0755'
+  loop:
+    - /opt/fuelsim
+    - /opt/fuelsim/bin
+    - /opt/fuelsim/config
+    - /opt/fuelsim/timelines
+
+- name: Create Python 3.12 venv
+  ansible.builtin.command:
+    cmd: python3.12 -m venv /opt/fuelsim/venv
+    creates: /opt/fuelsim/venv/bin/python
+
+- name: Install pymodbus + psycopg2 + PyYAML into venv
+  ansible.builtin.pip:
+    name:
+      - "pymodbus[serial]==3.6.*"
+      - "psycopg2-binary==2.9.*"
+      - "PyYAML"
+    virtualenv: /opt/fuelsim/venv
+    state: present
+
+- name: Deploy fuelsim source (physics + slave + state machine + replay)
+  ansible.builtin.copy:
+    src: fuelsim/
+    dest: /opt/fuelsim/bin/
+    owner: fuelsim
+    group: fuelsim
+    mode: '0755'
+  notify: restart fuelsim
+
+- name: Render fuelsim config (host addresses + DB creds + register map)
+  ansible.builtin.template:
+    src: fuelsim.yml.j2
+    dest: /opt/fuelsim/config/fuelsim.yml
+    owner: fuelsim
+    group: fuelsim
+    mode: '0640'
+  notify: restart fuelsim
+
+- name: Deploy 48h replay timeline (deterministic, seeded)
+  ansible.builtin.template:
+    src: fuel_ops_timeline.jsonl.j2
+    dest: /opt/fuelsim/timelines/fuel_ops_timeline.jsonl
+    owner: fuelsim
+    group: fuelsim
+    mode: '0644'
+  notify: restart fuelsim
+
+- name: Deploy fuelsim systemd unit
+  ansible.builtin.template:
+    src: fuelsim.service.j2
+    dest: /etc/systemd/system/fuelsim.service
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart fuelsim
+
+- name: Enable + start fuelsim
+  ansible.builtin.systemd:
+    name: fuelsim
+    enabled: yes
+    state: started
+    daemon_reload: yes

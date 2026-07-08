@@ -1,0 +1,12 @@
+{# Ansible managed. 48h fuel operations timeline scaffold.
+   For real deterministic timeline generation, run
+   generate_timeline.py --seed {{ replay_seed }} --hours {{ fuel_timeline_hours }}
+   offline and drop the output alongside this template. Below is a
+   minimal 3-event smoke test so the fuelsim scaffold has something to
+   iterate against on first boot. #}
+{"t_offset_s": 60, "event": "order_created", "order_id": 1, "tail_no": "{{ fuel_aircraft_seed[0].tail_no }}", "pad_id": "{{ fuel_pads_seed[0].pad_id }}", "requested_gal": 4200}
+{"t_offset_s": 120, "event": "truck_arrival", "truck_id": "{{ fuel_trucks_seed[0].truck_id }}"}
+{"t_offset_s": 180, "event": "load_start", "truck_id": "{{ fuel_trucks_seed[0].truck_id }}", "tank_id": "{{ fuel_tanks_seed[0].tank_id }}", "rack_pos": 1, "preset_gal": 4200}
+{"t_offset_s": 540, "event": "load_end", "truck_id": "{{ fuel_trucks_seed[0].truck_id }}", "gallons": 4200}
+{"t_offset_s": 900, "event": "delivery_start", "truck_id": "{{ fuel_trucks_seed[0].truck_id }}", "tail_no": "{{ fuel_aircraft_seed[0].tail_no }}", "pad_id": "{{ fuel_pads_seed[0].pad_id }}", "order_id": 1}
+{"t_offset_s": 1320, "event": "delivery_end", "truck_id": "{{ fuel_trucks_seed[0].truck_id }}", "gallons": 4200}

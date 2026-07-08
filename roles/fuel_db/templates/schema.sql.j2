@@ -1,0 +1,91 @@
+-- Ansible managed. Fuel-farm audit schema (build sheet §7).
+-- Idempotent: IF NOT EXISTS everywhere. Hypertable creation is conditional
+-- via a DO block that catches "already a hypertable" errors.
+
+CREATE TABLE IF NOT EXISTS tanks (
+  tank_id      TEXT PRIMARY KEY,
+  product      TEXT NOT NULL,
+  capacity_gal NUMERIC NOT NULL
+);
+CREATE TABLE IF NOT EXISTS trucks (
+  truck_id     TEXT PRIMARY KEY,
+  callsign     TEXT,
+  capacity_gal NUMERIC NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'AVAILABLE'
+);
+CREATE TABLE IF NOT EXISTS aircraft (
+  tail_no  TEXT PRIMARY KEY,
+  ac_type  TEXT
+);
+CREATE TABLE IF NOT EXISTS pads (
+  pad_id TEXT PRIMARY KEY,
+  ramp   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fuel_orders (
+  order_id      BIGSERIAL PRIMARY KEY,
+  tail_no       TEXT REFERENCES aircraft(tail_no),
+  pad_id        TEXT REFERENCES pads(pad_id),
+  requested_gal NUMERIC NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'OPEN',
+  created_ts    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS truck_queue (
+  queue_id      BIGSERIAL PRIMARY KEY,
+  truck_id      TEXT REFERENCES trucks(truck_id),
+  position      INT,
+  state         TEXT NOT NULL,
+  source_tank   TEXT REFERENCES tanks(tank_id),
+  rack_position INT,
+  enqueued_ts   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_ts    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS load_txn (
+  load_id     BIGSERIAL,
+  truck_id    TEXT REFERENCES trucks(truck_id),
+  tank_id     TEXT REFERENCES tanks(tank_id),
+  rack_pos    INT,
+  preset_gal  NUMERIC,
+  meter_start NUMERIC,
+  meter_end   NUMERIC,
+  gallons     NUMERIC,
+  operator    TEXT,
+  start_ts    TIMESTAMPTZ NOT NULL,
+  end_ts      TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (load_id, start_ts)
+);
+CREATE TABLE IF NOT EXISTS delivery_txn (
+  delivery_id BIGSERIAL,
+  truck_id    TEXT REFERENCES trucks(truck_id),
+  tail_no     TEXT REFERENCES aircraft(tail_no),
+  pad_id      TEXT REFERENCES pads(pad_id),
+  order_id    BIGINT,
+  gallons     NUMERIC,
+  start_ts    TIMESTAMPTZ NOT NULL,
+  end_ts      TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (delivery_id, start_ts)
+);
+CREATE TABLE IF NOT EXISTS tank_level_snap (
+  ts        TIMESTAMPTZ NOT NULL,
+  tank_id   TEXT REFERENCES tanks(tank_id),
+  level_gal NUMERIC,
+  temp_f    NUMERIC
+);
+CREATE TABLE IF NOT EXISTS events (
+  event_id BIGSERIAL,
+  ts       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  source   TEXT,
+  severity TEXT,
+  code     TEXT,
+  message  TEXT,
+  PRIMARY KEY (event_id, ts)
+);
+
+-- Hypertables (TimescaleDB) — wrap in DO block for idempotence
+DO $$ BEGIN
+  PERFORM create_hypertable('load_txn','start_ts', if_not_exists => TRUE);
+  PERFORM create_hypertable('delivery_txn','start_ts', if_not_exists => TRUE);
+  PERFORM create_hypertable('tank_level_snap','ts', if_not_exists => TRUE);
+  PERFORM create_hypertable('events','ts', if_not_exists => TRUE);
+END $$;

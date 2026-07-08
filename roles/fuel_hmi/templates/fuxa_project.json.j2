@@ -1,0 +1,53 @@
+{
+  "version": "1.13",
+  "name": "fuel_farm",
+  "devices": {
+    "PLC-FuelFarm": {
+      "id": "PLC-FuelFarm",
+      "name": "PLC-FuelFarm",
+      "type": "ModbusTCP",
+      "property": {
+        "address": "{{ fuel_plc_ip }}",
+        "port": {{ fuel_modbus_port }},
+        "slave_id": 1,
+        "endianness": "AB"
+      },
+      "tags": {
+{% for c in fuel_modbus_coils %}
+        "{{ c.tag }}": { "id": "{{ c.tag }}", "name": "{{ c.tag }}", "type": "Coil", "address": "{{ c.addr }}", "memaddress": "Coils" }{% if not loop.last %},{% endif %}
+
+{% endfor %}{%
+if fuel_modbus_discrete_inputs %},{% endif %}
+{% for d in fuel_modbus_discrete_inputs %}
+        "{{ d.tag }}": { "id": "{{ d.tag }}", "name": "{{ d.tag }}", "type": "Input", "address": "{{ d.addr }}", "memaddress": "DiscreteInputs" }{% if not loop.last %},{% endif %}
+
+{% endfor %}{%
+if fuel_modbus_input_registers %},{% endif %}
+{% for r in fuel_modbus_input_registers %}
+        "{{ r.tag }}": { "id": "{{ r.tag }}", "name": "{{ r.tag }}", "type": "Int16", "address": "{{ r.addr }}", "memaddress": "InputRegisters", "scale": {{ r.scale }} }{% if not loop.last %},{% endif %}
+
+{% endfor %}{%
+if fuel_modbus_holding_registers %},{% endif %}
+{% for h in fuel_modbus_holding_registers %}
+        "{{ h.tag }}": { "id": "{{ h.tag }}", "name": "{{ h.tag }}", "type": "Int16", "address": "{{ h.addr }}", "memaddress": "HoldingRegisters" }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+      }
+    }
+  },
+  "views": [
+    {
+      "id": "process_overview",
+      "name": "Process Overview",
+      "type": "SVG",
+      "profile": { "width": 1280, "height": 720 },
+      "items": {
+        "note": {
+          "type": "text",
+          "id": "note",
+          "text": "Author P&ID in FUXA editor. Tanks 101/102/103 bargraphs, P-201/P-202 run state, valves, header pressure. See build sheet §5.A."
+        }
+      }
+    }
+  ]
+}

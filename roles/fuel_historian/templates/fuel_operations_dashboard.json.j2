@@ -1,0 +1,71 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 0,
+  "id": null,
+  "iteration": 1,
+  "panels": [
+    {
+      "type": "table",
+      "title": "Truck queue (live from fuel_audit.truck_queue)",
+      "datasource": "Postgres-FuelAudit",
+      "targets": [{
+        "rawQuery": true,
+        "rawSql": "SELECT queue_id, truck_id, position, state, source_tank, rack_position, enqueued_ts FROM truck_queue ORDER BY position NULLS LAST, enqueued_ts;",
+        "format": "table"
+      }],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "type": "table",
+      "title": "Tank levels (from tank_level_snap latest per tank)",
+      "datasource": "Postgres-FuelAudit",
+      "targets": [{
+        "rawQuery": true,
+        "rawSql": "SELECT DISTINCT ON (tank_id) tank_id, level_gal, temp_f, ts FROM tank_level_snap ORDER BY tank_id, ts DESC;",
+        "format": "table"
+      }],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Process trends (InfluxDB `fuel` bucket)",
+      "datasource": "InfluxDB-Fuel",
+      "targets": [{
+        "query": "from(bucket: \"{{ influxdb_bucket_fuel }}\") |> range(start: -1h) |> filter(fn: (r) => r._measurement == \"fuel\" and (r._field == \"T101_LEVEL\" or r._field == \"HEADER_PRESS\" or r._field == \"LR1_FLOW\"))"
+      }],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 8 }
+    },
+    {
+      "type": "table",
+      "title": "Fuel withdrawn per truck (load_txn sum)",
+      "datasource": "Postgres-FuelAudit",
+      "targets": [{
+        "rawQuery": true,
+        "rawSql": "SELECT truck_id, SUM(gallons) AS gal_loaded, COUNT(*) AS loads FROM load_txn WHERE start_ts > now() - INTERVAL '24 hours' GROUP BY truck_id ORDER BY gal_loaded DESC;",
+        "format": "table"
+      }],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 }
+    },
+    {
+      "type": "table",
+      "title": "Aircraft deliveries (delivery_txn)",
+      "datasource": "Postgres-FuelAudit",
+      "targets": [{
+        "rawQuery": true,
+        "rawSql": "SELECT tail_no, pad_id, SUM(gallons) AS gal_delivered, COUNT(*) AS deliveries FROM delivery_txn WHERE start_ts > now() - INTERVAL '24 hours' GROUP BY tail_no, pad_id ORDER BY gal_delivered DESC;",
+        "format": "table"
+      }],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["fuel", "ot"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Fuel Operations",
+  "uid": "fuel-operations",
+  "version": 1
+}

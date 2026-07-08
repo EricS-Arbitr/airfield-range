@@ -1,0 +1,145 @@
+---
+# fuel_db — PostgreSQL 16 + TimescaleDB on fuel-db.
+# Applies the audit schema from fuel-farm-build-sheet.md §7 and seeds
+# the reference tables (tanks/trucks/aircraft/pads) from group_vars/fuel.yml.
+# Idempotent: schema uses IF NOT EXISTS, seeds use ON CONFLICT DO NOTHING.
+
+- name: Install PostgreSQL 16 + TimescaleDB apt prerequisites
+  ansible.builtin.apt:
+    name:
+      - curl
+      - gnupg
+      - ca-certificates
+      - lsb-release
+      - python3-psycopg2
+    state: present
+    update_cache: yes
+
+- name: Add TimescaleDB apt repository key
+  ansible.builtin.get_url:
+    url: https://packagecloud.io/timescale/timescaledb/gpgkey
+    dest: /etc/apt/keyrings/timescaledb.asc
+    mode: '0644'
+
+- name: Add TimescaleDB apt repository (noble)
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/timescaledb.asc] https://packagecloud.io/timescale/timescaledb/ubuntu/ noble main"
+    state: present
+    filename: timescaledb
+    update_cache: yes
+
+- name: Install PostgreSQL 16 + TimescaleDB
+  ansible.builtin.apt:
+    name:
+      - postgresql-16
+      - timescaledb-2-postgresql-16
+    state: present
+
+- name: Enable TimescaleDB extension in postgresql.conf (shared_preload_libraries)
+  ansible.builtin.lineinfile:
+    path: /etc/postgresql/16/main/postgresql.conf
+    regexp: '^#?shared_preload_libraries\s*='
+    line: "shared_preload_libraries = 'timescaledb'"
+    state: present
+  notify: restart postgres
+
+- name: Allow LAN connections from Fuel-Sim + Engineering (per §10 ACL)
+  ansible.builtin.blockinfile:
+    path: /etc/postgresql/16/main/pg_hba.conf
+    marker: "# {mark} ANSIBLE MANAGED — fuel_db"
+    block: |
+      host  {{ postgres_db_fuel }}  {{ postgres_user_fuel_rw }}  172.16.46.0/24     md5
+      host  {{ postgres_db_fuel }}  {{ postgres_user_fuel_ro }}  172.16.46.0/24     md5
+      host  {{ postgres_db_fuel }}  {{ postgres_user_fuel_rw }}  172.31.8.0/24      md5
+      host  {{ postgres_db_fuel }}  {{ postgres_user_fuel_ro }}  172.31.8.0/24      md5
+  notify: restart postgres
+
+- name: Bind postgres to production NIC (Fuel-Sim /24) + localhost
+  ansible.builtin.lineinfile:
+    path: /etc/postgresql/16/main/postgresql.conf
+    regexp: '^#?listen_addresses\s*='
+    line: "listen_addresses = 'localhost,{{ fuel_db_ip }}'"
+    state: present
+  notify: restart postgres
+
+- name: Ensure postgres running
+  ansible.builtin.systemd:
+    name: postgresql
+    state: started
+    enabled: yes
+
+- name: Flush handlers so any restart lands before we run SQL
+  ansible.builtin.meta: flush_handlers
+
+- name: Create fuel_audit database
+  become_user: postgres
+  community.postgresql.postgresql_db:
+    name: "{{ postgres_db_fuel }}"
+    state: present
+
+- name: Create fuel_rw role (application writes)
+  become_user: postgres
+  community.postgresql.postgresql_user:
+    name: "{{ postgres_user_fuel_rw }}"
+    password: "{{ postgres_password_fuel_rw }}"
+    db: "{{ postgres_db_fuel }}"
+    role_attr_flags: LOGIN
+    state: present
+
+- name: Create fuel_ro role (Grafana / dashboards)
+  become_user: postgres
+  community.postgresql.postgresql_user:
+    name: "{{ postgres_user_fuel_ro }}"
+    password: "{{ postgres_password_fuel_rw }}"
+    db: "{{ postgres_db_fuel }}"
+    role_attr_flags: LOGIN
+    state: present
+
+- name: Enable TimescaleDB extension inside the fuel_audit DB
+  become_user: postgres
+  community.postgresql.postgresql_ext:
+    name: timescaledb
+    db: "{{ postgres_db_fuel }}"
+    state: present
+
+- name: Deploy audit schema (build sheet §7)
+  ansible.builtin.template:
+    src: schema.sql.j2
+    dest: /var/lib/postgresql/schema.sql
+    owner: postgres
+    group: postgres
+    mode: '0640'
+
+- name: Apply schema (idempotent via IF NOT EXISTS)
+  become_user: postgres
+  ansible.builtin.command:
+    cmd: psql -d {{ postgres_db_fuel }} -v ON_ERROR_STOP=1 -f /var/lib/postgresql/schema.sql
+  register: schema_apply
+  changed_when: "'CREATE' in schema_apply.stdout or 'ALTER' in schema_apply.stdout"
+
+- name: Grant table privileges to fuel_rw (writes) + fuel_ro (reads)
+  become_user: postgres
+  community.postgresql.postgresql_privs:
+    db: "{{ postgres_db_fuel }}"
+    role: "{{ item.role }}"
+    type: table
+    schema: public
+    objs: ALL_IN_SCHEMA
+    privs: "{{ item.privs }}"
+  loop:
+    - { role: "{{ postgres_user_fuel_rw }}", privs: "SELECT,INSERT,UPDATE,DELETE" }
+    - { role: "{{ postgres_user_fuel_ro }}", privs: "SELECT" }
+
+- name: Deploy seed data SQL (tanks / trucks / aircraft / pads)
+  ansible.builtin.template:
+    src: seeds.sql.j2
+    dest: /var/lib/postgresql/seeds.sql
+    owner: postgres
+    group: postgres
+    mode: '0640'
+
+- name: Apply seed data (ON CONFLICT DO NOTHING = idempotent)
+  become_user: postgres
+  ansible.builtin.command:
+    cmd: psql -d {{ postgres_db_fuel }} -v ON_ERROR_STOP=1 -f /var/lib/postgresql/seeds.sql
+  changed_when: false

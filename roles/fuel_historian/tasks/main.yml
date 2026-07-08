@@ -1,0 +1,158 @@
+---
+# fuel_historian -- Telegraf -> InfluxDB 2.7 -> Grafana on fuel-hist.
+# CRITICAL: pin influxdb:2.7 (build sheet §13). `:latest` = InfluxDB 3
+# Core (recent-data engine, ~72h window). Wrong for a historian.
+
+- name: Install docker + python bindings
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - python3-docker
+      - curl
+      - ca-certificates
+      - gnupg
+    state: present
+    update_cache: yes
+
+- name: Ensure docker daemon running
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+# --- InfluxDB 2.7 -----------------------------------------------------
+
+- name: Directory for InfluxDB persistent state
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/influxdb/data
+    - /opt/influxdb/config
+
+- name: Run InfluxDB 2.7 container (pinned)
+  community.docker.docker_container:
+    name: influxdb
+    image: "{{ influxdb_image }}"   # influxdb:2.7 -- NEVER :latest
+    restart_policy: unless-stopped
+    published_ports:
+      - "{{ fuel_hist_ip }}:8086:8086"
+    volumes:
+      - /opt/influxdb/data:/var/lib/influxdb2
+      - /opt/influxdb/config:/etc/influxdb2
+    env:
+      DOCKER_INFLUXDB_INIT_MODE: "setup"
+      DOCKER_INFLUXDB_INIT_USERNAME: "admin"
+      DOCKER_INFLUXDB_INIT_PASSWORD: "{{ vault_influxdb_admin_password | default('Simspace1!Simspace1!') }}"
+      DOCKER_INFLUXDB_INIT_ORG: "{{ influxdb_org }}"
+      DOCKER_INFLUXDB_INIT_BUCKET: "{{ influxdb_bucket_fuel }}"
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: "{{ influxdb_admin_token }}"
+    state: started
+  register: influxdb_container
+
+- name: Wait for InfluxDB API :8086 to answer
+  ansible.builtin.wait_for:
+    host: "{{ fuel_hist_ip }}"
+    port: 8086
+    timeout: 90
+
+# --- Telegraf (polls ff-plc-1's SCADA-bus Modbus TCP server) ----------
+
+- name: Install telegraf apt key + repo
+  ansible.builtin.get_url:
+    url: https://repos.influxdata.com/influxdata-archive.key
+    dest: /etc/apt/keyrings/influxdata.asc
+    mode: '0644'
+
+- name: Add InfluxData apt repo (noble)
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/influxdata.asc] https://repos.influxdata.com/debian stable main"
+    state: present
+    filename: influxdata
+    update_cache: yes
+
+- name: Install telegraf
+  ansible.builtin.apt:
+    name: telegraf
+    state: present
+
+- name: Render telegraf.conf with modbus input + influxdb v2 output
+  ansible.builtin.template:
+    src: telegraf.conf.j2
+    dest: /etc/telegraf/telegraf.conf
+    owner: telegraf
+    group: telegraf
+    mode: '0640'
+  notify: restart telegraf
+
+- name: Ensure telegraf running
+  ansible.builtin.systemd:
+    name: telegraf
+    state: started
+    enabled: yes
+
+# --- Grafana ----------------------------------------------------------
+
+- name: Directory for Grafana persistent state + provisioning
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/grafana/data
+    - /opt/grafana/provisioning/datasources
+    - /opt/grafana/provisioning/dashboards
+    - /opt/grafana/dashboards
+
+- name: Provision InfluxDB (Flux) + PostgreSQL datasources
+  ansible.builtin.template:
+    src: grafana_datasources.yml.j2
+    dest: /opt/grafana/provisioning/datasources/fuel.yml
+    mode: '0644'
+  notify: restart grafana
+
+- name: Dashboards provisioner index
+  ansible.builtin.copy:
+    dest: /opt/grafana/provisioning/dashboards/fuel.yml
+    content: |
+      apiVersion: 1
+      providers:
+        - name: 'fuel'
+          orgId: 1
+          folder: 'Fuel Farm'
+          type: file
+          disableDeletion: false
+          options:
+            path: /var/lib/grafana/dashboards
+    mode: '0644'
+  notify: restart grafana
+
+- name: Placeholder fuel-operations dashboard (extend per build sheet §5)
+  ansible.builtin.template:
+    src: fuel_operations_dashboard.json.j2
+    dest: /opt/grafana/dashboards/fuel_operations.json
+    mode: '0644'
+  notify: restart grafana
+
+- name: Run Grafana container
+  community.docker.docker_container:
+    name: grafana
+    image: grafana/grafana:11.2.0
+    restart_policy: unless-stopped
+    published_ports:
+      - "{{ fuel_hist_ip }}:3000:3000"
+    volumes:
+      - /opt/grafana/data:/var/lib/grafana
+      - /opt/grafana/provisioning:/etc/grafana/provisioning
+      - /opt/grafana/dashboards:/var/lib/grafana/dashboards
+    env:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "{{ vault_grafana_admin_password | default('Simspace1!Simspace1!') }}"
+    state: started
+
+- name: Wait for Grafana UI :3000
+  ansible.builtin.wait_for:
+    host: "{{ fuel_hist_ip }}"
+    port: 3000
+    timeout: 90

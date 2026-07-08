@@ -238,6 +238,16 @@ fuel-farm-sim
 fuel-hist
 fuel-db
 
+# Convenience group targeted by fuel_farm_playbook.yml. Includes the OT-fuel
+# hosts plus the shared control-room-hmi (dual-homed bridge with power).
+# Kept separate from [ot_fuel] so that intra-OT enclave plays that must NOT
+# touch the shared HMI can still target [ot_fuel] directly.
+[fuel:children]
+ot_fuel
+
+[fuel]
+control-room-hmi
+
 # Power grid hosts pending in blueprint:
 #   power-plc      172.16.47.10 (DNP3 outstation, OpenPLC)
 #   power-sim      172.16.49.18 (pandapower + DNP3)

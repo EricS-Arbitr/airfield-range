@@ -1,0 +1,26 @@
+-- Ansible managed. Seed reference data from group_vars/fuel.yml.
+-- All INSERTs use ON CONFLICT DO NOTHING for idempotence.
+
+{% for t in fuel_tanks_seed %}
+INSERT INTO tanks (tank_id, product, capacity_gal)
+  VALUES ('{{ t.tank_id }}', '{{ t.product }}', {{ t.capacity_gal }})
+  ON CONFLICT (tank_id) DO NOTHING;
+{% endfor %}
+
+{% for tr in fuel_trucks_seed %}
+INSERT INTO trucks (truck_id, callsign, capacity_gal)
+  VALUES ('{{ tr.truck_id }}', '{{ tr.callsign }}', {{ tr.capacity_gal }})
+  ON CONFLICT (truck_id) DO NOTHING;
+{% endfor %}
+
+{% for a in fuel_aircraft_seed %}
+INSERT INTO aircraft (tail_no, ac_type)
+  VALUES ('{{ a.tail_no }}', '{{ a.ac_type }}')
+  ON CONFLICT (tail_no) DO NOTHING;
+{% endfor %}
+
+{% for p in fuel_pads_seed %}
+INSERT INTO pads (pad_id, ramp)
+  VALUES ('{{ p.pad_id }}', '{{ p.ramp }}')
+  ON CONFLICT (pad_id) DO NOTHING;
+{% endfor %}

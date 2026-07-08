@@ -1,0 +1,10 @@
+---
+- name: restart telegraf
+  ansible.builtin.systemd:
+    name: telegraf
+    state: restarted
+
+- name: restart grafana
+  community.docker.docker_container:
+    name: grafana
+    restart: yes

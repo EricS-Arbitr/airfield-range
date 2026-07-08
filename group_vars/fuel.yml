@@ -43,7 +43,93 @@ postgres_password_fuel_rw: "{{ vault_fuel_db_password }}"
 # --- Replay harness (fuel-farm-sim) --------------------------
 replay_seed: 20260101                          # deterministic
 replay_speed: 1.0
-fuel_tanks:    [ "T-101", "T-102", "T-201", "T-202" ]
-fuel_trucks:   [ "TR-01", "TR-02", "TR-03" ]
-fuel_aircraft: [ "AC-A1", "AC-A2", "AC-A3" ]
-fuel_pads:     [ "PAD-N", "PAD-S" ]
+fuel_timeline_hours: 48
+
+# --- Reference / seed data (build sheet §7) ------------------
+# Consumed by fuel_db role for INSERT ... ON CONFLICT DO NOTHING
+# and by fuel_sim's replay generator for order/truck/pad assignment.
+fuel_tanks_seed:
+  - { tank_id: "T-101", product: "JP-8", capacity_gal: 500000 }
+  - { tank_id: "T-102", product: "JP-8", capacity_gal: 500000 }
+  - { tank_id: "T-103", product: "JP-8", capacity_gal: 500000 }
+fuel_trucks_seed:
+  - { truck_id: "R-01", callsign: "REFUELER-1", capacity_gal: 6000 }
+  - { truck_id: "R-02", callsign: "REFUELER-2", capacity_gal: 6000 }
+  - { truck_id: "R-03", callsign: "REFUELER-3", capacity_gal: 6000 }
+  - { truck_id: "R-04", callsign: "REFUELER-4", capacity_gal: 6000 }
+  - { truck_id: "R-05", callsign: "REFUELER-5", capacity_gal: 6000 }
+  - { truck_id: "R-06", callsign: "REFUELER-6", capacity_gal: 6000 }
+fuel_aircraft_seed:
+  - { tail_no: "AF-2231", ac_type: "C-17" }
+  - { tail_no: "AF-2232", ac_type: "C-17" }
+  - { tail_no: "AF-4118", ac_type: "KC-135" }
+  - { tail_no: "AF-4119", ac_type: "KC-135" }
+  - { tail_no: "AF-6602", ac_type: "F-16" }
+fuel_pads_seed:
+  - { pad_id: "PAD-A1", ramp: "Alpha" }
+  - { pad_id: "PAD-A2", ramp: "Alpha" }
+  - { pad_id: "PAD-B1", ramp: "Bravo" }
+  - { pad_id: "PAD-B2", ramp: "Bravo" }
+
+# --- SCADA-bus Modbus register map (build sheet §4) ----------
+# Single source of truth for the OpenPLC ST program, the fuel_sim
+# field slave, the FUXA device import, and the Telegraf modbus input.
+# Coils / discrete inputs: 1 bit; input / holding registers: 16 bit.
+# Totalizers are 32-bit split across two 16-bit registers -- hi-first
+# per fuel_totalizer_word_order below.
+fuel_totalizer_word_order: "hi_first"
+
+fuel_modbus_coils:
+  - { addr: 0,  tag: "P201_RUN_CMD",  desc: "Issue pump 1 run" }
+  - { addr: 1,  tag: "P202_RUN_CMD",  desc: "Issue pump 2 run" }
+  - { addr: 2,  tag: "T101_OUT_VLV",  desc: "Tank 101 outlet valve open" }
+  - { addr: 3,  tag: "T102_OUT_VLV",  desc: "Tank 102 outlet valve open" }
+  - { addr: 4,  tag: "T103_OUT_VLV",  desc: "Tank 103 outlet valve open" }
+  - { addr: 5,  tag: "LR1_LOAD_VLV",  desc: "Rack 1 load valve open" }
+  - { addr: 6,  tag: "LR2_LOAD_VLV",  desc: "Rack 2 load valve open" }
+  - { addr: 7,  tag: "FSII_INJ_CMD",  desc: "Additive injection enable" }
+  - { addr: 8,  tag: "ESD_RESET",     desc: "Clear latched ESD" }
+  - { addr: 9,  tag: "ALARM_ACK",     desc: "Acknowledge alarms" }
+
+fuel_modbus_discrete_inputs:
+  - { addr: 0,  tag: "P201_RUN_STS",   desc: "Pump 1 running feedback" }
+  - { addr: 1,  tag: "P202_RUN_STS",   desc: "Pump 2 running feedback" }
+  - { addr: 2,  tag: "LR1_GROUND_OK",  desc: "Rack 1 grounding verified" }
+  - { addr: 3,  tag: "LR2_GROUND_OK",  desc: "Rack 2 grounding verified" }
+  - { addr: 4,  tag: "LR1_DEADMAN",    desc: "Rack 1 deadman held" }
+  - { addr: 5,  tag: "LR2_DEADMAN",    desc: "Rack 2 deadman held" }
+  - { addr: 6,  tag: "LR1_OVERFILL",   desc: "Rack 1 overfill tripped" }
+  - { addr: 7,  tag: "LR2_OVERFILL",   desc: "Rack 2 overfill tripped" }
+  - { addr: 8,  tag: "T101_HI_LVL",    desc: "T-101 high-level switch" }
+  - { addr: 9,  tag: "T101_LO_LVL",    desc: "T-101 low-level switch" }
+  - { addr: 10, tag: "ESD_ACTIVE",     desc: "Emergency shutdown latched" }
+
+fuel_modbus_input_registers:
+  - { addr: 0,  tag: "T101_LEVEL",     scale: 0.01,  unit: "pct",   desc: "0-10000 = 0.00-100.00%" }
+  - { addr: 1,  tag: "T102_LEVEL",     scale: 0.01,  unit: "pct" }
+  - { addr: 2,  tag: "T103_LEVEL",     scale: 0.01,  unit: "pct" }
+  - { addr: 3,  tag: "T101_TEMP",      scale: 0.1,   unit: "degF",  desc: "0.1 degF per count" }
+  - { addr: 4,  tag: "LR1_FLOW",       scale: 1.0,   unit: "gpm" }
+  - { addr: 5,  tag: "LR2_FLOW",       scale: 1.0,   unit: "gpm" }
+  - { addr: 6,  tag: "HEADER_PRESS",   scale: 0.1,   unit: "psi",   desc: "0.1 PSI per count" }
+  - { addr: 7,  tag: "LR1_METER_LO",   scale: 1.0,   unit: "gal_lo_word" }
+  - { addr: 8,  tag: "LR1_METER_HI",   scale: 1.0,   unit: "gal_hi_word" }
+  - { addr: 9,  tag: "LR2_METER_LO",   scale: 1.0,   unit: "gal_lo_word" }
+  - { addr: 10, tag: "LR2_METER_HI",   scale: 1.0,   unit: "gal_hi_word" }
+
+fuel_modbus_holding_registers:
+  - { addr: 0,  tag: "LR1_PRESET_GAL",     desc: "Rack 1 batch preset" }
+  - { addr: 1,  tag: "LR2_PRESET_GAL",     desc: "Rack 2 batch preset" }
+  - { addr: 2,  tag: "LR1_ACTIVE_TRUCK",   desc: "Truck ID at rack 1 (mirrors DB)" }
+  - { addr: 3,  tag: "LR2_ACTIVE_TRUCK",   desc: "Truck ID at rack 2" }
+  - { addr: 4,  tag: "LR1_SRC_TANK",       desc: "Source tank (1/2/3)" }
+  - { addr: 5,  tag: "LR2_SRC_TANK",       desc: "Source tank (1/2/3)" }
+  - { addr: 6,  tag: "PUMP_LEADLAG_SEL",   desc: "Lead pump select" }
+  - { addr: 7,  tag: "SYS_MODE",           desc: "0 = auto, 1 = manual" }
+
+# --- IPs used by roles (avoid parsing host_vars from another role) -
+fuel_plc_ip:  "172.16.45.10"       # ff-plc-1 (SCADA-bus Modbus server)
+fuel_sim_ip:  "172.16.46.17"       # fuel-farm-sim (field-bus slave)
+fuel_hist_ip: "172.16.46.18"
+fuel_db_ip:   "172.16.46.19"
+fuel_hmi_ip:  "172.16.45.3"        # control-room-hmi (MTU NIC)
