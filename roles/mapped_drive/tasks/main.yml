@@ -88,7 +88,14 @@
   ansible.windows.win_dsc:
     resource_name: GPLink
     GPOName: "Mapped Network Drives"
-    Path: "DC={{ short_domain_name }},DC={{ domain_tld_name }}"
+    # Build the domain DN from `domain_name` so it works for any depth:
+    #   blackstone.mil       -> DC=blackstone,DC=mil
+    #   fops.blackstone.mil  -> DC=fops,DC=blackstone,DC=mil
+    # Old form (`DC={{ short_domain_name }},DC={{ domain_tld_name }}`) only
+    # supported a single-label subdomain + single-label TLD -- fops.yml
+    # doesn't set `domain_tld_name` because there's no clean single-label
+    # value for a child domain. See UPSTREAM_FIXES.md 2026-07-08.
+    Path: "DC={{ domain_name.split('.') | join(',DC=') }}"
     Enabled: "Yes"
     Enforced: "No"
     Order: 1

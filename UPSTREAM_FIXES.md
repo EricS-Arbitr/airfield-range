@@ -14,6 +14,23 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-08 · gap · roles/mapped_drive/tasks/main.yml — DN builder broke for child domains
+
+**Symptom.** Deploy failed on fops-dc01 with:
+```
+TASK [mapped_drive : Link GPO to OU]
+FAILED! => 'domain_tld_name' is undefined
+```
+
+**Root cause.** The GPLink task built the domain DN as `DC={{ short_domain_name }},DC={{ domain_tld_name }}`, assuming a two-label FQDN (label + TLD). Works for `blackstone.mil` (=> `DC=blackstone,DC=mil`) but not for `fops.blackstone.mil` (three labels; there's no clean single-label `domain_tld_name` value to use). `group_vars/fops.yml` correctly defines only `domain_name` and `short_domain_name` and omits `domain_tld_name`.
+
+**Fix (overlay).** Rebuilt the DN dynamically from `domain_name` by splitting on dots and joining with `,DC=`:
+`Path: "DC={{ domain_name.split('.') | join(',DC=') }}"`. Works for arbitrary FQDN depth. No group_vars changes needed.
+
+**Fix (upstream).** In `range-development-ansible/roles/mapped_drive/tasks/main.yml`, replace the two-part construction with the dynamic split form so the role is child-domain safe out of the box. Same pattern applies to any other DN-building tasks in customer roles (grep for `short_domain_name` + `domain_tld_name` co-usage).
+
+---
+
 ## 2026-07-08 · gap · roles/dcpromo/tasks/main.yml — use parent Administrator for Install-ADDSDomain instead of granting EA to simspace
 
 **Symptom.** On a fresh range's first deploy, dcpromo(child) partially completed Install-ADDSDomain on fops-dc01 — set the machine's Primary DNS Suffix to `fops.blackstone.mil` (systeminfo showed `Domain: fops.blackstone.mil`, `OS Configuration: Member Server`) — then failed. Fops-dc01 was left in a "half-joined" state: registry indicates domain membership, but only local SAM accounts exist (`net users` shows only Administrator/simspace/etc.) and `net group /DOMAIN` returns "domain not contacted". Consequence: unqualified NTLM auth to fops-dc01 fails for `simspace` (server misinterprets it as `fops.blackstone.mil\simspace` which doesn't exist). Only `.\simspace` (explicit local SAM) authenticates. All subsequent playbook plays that target fops-dc01 fail unreachable → 30-minute init hangs on retries.
