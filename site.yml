@@ -682,10 +682,20 @@
   # range play (mapped drives are convenience), so wrap the role in an
   # include_role task with ignore_errors -- see UPSTREAM_FIXES.md 2026-07-08.
   tasks:
+    # block/rescue is the only way to make tasks INSIDE an included role
+    # non-fatal -- `ignore_errors: true` on include_role only affects the
+    # include operation itself, not the tasks it pulls in.
     - name: Attempt mapped_drive on fops.blackstone.mil (non-fatal)
-      ansible.builtin.include_role:
-        name: mapped_drive
-      ignore_errors: true
+      block:
+        - ansible.builtin.include_role:
+            name: mapped_drive
+      rescue:
+        - ansible.builtin.debug:
+            msg: >-
+              mapped_drive on fops.blackstone.mil failed with the known
+              fresh-child-DC RPC/GPMI quirk (HRESULT 0x8007054B). Deploy
+              continues. Retry with `--tags mapped_drive_fops` after
+              fops-dc01 has been up for 15+ minutes.
   tags:
     - mapped_drive
     - mapped_drive_fops

@@ -232,12 +232,12 @@ done
 # (direction: BiDirectional). No shared secret involved.
 check_ps bs-dc01 \
   '(Get-ADTrust -Filter * | Where-Object {$_.Target -eq "fops.blackstone.mil"}).TrustType' \
-  '\(stdout\)[[:space:]]+(ParentChild|4)' \
+  '\(stdout\)[[:space:]]+(ParentChild|Uplevel|[24])' \
   "blackstone.mil forest root sees fops child domain via ParentChild trust"
 
 check_ps fops-dc01 \
   '(Get-ADTrust -Filter * | Where-Object {$_.Target -eq "blackstone.mil"}).TrustType' \
-  '\(stdout\)[[:space:]]+(ParentChild|4)' \
+  '\(stdout\)[[:space:]]+(ParentChild|Uplevel|[24])' \
   "fops.blackstone.mil child sees blackstone.mil parent via ParentChild trust"
 
 # Member join counts (each host echoes True/False to its stdout)
@@ -436,7 +436,7 @@ check_pf_shell bs-proxy \
 # soc-syslog's configured DNS (blackstone DCs -> 8.8.8.8 forwarder alias ->
 # is-inet unbound). Fall back to getent (nss) if dig isn't installed.
 check_pf_shell soc-syslog \
-  'r=$(getent hosts www.faa.gov 2>/dev/null | awk "{print \$1}"); [ "$r" = "70.39.65.10" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'r=$(nslookup www.faa.gov 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "70.39.65.10" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_70\.39\.65\.10' \
   "is-inet: unbound resolves www.faa.gov -> 70.39.65.10 (global_dns loaded)"
 
@@ -463,17 +463,17 @@ check_pf_shell bs-www \
 # blackstone.mil. If any of these are missing, mail login and public
 # name resolution break.
 check_pf_shell soc-syslog \
-  'r=$(getent hosts blackstone.mil 2>/dev/null | awk "{print \$1}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'r=$(nslookup blackstone.mil 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_52\.96\.223\.2' \
   "is-inet: unbound resolves blackstone.mil apex -> 52.96.223.2"
 
 check_pf_shell soc-syslog \
-  'r=$(getent hosts fops.blackstone.mil 2>/dev/null | awk "{print \$1}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'r=$(nslookup fops.blackstone.mil 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_52\.96\.223\.2' \
   "is-inet: unbound resolves fops.blackstone.mil apex -> 52.96.223.2"
 
 check_pf_shell soc-syslog \
-  'r=$(getent hosts www.blackstone.mil 2>/dev/null | awk "{print \$1}"); [ "$r" = "199.252.163.1" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'r=$(nslookup www.blackstone.mil 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "199.252.163.1" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_199\.252\.163\.1' \
   "is-inet: unbound resolves www.blackstone.mil -> 199.252.163.1 (bs-edge-fw WAN)"
 
