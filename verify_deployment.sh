@@ -432,11 +432,14 @@ check_pf_shell bs-proxy \
   "bs-proxy: listening on :3128 (squid HTTP proxy)"
 
 # is-inet global_dns -- unbound should resolve www.faa.gov to the value
-# in group_vars/all.yml global_dns_records (70.39.65.10). Resolves via
-# soc-syslog's configured DNS (blackstone DCs -> 8.8.8.8 forwarder alias ->
-# is-inet unbound). Fall back to getent (nss) if dig isn't installed.
-check_pf_shell soc-syslog \
-  'r=$(nslookup www.faa.gov 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "70.39.65.10" ] && echo "OK_$r" || echo "GOT_$r"' \
+# in group_vars/all.yml global_dns_records (70.39.65.10). Query via
+# `docker exec is-inet nslookup <name> 8.8.8.8` -- 8.8.8.8 is a loopback
+# alias inside the is-inet container and unbound binds to it. Can't
+# query from soc-syslog: SOC (172.31.7.0/24) sits behind bs-ops-fw's
+# L3.5 default-deny boundary (CLAUDE.md §5), so packets to 8.8.8.8
+# never reach is-inet. Same for the apex/www checks below.
+check_pf_shell is-inet \
+  'r=$(docker exec is-inet nslookup www.faa.gov 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "70.39.65.10" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_70\.39\.65\.10' \
   "is-inet: unbound resolves www.faa.gov -> 70.39.65.10 (global_dns loaded)"
 
@@ -462,18 +465,18 @@ check_pf_shell bs-www \
 # is-inet unbound has the apex A records for both mail domains + bare
 # blackstone.mil. If any of these are missing, mail login and public
 # name resolution break.
-check_pf_shell soc-syslog \
-  'r=$(nslookup blackstone.mil 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
+check_pf_shell is-inet \
+  'r=$(docker exec is-inet nslookup blackstone.mil 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_52\.96\.223\.2' \
   "is-inet: unbound resolves blackstone.mil apex -> 52.96.223.2"
 
-check_pf_shell soc-syslog \
-  'r=$(nslookup fops.blackstone.mil 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
+check_pf_shell is-inet \
+  'r=$(docker exec is-inet nslookup fops.blackstone.mil 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_52\.96\.223\.2' \
   "is-inet: unbound resolves fops.blackstone.mil apex -> 52.96.223.2"
 
-check_pf_shell soc-syslog \
-  'r=$(nslookup www.blackstone.mil 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "199.252.163.1" ] && echo "OK_$r" || echo "GOT_$r"' \
+check_pf_shell is-inet \
+  'r=$(docker exec is-inet nslookup www.blackstone.mil 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "199.252.163.1" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_199\.252\.163\.1' \
   "is-inet: unbound resolves www.blackstone.mil -> 199.252.163.1 (bs-edge-fw WAN)"
 
