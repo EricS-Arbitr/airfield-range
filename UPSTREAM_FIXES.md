@@ -16,6 +16,24 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-10 · bug · roles/dcpromo/tasks/main.yml — child-domain DNS bootstrap picks wrong interface (or none)
+
+**Symptom.** On child-domain promotion, Install-ADDSDomain fails with:
+```
+PROMOTION_EXCEPTION: Verification of user credential permissions failed.
+An Active Directory domain controller for the domain "blackstone.mil"
+could not be contacted. Ensure that you supplied the correct DNS domain name.
+```
+Preceding task ("Point primary DNS at parent PDC before Install-ADDSDomain") logs `NO_IFACE_FOUND` on tag-limited retries (`--tags dcpromo_child` skips `common`, so no NIC yet has DNS populated) or, on full deploys, silently picks the mgmt NIC (Ethernet0 gets DNS `172.31.2.7` written to it — but mgmt has no default route, so DNS lookups for `_ldap._tcp.blackstone.mil` still fail).
+
+**Root cause.** The task selected `Get-DnsClientServerAddress ... | Where { ServerAddresses.Count -gt 0 } | Select -First 1`. Two failure modes:
+1. Tag-limited retry / snapshot-reverted baseline → no interface has DNS → filter returns nothing → `NO_IFACE_FOUND` → downstream Install-ADDSDomain gets a misleading "could not be contacted" error.
+2. Full deploy where `common` set DNS on both NICs → the mgmt NIC (Ethernet0, lower InterfaceIndex) wins → DNS gets written to an interface with no default route → SRV resolution still fails.
+
+**Fix (overlay).** Rewrote the interface-picker with a three-tier strategy: (1) prefer the interface carrying the IPv4 default route (== prod NIC per airfield contract — mgmt NIC has empty gateway), (2) fall back to "first with DNS set" (post-`common` steady state), (3) last-resort to any non-loopback/non-tunnel IPv4 interface. Also added `failed_when: "'NO_IFACE_FOUND' in ..."` so a genuine no-interface state fails loudly at the DNS-bootstrap task instead of masking behind Install-ADDSDomain's downstream error. Rationale for using default route as primary signal: it's the invariant enforced by the airfield host_vars contract (§8 of CLAUDE.md) — mgmt NICs always have `gateway: ""`, so the default route is always on the prod NIC.
+
+---
+
 ## 2026-07-08 · bug · roles/global_dns/templates/simspace_includes.conf.j2 — corpora `redirect` zone collision aborts unbound
 
 **Symptom.** On a fresh range, corp hosts can't resolve any external name — bs-dc01's forwarders point at 8.8.8.8/8.8.4.4/1.1.1.1 (is-inet lo aliases) but every query times out. Digging into is-inet: unbound isn't running at all. Attempting to start it manually reveals the reason:

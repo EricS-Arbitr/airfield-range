@@ -122,20 +122,47 @@
 # itself a DC and hosts fops.blackstone.mil; a later play can restore
 # the intended DNS if needed. See UPSTREAM_FIXES.md 2026-07-07.
 - name: Point primary DNS at parent PDC before Install-ADDSDomain
+  # Selection strategy (in order):
+  #   1. Interface carrying the default route (== prod NIC per airfield
+  #      contract: mgmt NIC has empty gateway).
+  #   2. First IPv4 interface whose DNS is already populated (post-`common`
+  #      steady state).
+  #   3. Any non-loopback/non-tunnel IPv4 interface (last-resort so we set
+  #      SOMETHING rather than emit NO_IFACE_FOUND — matches the case where
+  #      dcpromo runs against a baseline-image host with no DNS yet).
+  # Previous logic ("first with DNS set") failed silently on tag-limited
+  # runs (`--tags dcpromo_child` skips `common`) and on baseline
+  # snapshot-reverted hosts, producing NO_IFACE_FOUND → Install-ADDSDomain
+  # then died with "domain controller for blackstone.mil could not be
+  # contacted." See UPSTREAM_FIXES.md 2026-07-10.
   ansible.windows.win_shell: |
-    $iface = Get-DnsClientServerAddress -AddressFamily IPv4 |
-      Where-Object { $_.ServerAddresses.Count -gt 0 } |
-      Select-Object -First 1
+    $iface = $null
+    $defRoute = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+      Sort-Object -Property RouteMetric | Select-Object -First 1
+    if ($defRoute) {
+      $iface = Get-DnsClientServerAddress -InterfaceIndex $defRoute.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+    }
+    if (-not $iface) {
+      $iface = Get-DnsClientServerAddress -AddressFamily IPv4 |
+        Where-Object { $_.ServerAddresses.Count -gt 0 } |
+        Select-Object -First 1
+    }
+    if (-not $iface) {
+      $iface = Get-DnsClientServerAddress -AddressFamily IPv4 |
+        Where-Object { $_.InterfaceAlias -notmatch 'Loopback|isatap|Teredo|Tunnel' } |
+        Sort-Object InterfaceIndex |
+        Select-Object -First 1
+    }
     if ($iface) {
       Set-DnsClientServerAddress `
         -InterfaceIndex $iface.InterfaceIndex `
         -ServerAddresses '{{ parent_domain_pdc_ip }}','8.8.8.8'
-      # Force a fresh SRV resolution on next lookup
       Clear-DnsClientCache
       "SET_DNS_OK:$($iface.InterfaceAlias)"
     } else { "NO_IFACE_FOUND" }
   register: parent_dns_set
   changed_when: "'SET_DNS_OK' in parent_dns_set.stdout"
+  failed_when: "'NO_IFACE_FOUND' in parent_dns_set.stdout"
   when:
     - parent_domain_name is defined
     - "'NEEDS_PROMOTION' in child_dc_state.stdout"
