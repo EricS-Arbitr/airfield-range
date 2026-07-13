@@ -33,7 +33,7 @@ static_route:
 # "Additional VyOS static routes" overlay play (tag `extra_static_routes`).
 # See airfield-range UPSTREAM_FIXES.md 2026-07-08 entry.
 extra_static_routes:
-  - route: "172.31.0.0/16"
+  - network: "172.31.0.0/16"         # site.yml "Push extra static routes" expects `network`, not `route`
     next_hop: "199.252.163.1"        # bs-edge-fw WAN (SNAT egress + corp return)
 
 # eBGP AS 65002 toward bs-edge-fw (AS 65001) — the only BGP session in
