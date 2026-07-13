@@ -1,6 +1,13 @@
-- name: wait for LDAP
+# Wait for the LOCAL LDAP endpoint on the DC. Previous version waited on
+# `{{ domain_name }}` (e.g. `fops.blackstone.mil:389`) which requires DNS
+# to resolve the domain's SRV/A records back to this host -- and on a
+# freshly-promoted child DC, that resolution isn't reliable until Netlogon
+# finishes writing its records, which can race with the wait. Waiting on
+# 127.0.0.1:389 directly probes AD services on this box without depending
+# on DNS. See UPSTREAM_FIXES.md 2026-07-13.
+- name: wait for LDAP (local endpoint)
   ansible.windows.win_wait_for:
-    host: "{{ domain_name }}"
+    host: 127.0.0.1
     port: 389
     timeout: 600
 
