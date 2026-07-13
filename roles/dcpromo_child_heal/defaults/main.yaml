@@ -5,7 +5,12 @@
 # the Primary DNS Suffix to the child domain — which makes unqualified
 # `simspace` NTLM auth reject — the qualified form `.\simspace` still
 # succeeds against the local SAM.
-heal_local_user: '.\simspace'
+# NOTE: NTLM (pywinrm) does NOT accept the `.\user` shorthand -- that's a
+# Windows console format, not an NTLM auth format. Must use a real
+# machine name qualifier: `MACHINE\user`. We use inventory_hostname
+# uppercased because SimSpace's Windows images set Win32_ComputerSystem.Name
+# to the inventory hostname in uppercase.
+heal_local_user: "{{ inventory_hostname | upper }}\\simspace"
 heal_local_password: "{{ ansible_password | default('Simspace1!Simspace1!') }}"
 
 # Credential for the parent-forest cleanup (delegated to pdc_blackstone).

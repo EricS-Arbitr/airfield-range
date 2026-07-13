@@ -22,7 +22,7 @@
 #
 # See UPSTREAM_FIXES.md 2026-07-13.
 
-- name: Reach candidate child-DC via local .\simspace auth
+- name: Reach candidate child-DC via local MACHINE\simspace auth
   vars:
     ansible_user: "{{ heal_local_user }}"
     ansible_password: "{{ heal_local_password }}"
@@ -30,14 +30,39 @@
   register: heal_local_ping
   ignore_errors: true
 
-- name: End host — unreachable even on local auth (SimSpace platform issue, not our problem)
-  ansible.builtin.meta: end_host
+# If MACHINE\simspace doesn't work (rare, e.g. platform reset the user),
+# try MACHINE\Administrator. dcpromo's "local admin guest customization"
+# task resets local Administrator to `domain_admin_password`, so after
+# any dcpromo attempt this path always works.
+- name: Fallback — reach via local MACHINE\Administrator auth
+  vars:
+    ansible_user: "{{ inventory_hostname | upper }}\\Administrator"
+    ansible_password: "{{ domain_admin_password }}"
+  ansible.windows.win_ping:
+  register: heal_admin_ping
+  ignore_errors: true
   when: heal_local_ping is failed
+
+- name: Pick which local credential succeeded
+  ansible.builtin.set_fact:
+    heal_auth_user: >-
+      {{ heal_local_user if heal_local_ping is succeeded
+         else (inventory_hostname | upper ~ '\\Administrator') }}
+    heal_auth_password: >-
+      {{ heal_local_password if heal_local_ping is succeeded
+         else domain_admin_password }}
+    heal_reachable: >-
+      {{ (heal_local_ping is succeeded) or
+         (heal_admin_ping is defined and heal_admin_ping is succeeded) }}
+
+- name: End host — unreachable via both simspace AND Administrator local auth (platform issue)
+  ansible.builtin.meta: end_host
+  when: not (heal_reachable | bool)
 
 - name: Detect half-join state
   vars:
-    ansible_user: "{{ heal_local_user }}"
-    ansible_password: "{{ heal_local_password }}"
+    ansible_user: "{{ heal_auth_user }}"
+    ansible_password: "{{ heal_auth_password }}"
   ansible.windows.win_shell: |
     $cs   = Get-WmiObject Win32_ComputerSystem
     $adws = Get-Service ADWS -ErrorAction SilentlyContinue
@@ -99,8 +124,8 @@
   # cause every unqualified NTLM auth to prefix the wrong domain.
   # Clearing them + rebooting restores the local SAM as the auth path.
   vars:
-    ansible_user: "{{ heal_local_user }}"
-    ansible_password: "{{ heal_local_password }}"
+    ansible_user: "{{ heal_auth_user }}"
+    ansible_password: "{{ heal_auth_password }}"
   ansible.windows.win_shell: |
     $tcpKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters'
     Set-ItemProperty -Path $tcpKey -Name 'Domain'    -Value '' -Force -ErrorAction SilentlyContinue
@@ -118,8 +143,8 @@
 
 - name: Reboot the healed host so the cleared hints take effect
   vars:
-    ansible_user: "{{ heal_local_user }}"
-    ansible_password: "{{ heal_local_password }}"
+    ansible_user: "{{ heal_auth_user }}"
+    ansible_password: "{{ heal_auth_password }}"
   ansible.windows.win_reboot:
     reboot_timeout: 900
     post_reboot_delay: 30
