@@ -12,6 +12,23 @@
 #
 # Deviates from CLAUDE.md §10's documented network-first order by design.
 
+# Preflight -- runs BEFORE init because if a prior deploy attempt
+# half-joined fops-dc01 via Install-ADDSDomain, unqualified `simspace`
+# NTLM is rejected and init's win_ping times out for 30 min per attempt.
+# The heal role uses local .\simspace auth (which still works during
+# half-join), detects state, and self-heals via bs-dc01 metadata cleanup
+# + local registry reset + reboot. Idempotent no-op on clean hosts.
+# See UPSTREAM_FIXES.md 2026-07-13.
+- name: dcpromo(child) — self-heal half-join residue before init
+  hosts: pdc_fops
+  gather_facts: false
+  any_errors_fatal: false
+  roles:
+    - dcpromo_child_heal
+  tags:
+    - init
+    - dcpromo_child_heal
+
 - name: Init
   hosts: windows
   gather_facts: false

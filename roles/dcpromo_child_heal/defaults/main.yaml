@@ -1,0 +1,18 @@
+---
+# Local-Administrator-like credential for reaching a half-joined DC candidate.
+# Install-ADDSDomain preserves the local simspace user during promotion
+# attempts (documented in UPSTREAM_FIXES.md 2026-07-08). Even when it sets
+# the Primary DNS Suffix to the child domain — which makes unqualified
+# `simspace` NTLM auth reject — the qualified form `.\simspace` still
+# succeeds against the local SAM.
+heal_local_user: '.\simspace'
+heal_local_password: "{{ ansible_password | default('Simspace1!Simspace1!') }}"
+
+# Credential for the parent-forest cleanup (delegated to pdc_blackstone).
+# After Install-ADDSDomain has registered the FOPS crossRef in the
+# Configuration NC, only Enterprise Admin can remove it. The built-in
+# Administrator on the forest root is auto-EA immediately after
+# microsoft.ad.domain (the forest-root dcpromo) finishes; that's the
+# credential we use for surgical Remove-ADObject calls.
+heal_parent_admin_user: 'Administrator'
+heal_parent_admin_password: "{{ domain_admin_password }}"

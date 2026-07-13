@@ -1,0 +1,136 @@
+---
+# Self-heal residue from a failed Install-ADDSDomain (child-domain path).
+#
+# Failure signature: an earlier deploy started dcpromo(child), passed
+# pre-flight, registered the child domain's CrossRef in the parent forest's
+# Configuration NC, set the local machine's Primary DNS Suffix + Domain
+# hint to the child domain -- but died before completing (or before AD
+# services could start). The machine is left in "half-joined" state:
+#   PartOfDomain=True, Domain=<child>, but ADWS/NTDS Stopped.
+# Two symptoms cascade from that:
+#   1. Unqualified `simspace` NTLM authentication is rejected (Windows
+#      prefixes the username with the machine's now-broken domain hint).
+#   2. bs-dc01 has an orphan CrossRef under CN=Partitions and orphan
+#      Server/NTDS objects under CN=Sites, blocking a retry of
+#      Install-ADDSDomain.
+#
+# This role runs BEFORE `init` in site.yml, targeting pdc_fops only.
+# It's idempotent: on a clean host it's a no-op (detects state, ends host).
+# On a half-joined host it delegates parent-metadata cleanup to bs-dc01
+# (Administrator/EA), clears the local child-domain hints, reboots, then
+# `init` picks up the recovered host on default credentials.
+#
+# See UPSTREAM_FIXES.md 2026-07-13.
+
+- name: Reach candidate child-DC via local .\simspace auth
+  vars:
+    ansible_user: "{{ heal_local_user }}"
+    ansible_password: "{{ heal_local_password }}"
+  ansible.windows.win_ping:
+  register: heal_local_ping
+  ignore_errors: true
+
+- name: End host — unreachable even on local auth (SimSpace platform issue, not our problem)
+  ansible.builtin.meta: end_host
+  when: heal_local_ping is failed
+
+- name: Detect half-join state
+  vars:
+    ansible_user: "{{ heal_local_user }}"
+    ansible_password: "{{ heal_local_password }}"
+  ansible.windows.win_shell: |
+    $cs   = Get-WmiObject Win32_ComputerSystem
+    $adws = Get-Service ADWS -ErrorAction SilentlyContinue
+    $ntds = Get-Service NTDS -ErrorAction SilentlyContinue
+    $inChild   = $cs.PartOfDomain -and $cs.Domain -eq '{{ domain_name }}'
+    $adServicesUp = $adws -and $adws.Status -eq 'Running' -and $ntds -and $ntds.Status -eq 'Running'
+    if      ($inChild -and -not $adServicesUp) { 'HALF_JOINED' }
+    elseif  ($inChild -and     $adServicesUp) { 'ALREADY_DC' }
+    else                                       { 'CLEAN' }
+  register: heal_state
+  changed_when: false
+
+- name: Announce detected state
+  ansible.builtin.debug:
+    msg: "dcpromo_child_heal: {{ inventory_hostname }} state = {{ heal_state.stdout | trim }}"
+
+- name: End host — nothing to heal (state is CLEAN or ALREADY_DC)
+  ansible.builtin.meta: end_host
+  when: heal_state.stdout | trim != 'HALF_JOINED'
+
+# ------------------------------------------------------------------
+# HALF-JOINED -> heal
+# ------------------------------------------------------------------
+- name: Compute expected child NetBIOS label (upper) for metadata paths
+  ansible.builtin.set_fact:
+    heal_child_label_upper: "{{ (domain_name | regex_replace('\\..*$','')) | upper }}"
+    heal_child_dc_upper: "{{ inventory_hostname | upper }}"
+
+- name: Clean parent-forest metadata (delegate to pdc_blackstone as Administrator/EA)
+  delegate_to: "{{ groups['pdc_blackstone'] | first }}"
+  vars:
+    ansible_user: "{{ heal_parent_admin_user }}"
+    ansible_password: "{{ heal_parent_admin_password }}"
+  ansible.windows.win_shell: |
+    $cfg = (Get-ADRootDSE).ConfigurationNamingContext
+    "=== forest domains BEFORE ==="
+    (Get-ADForest).Domains
+    foreach ($dn in @(
+      "CN=NTDS Settings,CN={{ heal_child_dc_upper }},CN=Servers,CN=Default-First-Site-Name,CN=Sites,$cfg",
+      "CN={{ heal_child_dc_upper }},CN=Servers,CN=Default-First-Site-Name,CN=Sites,$cfg",
+      "CN={{ heal_child_label_upper }},CN=Partitions,$cfg"
+    )) {
+      try { Remove-ADObject -Identity $dn -Recursive -Confirm:$false -ErrorAction Stop; "REMOVED: $dn" }
+      catch { "SKIP: $dn -- $($_.Exception.Message)" }
+    }
+    "=== forest domains AFTER ==="
+    (Get-ADForest).Domains
+  register: heal_parent_cleanup
+  ignore_errors: true
+
+- name: Show parent-forest cleanup output
+  ansible.builtin.debug:
+    var: heal_parent_cleanup.stdout_lines
+
+- name: Clear local child-domain hints on the half-joined host
+  # Install-ADDSDomain writes Primary DNS Suffix + Domain/NV Domain
+  # to the Tcpip\Parameters key BEFORE the reboot that finalizes
+  # promotion. If promotion never finishes, those hints persist and
+  # cause every unqualified NTLM auth to prefix the wrong domain.
+  # Clearing them + rebooting restores the local SAM as the auth path.
+  vars:
+    ansible_user: "{{ heal_local_user }}"
+    ansible_password: "{{ heal_local_password }}"
+  ansible.windows.win_shell: |
+    $tcpKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters'
+    Set-ItemProperty -Path $tcpKey -Name 'Domain'    -Value '' -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $tcpKey -Name 'NV Domain' -Value '' -Force -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\NTDS\Parameters' `
+                        -Name 'DcPromoInProgress' -Force -ErrorAction SilentlyContinue
+    # Verify what we wrote so the log shows an audit trail:
+    $tcp = Get-ItemProperty -Path $tcpKey
+    "Post-heal Domain='$($tcp.Domain)' NV Domain='$($tcp.'NV Domain')'"
+  register: heal_local_registry
+
+- name: Show local registry reset output
+  ansible.builtin.debug:
+    var: heal_local_registry.stdout_lines
+
+- name: Reboot the healed host so the cleared hints take effect
+  vars:
+    ansible_user: "{{ heal_local_user }}"
+    ansible_password: "{{ heal_local_password }}"
+  ansible.windows.win_reboot:
+    reboot_timeout: 900
+    post_reboot_delay: 30
+
+- name: Verify host reachable on DEFAULT (unqualified) credentials post-heal
+  # Uses group_vars/windows.yml defaults: simspace (unqualified). If this
+  # works, `init` will succeed and the deploy can proceed to dcpromo.
+  ansible.windows.win_ping:
+  register: heal_post_ping
+
+- name: HEALED
+  ansible.builtin.debug:
+    msg: "dcpromo_child_heal: {{ inventory_hostname }} restored to WORKGROUP; default creds now succeed. Deploy will proceed via init -> dcpromo(child)."
+  when: heal_post_ping is success

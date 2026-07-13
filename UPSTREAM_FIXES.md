@@ -16,6 +16,27 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-13 · enhancement · roles/dcpromo_child_heal — auto-heal half-join residue before init
+
+**Symptom.** Third consecutive fresh-range deploy hit the same failure pattern: `Install-ADDSDomain` on fops-dc01 succeeds far enough to (a) register the `FOPS` cross-reference in bs-dc01's Configuration NC and (b) set fops-dc01's Primary DNS Suffix + Domain hint to `fops.blackstone.mil` — then dies before AD services come up. Every subsequent deploy times out at `init` for 30 min × 3 attempts (NTLM rejects unqualified `simspace` because the machine's now-broken domain hint prefixes it as `fops.blackstone.mil\simspace`). Manual recovery loop (metadata cleanup via Administrator/EA + SimSpace snapshot revert) has taken 4 rounds so far.
+
+**Root cause.** Install-ADDSDomain is not transactional on this platform — partial failures leave residue on both the parent forest (CrossRef under CN=Partitions, orphan Server + NTDS Settings under CN=Sites) and the local machine (Domain / NV Domain registry hints under Tcpip\\Parameters). Retrying Install-ADDSDomain against this state fails at pre-flight because the CrossRef already exists. And init can't even reach the host to trigger the retry.
+
+**Fix (overlay).** New role `roles/dcpromo_child_heal` runs at the very top of site.yml (before `init`), targets `pdc_fops`, uses local `.\simspace` credentials (unaffected by the broken domain hint). Idempotent flow:
+
+1. Ping via `.\simspace`. If unreachable, `meta: end_host` (SimSpace-platform issue, not ours to solve).
+2. Detect state: `HALF_JOINED` (PartOfDomain=True + child domain + ADWS/NTDS Stopped), `ALREADY_DC` (running), or `CLEAN`. Only `HALF_JOINED` triggers healing.
+3. Delegate CrossRef + orphan-DC-object removal to `pdc_blackstone` using Administrator (auto-EA post-forest-root promotion) — exactly the manual `Remove-ADObject` sequence we've been running by hand.
+4. Clear `Tcpip\\Parameters!Domain`, `Tcpip\\Parameters!NV Domain`, and `NTDS\\Parameters!DcPromoInProgress` on the half-joined host.
+5. Reboot (`win_reboot`, 900 s timeout).
+6. Verify default (unqualified `simspace`) credentials work post-reboot; if yes, healed → init proceeds normally.
+
+Combined with the 2026-07-10 DNS-bootstrap fix, this makes the child-domain path resilient to Install-ADDSDomain partial failures: any prior failure is auto-cleaned at the start of the next deploy rather than requiring manual metadata-cleanup + snapshot-revert cycles.
+
+**Why the pre-init position matters.** init's `wait_for_connection` uses default (unqualified) credentials with a 30-min timeout and `any_errors_fatal: true`. If the healing play ran later, it could never fire because init would abort the whole deploy first. Placing it upstream, with `any_errors_fatal: false`, lets the heal proceed and end_host cleanly whether or not residue is present.
+
+---
+
 ## 2026-07-10 · bug · roles/dcpromo/tasks/main.yml — child-domain DNS bootstrap picks wrong interface (or none)
 
 **Symptom.** On child-domain promotion, Install-ADDSDomain fails with:
