@@ -141,17 +141,19 @@
   ansible.builtin.debug:
     var: heal_local_registry.stdout_lines
 
-# Fire the reboot with the auth we used to reach the host, but don't
-# wait -- win_reboot re-uses the same creds on reconnect, and on this
-# SimSpace image MACHINE\Administrator NTLM stops working post-boot
-# once the domain hint is cleared (observed 2026-07-13). So we fire
-# Restart-Computer async and immediately drop the WinRM session.
-- name: Fire reboot (async, no wait)
+# Fire the reboot with the auth we used to reach the host, using
+# shutdown.exe /r /t 5 /f. Reason: earlier Start-Job + Restart-Computer
+# attempt got killed with the WinRM PowerShell process when the session
+# closed (Start-Job children die with the parent shell), so the reboot
+# never actually happened -- registry values were set, but not applied.
+# shutdown.exe launches a detached system process scheduled 5s out,
+# fully decoupled from WinRM. Once WinRM drops, machine reboots on schedule.
+- name: Fire reboot (detached shutdown.exe, no wait)
   vars:
     ansible_user: "{{ heal_auth_user }}"
     ansible_password: "{{ heal_auth_password }}"
   ansible.windows.win_shell: |
-    Start-Job -ScriptBlock { Start-Sleep -Seconds 3; Restart-Computer -Force } | Out-Null
+    & shutdown.exe /r /t 5 /f /c "dcpromo_child_heal: clearing half-join state"
     'REBOOT_QUEUED'
   register: heal_reboot_fired
   changed_when: "'REBOOT_QUEUED' in heal_reboot_fired.stdout"
