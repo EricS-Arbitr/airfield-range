@@ -141,17 +141,33 @@
   ansible.builtin.debug:
     var: heal_local_registry.stdout_lines
 
-- name: Reboot the healed host so the cleared hints take effect
+# Fire the reboot with the auth we used to reach the host, but don't
+# wait -- win_reboot re-uses the same creds on reconnect, and on this
+# SimSpace image MACHINE\Administrator NTLM stops working post-boot
+# once the domain hint is cleared (observed 2026-07-13). So we fire
+# Restart-Computer async and immediately drop the WinRM session.
+- name: Fire reboot (async, no wait)
   vars:
     ansible_user: "{{ heal_auth_user }}"
     ansible_password: "{{ heal_auth_password }}"
-  ansible.windows.win_reboot:
-    reboot_timeout: 900
-    post_reboot_delay: 30
+  ansible.windows.win_shell: |
+    Start-Job -ScriptBlock { Start-Sleep -Seconds 3; Restart-Computer -Force } | Out-Null
+    'REBOOT_QUEUED'
+  register: heal_reboot_fired
+  changed_when: "'REBOOT_QUEUED' in heal_reboot_fired.stdout"
 
-- name: Verify host reachable on DEFAULT (unqualified) credentials post-heal
-  # Uses group_vars/windows.yml defaults: simspace (unqualified). If this
-  # works, `init` will succeed and the deploy can proceed to dcpromo.
+# Wait for the host to come back using DEFAULT (unqualified simspace)
+# credentials. Post-heal the domain hint is empty -- so unqualified
+# `simspace` NTLM resolves to the local SAM correctly, which is exactly
+# what init needs to succeed. No `vars:` override here means this task
+# uses group_vars/windows.yml defaults (ansible_user: simspace).
+- name: Wait for reboot to complete on DEFAULT (unqualified) creds
+  ansible.builtin.wait_for_connection:
+    delay: 60
+    sleep: 15
+    timeout: 900
+
+- name: Verify default win_ping succeeds post-heal
   ansible.windows.win_ping:
   register: heal_post_ping
 
