@@ -567,13 +567,20 @@
   hosts: pdc_blackstone
   gather_facts: false
   any_errors_fatal: false
+  vars:
+    # Hard-coded child/parent domain names -- referring to fops-dc01s
+    # host_vars via hostvars[] at task-vars level was fragile in early
+    # tests. These match group_vars/fops.yml (child) + group_vars/all.yml
+    # (parent) and are stable for the project.
+    bootstrap_child_domain: "fops.blackstone.mil"
+    bootstrap_parent_domain: "blackstone.mil"
   tasks:
-    - name: Create simspace in fops.blackstone.mil child domain
+    - name: Create simspace in the child domain
       ansible.windows.win_shell: |
         $sec = ConvertTo-SecureString "{{ domain_admin_password }}" -AsPlainText -Force
         $cred = New-Object System.Management.Automation.PSCredential(
-                  "{{ parent_domain_name | default('blackstone.mil') }}\Administrator", $sec)
-        $childDomain = "{{ domain_name | default('fops.blackstone.mil') }}"
+                  "{{ bootstrap_parent_domain }}\Administrator", $sec)
+        $childDomain = "{{ bootstrap_child_domain }}"
         try {
           $existing = Get-ADUser -Filter "SamAccountName -eq 'simspace'" `
                                  -Server $childDomain -Credential $cred `
@@ -586,8 +593,6 @@
                               -Server $childDomain -Credential $cred
             "CREATED"
           } else {
-            # Idempotent: if the user exists but isn't in DA (e.g. from a
-            # partial prior run), add it. Add is a no-op if already a member.
             Add-ADGroupMember -Identity "Domain Admins" -Members simspace `
                               -Server $childDomain -Credential $cred `
                               -ErrorAction SilentlyContinue
@@ -597,24 +602,13 @@
           "FAILED: $($_.Exception.Message)"
           throw
         }
-      # This task uses PowerShell -Server/-Credential which talks to the
-      # child DC via AD RPC/LDAP, not WinRM. Works even when fops-dc01 WinRM
-      # rejects our default creds -- we're not routing through WinRM.
-      # Vars-scoped here so this play (delegated to bs-dc01) uses bs-dc01's
-      # working auth path. child domain name from group_vars/fops.yml sets
-      # domain_name; parent_domain_name likewise from there.
-      vars:
-        domain_name: "{{ hostvars[groups['pdc_fops'][0]].domain_name | default('fops.blackstone.mil') }}"
-        parent_domain_name: "{{ hostvars[groups['pdc_fops'][0]].parent_domain_name | default('blackstone.mil') }}"
       register: bootstrap_simspace
       changed_when: "'CREATED' in bootstrap_simspace.stdout"
 
     - name: Show bootstrap result
       ansible.builtin.debug:
-        msg: "bootstrap_simspace ({{ domain_name | default('fops.blackstone.mil') }}\\simspace) → {{ bootstrap_simspace.stdout | trim }}"
+        msg: "bootstrap_simspace ({{ bootstrap_child_domain }}\\simspace) -> {{ bootstrap_simspace.stdout | trim }}"
       when: bootstrap_simspace.stdout is defined
-      vars:
-        domain_name: "{{ hostvars[groups['pdc_fops'][0]].domain_name | default('fops.blackstone.mil') }}"
   tags:
     - dcpromo
     - bootstrap_child_simspace
