@@ -11,13 +11,23 @@
     port: 389
     timeout: 600
 
+# Both Get-/Set-ADDefaultDomainPasswordPolicy default to querying the
+# CURRENT USER's domain, not the local DC's. That breaks when Ansible
+# authenticates with a parent-forest EA credential (e.g. blackstone.mil\
+# Administrator on the child DC fops-dc01) -- Get-* tries to reach the
+# parent forest DC across the network via ADWS, which can fail with
+# ADServerDownException even when the local DC is fully functional.
+# Pin -Server $env:COMPUTERNAME so both calls always target the local DC.
+# See UPSTREAM_FIXES.md 2026-07-14.
 - name: Check current password complexity setting
-  ansible.windows.win_shell: (Get-ADDefaultDomainPasswordPolicy).ComplexityEnabled
+  ansible.windows.win_shell: (Get-ADDefaultDomainPasswordPolicy -Server $env:COMPUTERNAME).ComplexityEnabled
   register: current_setting
   changed_when: false
 
 - name: Disable password complexity in domain GPO
-  ansible.windows.win_shell: Set-ADDefaultDomainPasswordPolicy -Identity (Get-ADDomain) -ComplexityEnabled $false
+  ansible.windows.win_shell: |
+    $dom = Get-ADDomain -Server $env:COMPUTERNAME
+    Set-ADDefaultDomainPasswordPolicy -Identity $dom.DistinguishedName -Server $env:COMPUTERNAME -ComplexityEnabled $false
   when:
     - current_setting.stdout | regex_search('True') != None
 
