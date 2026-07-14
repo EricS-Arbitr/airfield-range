@@ -16,6 +16,23 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-14 · enhancement · site.yml — bootstrap fops.blackstone.mil\simspace from bs-dc01 before create_users
+
+**Symptom.** On a fresh range deploy where fops-dc01 has just been promoted, `create_users` on the `pdc` group tries to open a WinRM connection to fops-dc01 as unqualified `simspace` — and gets `ntlm: the specified credentials were rejected by the server`. `simspace` doesn't exist yet as a `fops.blackstone.mil` domain user (create_users hasn't run there yet), and post-promotion the machine no longer falls back to local-SAM auth for that name. Workaround previously required a temporary `blackstone.mil\Administrator` override in `host_vars/fops-dc01.yml` for the immediate re-run, then removal afterward.
+
+**Why bs-dc01 doesn't hit this.** Empirically, bs-dc01 keeps accepting unqualified `simspace` post-Install-ADDSForest — its local-SAM `simspace` account survives promotion and NTLM falls back to it. Install-ADDSDomain on the child (fops-dc01) leaves the machine in a state where the same fallback doesn't happen; the exact mechanism (SAM cleanup? primary-domain resolution order? Windows Server 2022 hardening for child DCs?) hasn't been isolated, but the behavioral difference is reproducible on every fresh deploy.
+
+**Fix (overlay).** New play in `site.yml` inserted between `Post-dcpromo diagnostic snapshot` and `Create Users`:
+
+- Runs on `pdc_blackstone` (bs-dc01), which accepts unqualified `simspace` fine.
+- Uses PowerShell `Get-ADUser -Server fops.blackstone.mil -Credential blackstone.mil\Administrator` and `New-ADUser`/`Add-ADGroupMember` with the same explicit credential to reach fops-dc01 via AD RPC/LDAP (bypasses fops-dc01's broken WinRM).
+- Creates `simspace` in fops.blackstone.mil with `PasswordNeverExpires` + adds to Domain Admins.
+- Idempotent: if the user exists (re-runs, or partial prior deploy), it's a no-op for the create + a harmless re-add for the group membership.
+
+After this play, `create_users` on fops-dc01 authenticates via unqualified `simspace` normally — because `fops.blackstone.mil\simspace` now exists as a DA. No more host_vars override dance on future fresh deploys.
+
+---
+
 ## 2026-07-14 · bug · roles/pfsense_firewall/tasks/main.yml — remote-syslog daemon never reloaded when config already matched
 
 **Symptom.** `verify_deployment.sh` failed on `soc-syslog receiving from bs-edge-fw` and `soc-syslog receiving from bs-ops-fw` (`STALE_OR_MISSING`). Both pfSense boxes had the correct block in `/cf/conf/config.xml`:

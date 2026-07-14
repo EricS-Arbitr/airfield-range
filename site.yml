@@ -547,6 +547,78 @@
     - dcpromo
     - dcpromo_diag
 
+# Chicken-and-egg fix: create_users on the next play needs to WinRM-connect
+# to fops-dc01 as unqualified `simspace` -- but post-promotion,
+# fops.blackstone.mil\simspace doesn't exist yet, so NTLM auth is rejected
+# (bs-dc01 doesn't hit this: its local SAM simspace survives Install-ADDSForest
+# and NTLM falls back to it; fops-dc01 doesn't get the same fallback after
+# Install-ADDSDomain child promotion for reasons still unclear).
+#
+# This play delegates to bs-dc01 (which stays reachable) and uses its
+# blackstone.mil\Administrator EA credential to create simspace directly
+# in fops.blackstone.mil via AD RPC (bypasses fops-dc01 WinRM). Once
+# simspace exists as a fops.blackstone.mil DA, create_users can auth to
+# fops-dc01 normally on default unqualified creds.
+#
+# Removes the need for a temporary blackstone.mil\Administrator override
+# in host_vars/fops-dc01.yml on future fresh deploys. See UPSTREAM_FIXES.md
+# 2026-07-14.
+- name: Bootstrap simspace as fops.blackstone.mil Domain Admin (delegated from bs-dc01)
+  hosts: pdc_blackstone
+  gather_facts: false
+  any_errors_fatal: false
+  tasks:
+    - name: Create simspace in fops.blackstone.mil child domain
+      ansible.windows.win_shell: |
+        $sec = ConvertTo-SecureString "{{ domain_admin_password }}" -AsPlainText -Force
+        $cred = New-Object System.Management.Automation.PSCredential(
+                  "{{ parent_domain_name | default('blackstone.mil') }}\Administrator", $sec)
+        $childDomain = "{{ domain_name | default('fops.blackstone.mil') }}"
+        try {
+          $existing = Get-ADUser -Filter "SamAccountName -eq 'simspace'" `
+                                 -Server $childDomain -Credential $cred `
+                                 -ErrorAction SilentlyContinue
+          if (-not $existing) {
+            New-ADUser -Name simspace -SamAccountName simspace `
+                       -AccountPassword $sec -PasswordNeverExpires $true -Enabled $true `
+                       -Server $childDomain -Credential $cred
+            Add-ADGroupMember -Identity "Domain Admins" -Members simspace `
+                              -Server $childDomain -Credential $cred
+            "CREATED"
+          } else {
+            # Idempotent: if the user exists but isn't in DA (e.g. from a
+            # partial prior run), add it. Add is a no-op if already a member.
+            Add-ADGroupMember -Identity "Domain Admins" -Members simspace `
+                              -Server $childDomain -Credential $cred `
+                              -ErrorAction SilentlyContinue
+            "EXISTS"
+          }
+        } catch {
+          "FAILED: $($_.Exception.Message)"
+          throw
+        }
+      # This task uses PowerShell -Server/-Credential which talks to the
+      # child DC via AD RPC/LDAP, not WinRM. Works even when fops-dc01 WinRM
+      # rejects our default creds -- we're not routing through WinRM.
+      # Vars-scoped here so this play (delegated to bs-dc01) uses bs-dc01's
+      # working auth path. child domain name from group_vars/fops.yml sets
+      # domain_name; parent_domain_name likewise from there.
+      vars:
+        domain_name: "{{ hostvars[groups['pdc_fops'][0]].domain_name | default('fops.blackstone.mil') }}"
+        parent_domain_name: "{{ hostvars[groups['pdc_fops'][0]].parent_domain_name | default('blackstone.mil') }}"
+      register: bootstrap_simspace
+      changed_when: "'CREATED' in bootstrap_simspace.stdout"
+
+    - name: Show bootstrap result
+      ansible.builtin.debug:
+        msg: "bootstrap_simspace ({{ domain_name | default('fops.blackstone.mil') }}\\simspace) → {{ bootstrap_simspace.stdout | trim }}"
+      when: bootstrap_simspace.stdout is defined
+      vars:
+        domain_name: "{{ hostvars[groups['pdc_fops'][0]].domain_name | default('fops.blackstone.mil') }}"
+  tags:
+    - dcpromo
+    - bootstrap_child_simspace
+
 - name: Create Users
   hosts: pdc
   gather_facts: false
