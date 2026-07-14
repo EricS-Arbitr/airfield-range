@@ -171,6 +171,16 @@
   ansible.windows.win_powershell:
     script: |
       $ErrorActionPreference = 'Stop'
+      # Persistent disk log -- survives WinRM session death and reboots so we
+      # can recover the actual Install-ADDSDomain output even if this task
+      # returns UNREACHABLE mid-flight (a known symptom on Server 2022 where
+      # promotion changes local auth state and severs the caller's session).
+      # Retrieve via bs-dc01 SMB after the fact:
+      #   ansible bs-dc01 ... 'Get-Content \\172.31.3.11\c$\ProgramData\dcpromo-install.log'
+      $log = 'C:\ProgramData\dcpromo-install.log'
+      $null = New-Item -ItemType Directory -Path 'C:\ProgramData' -Force -ErrorAction SilentlyContinue
+      "$(Get-Date -Format o) START Install-ADDSDomain child={{ child_domain_label }} parent={{ parent_domain_name }}" | Add-Content $log
+
       Import-Module ADDSDeployment -ErrorAction Stop
       $pw = ConvertTo-SecureString '{{ domain_admin_password }}' -AsPlainText -Force
       # Credential = parent-forest built-in Administrator. Auto-EA + auto-DA
@@ -189,16 +199,19 @@
           -Credential $cred `
           -SafeModeAdministratorPassword $pw `
           -Force -NoRebootOnCompletion -ErrorAction Stop
-        # Install-ADDSDomain returns an object with a Status field on success.
-        # On success it's "Success" (SimSpace: verified 2026-07-07).
+        "$(Get-Date -Format o) RESULT Status=$($result.Status) Message=$($result.Message)" | Add-Content $log
         if ($result.Status -eq 'Success') {
+          "$(Get-Date -Format o) DCPROMO_OK" | Add-Content $log
           $Ansible.Changed = $true
           Write-Output "PROMOTION_OK"
         } else {
+          "$(Get-Date -Format o) DCPROMO_FAILED status=$($result.Status)" | Add-Content $log
           $Ansible.Failed = $true
           Write-Output "PROMOTION_FAILED status=$($result.Status) msg=$($result.Message)"
         }
       } catch {
+        "$(Get-Date -Format o) DCPROMO_EXCEPTION: $($_.Exception.Message)" | Add-Content $log
+        "$(Get-Date -Format o) STACK: $($_.ScriptStackTrace)" | Add-Content $log
         $Ansible.Failed = $true
         Write-Output "PROMOTION_EXCEPTION: $($_.Exception.Message)"
         Write-Output "STACK: $($_.ScriptStackTrace)"

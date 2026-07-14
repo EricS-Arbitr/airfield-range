@@ -484,6 +484,69 @@
     - dcpromo
     - dcpromo_child
 
+# ALWAYS runs after dcpromo(child) attempts -- captures forest + child-DC
+# state from bs-dc01 (which stays reachable through the whole flow), so
+# that even if dcpromo(child) reported UNREACHABLE, we get diagnostic
+# evidence of what actually happened. Written to a controller-side file
+# for later analysis. See UPSTREAM_FIXES.md 2026-07-13.
+- name: Post-dcpromo diagnostic snapshot (always runs)
+  hosts: pdc_blackstone
+  gather_facts: false
+  any_errors_fatal: false
+  vars:
+    ansible_user: Administrator
+    ansible_password: "{{ domain_admin_password }}"
+  tasks:
+    - name: Snapshot forest + child DC state
+      ansible.windows.win_shell: |
+        "=== $(Get-Date -Format o) POST-DCPROMO DIAGNOSTIC SNAPSHOT ==="
+        ""
+        "--- forest domains ---"
+        try { (Get-ADForest -ErrorAction Stop).Domains } catch { "ERROR: $($_.Exception.Message)" }
+        ""
+        "--- CrossRefs in Partitions ---"
+        try {
+          Get-ADObject -SearchBase "CN=Partitions,CN=Configuration,DC=blackstone,DC=mil" -Filter * -Properties dnsRoot,nCName -ErrorAction Stop |
+            Select-Object Name,dnsRoot,nCName | Format-Table -AutoSize | Out-String
+        } catch { "ERROR: $($_.Exception.Message)" }
+        ""
+        "--- Domain controllers ---"
+        try { Get-ADDomainController -Filter * -ErrorAction Stop | Select-Object Name,Site,Domain | Format-Table -AutoSize | Out-String } catch { "ERROR: $($_.Exception.Message)" }
+        ""
+        "--- DNS delegation in blackstone.mil ---"
+        try { Get-DnsServerResourceRecord -ZoneName blackstone.mil -RRType NS -ErrorAction Stop | Select-Object HostName,RecordType | Format-Table | Out-String } catch { "ERROR: $($_.Exception.Message)" }
+        ""
+        "--- fops-dc01 LDAP 172.31.3.11:389 up? ---"
+        (Test-NetConnection 172.31.3.11 -Port 389 -InformationLevel Quiet -WarningAction SilentlyContinue)
+        ""
+        "--- fops-dc01 mgmt 10.255.240.120:5985 (WinRM) up? ---"
+        (Test-NetConnection 10.255.240.120 -Port 5985 -InformationLevel Quiet -WarningAction SilentlyContinue)
+        ""
+        "--- Try Install-ADDSDomain log from fops-dc01 via SMB ---"
+        try { Get-Content '\\172.31.3.11\c$\ProgramData\dcpromo-install.log' -ErrorAction Stop } catch { "ERROR reading log: $($_.Exception.Message)" }
+        ""
+        "--- Replication metadata for fops.blackstone.mil ---"
+        try { repadmin /showrepl fops-dc01 /csv 2>&1 } catch { "ERROR: $($_.Exception.Message)" }
+        ""
+        "=== END SNAPSHOT ==="
+      register: dc_snapshot
+      changed_when: false
+      failed_when: false
+
+    - name: Show snapshot in ansible output
+      ansible.builtin.debug:
+        var: dc_snapshot.stdout_lines
+
+    - name: Save snapshot to controller-side file
+      ansible.builtin.copy:
+        content: "{{ dc_snapshot.stdout }}"
+        dest: "/tmp/diagnostic-postdcpromo-{{ lookup('pipe', 'date +%Y%m%d-%H%M%S') }}.txt"
+      delegate_to: localhost
+      become: false
+  tags:
+    - dcpromo
+    - dcpromo_diag
+
 - name: Create Users
   hosts: pdc
   gather_facts: false
