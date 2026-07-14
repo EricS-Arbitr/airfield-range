@@ -128,6 +128,14 @@ if [ -f "$AIRFIELD_RANGE/verify_deployment.sh" ]; then
   cp "$AIRFIELD_RANGE/verify_deployment.sh" "$STAGE/"
   chmod +x "$STAGE/verify_deployment.sh"
 fi
+if [ -f "$AIRFIELD_RANGE/deploy-diagnostic.sh" ]; then
+  cp "$AIRFIELD_RANGE/deploy-diagnostic.sh" "$STAGE/"
+  chmod +x "$STAGE/deploy-diagnostic.sh"
+fi
+if [ -f "$AIRFIELD_RANGE/fetch-fops-log.sh" ]; then
+  cp "$AIRFIELD_RANGE/fetch-fops-log.sh" "$STAGE/"
+  chmod +x "$STAGE/fetch-fops-log.sh"
+fi
 if [ -f "$AIRFIELD_RANGE/requirements.yml" ]; then
   cp "$AIRFIELD_RANGE/requirements.yml" "$STAGE/"
 fi
@@ -151,6 +159,8 @@ fi
 cd "$STAGE"
 TAR_PATHS=(roles host_vars group_vars hosts site.yml deploy.sh)
 [ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
+[ -f "deploy-diagnostic.sh" ] && TAR_PATHS+=(deploy-diagnostic.sh)
+[ -f "fetch-fops-log.sh" ] && TAR_PATHS+=(fetch-fops-log.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
 [ -d "files" ] && TAR_PATHS+=(files)
 tar --no-xattrs -czf "$ARCHIVE" "${TAR_PATHS[@]}"
