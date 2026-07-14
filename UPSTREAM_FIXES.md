@@ -16,6 +16,72 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-14 · bug · roles/pfsense_firewall/tasks/main.yml — remote-syslog daemon never reloaded when config already matched
+
+**Symptom.** `verify_deployment.sh` failed on `soc-syslog receiving from bs-edge-fw` and `soc-syslog receiving from bs-ops-fw` (`STALE_OR_MISSING`). Both pfSense boxes had the correct block in `/cf/conf/config.xml`:
+```
+<syslog>
+  <remoteserver>172.31.7.13</remoteserver>
+  <enable></enable>
+  <logall></logall>
+  <ipproto>ipv4</ipproto>
+</syslog>
+```
+but tcpdump on soc-syslog showed zero packets from either pfSense's interface IPs. On inspection: bs-edge-fw's `/etc/syslog.conf` had **no remote-forward stanza** (config.xml never got regenerated into the runtime file); bs-ops-fw's `syslogd` process **wasn't running at all**.
+
+**Root cause.** The task `Configure remote syslog forwarding` only called `system_syslogd_start()` when it had staged a config diff (`$changed = true`). On a re-deploy where config.xml already had the right values but runtime state had drifted (either the file regen missed or the daemon crashed and never got restarted), no reload was triggered.
+
+**Fix (overlay).** Split into two tasks: the write-config task stays conditional (idempotent), and a new **always-runs** follow-up unconditionally calls `system_syslogd_start(true)` — the `true` flag forces config regeneration + daemon restart even when PHP thinks nothing changed. Belt-and-suspenders fallback: if `pgrep syslogd` still returns nothing after that, run `service syslogd onerestart`. This guarantees runtime = config.xml on every deploy.
+
+---
+
+## 2026-07-14 · bug · roles/create_users/tasks/main.yml — Get-ADDefaultDomainPasswordPolicy targets caller's domain, not local DC
+
+**Symptom.** On fops-dc01 (child DC), `create_users` failed at:
+```
+Get-ADDefaultDomainPasswordPolicy : Unable to contact the server. This may be because this server does not exist, it is currently down, or it does not have the Active Directory Web Services running.
+CategoryInfo: (BLACKSTONE:ADDefaultDomainPasswordPolicy) [ADServerDownException]
+```
+Note the target realm in the error: `BLACKSTONE` — the parent forest — not `fops.blackstone.mil` where the task was running.
+
+**Root cause.** `Get-ADDefaultDomainPasswordPolicy` (and `Set-`) default to the **current user's** domain, not the local machine's. When Ansible authenticates to fops-dc01 with a parent-forest EA credential (e.g. via the temporary `blackstone.mil\Administrator` host_vars override needed post-promotion), both cmdlets try to reach the parent forest DC across the network via ADWS — which intermittently fails even when bs-dc01's ADWS is healthy. Knock-on effect: `simspace` was never created as a domain user in fops.blackstone.mil, which cascaded into `additional_dc` on fops-dc02 failing with `"You have not supplied user credentials that belong to Domain Admins/Enterprise Admins"` (the credential it was passing, `simspace@fops.blackstone.mil`, didn't exist).
+
+**Fix (overlay).** Pin both cmdlets to `-Server $env:COMPUTERNAME`:
+```powershell
+(Get-ADDefaultDomainPasswordPolicy -Server $env:COMPUTERNAME).ComplexityEnabled
+```
+```powershell
+$dom = Get-ADDomain -Server $env:COMPUTERNAME
+Set-ADDefaultDomainPasswordPolicy -Identity $dom.DistinguishedName -Server $env:COMPUTERNAME -ComplexityEnabled $false
+```
+Now the query always talks to the local DC regardless of caller identity.
+
+---
+
+## 2026-07-14 · bug · roles/dcpromo_child_heal — WinRM/NTLM credential format + reboot mechanics (three sub-fixes)
+
+**Symptom.** The heal role from 2026-07-13 was structurally sound but its first `win_ping` never succeeded, so `end_host` fired and no healing occurred. Symptoms across three iterations:
+
+1. First iteration used `.\simspace` for local auth — got `ntlm: credentials rejected` on every attempt.
+2. Second iteration switched to `MACHINE\simspace` — got a Jinja `recursive loop detected in template string` from `heal_local_password: "{{ ansible_password | default(...) }}"` (since the task also sets `ansible_password: "{{ heal_local_password }}"`).
+3. Third iteration used `Start-Job { Restart-Computer }` to fire the healing reboot async — but the job died with the WinRM PowerShell process, so the reboot never happened; registry values were cleared but not applied.
+
+**Root causes.**
+
+1. `.\user` is a Windows console shorthand, **not an NTLM auth format**. pywinrm doesn't accept it. Real NTLM requires `MACHINENAME\user` or `user@REALM`.
+2. Ansible template resolution: setting a role default to `{{ ansible_password | default(...) }}` and then having a task set `ansible_password: {{ default_var }}` creates a resolution cycle → recursion depth error.
+3. `Start-Job` runs the scriptblock as a child process of the current PowerShell session. When WinRM closes the session, PowerShell dies, and any Start-Job children die with it before `Start-Sleep` finishes.
+
+**Fixes.**
+
+1. Use `{{ inventory_hostname | upper }}\simspace` for MACHINE\user format; fall back to `MACHINE\Administrator` (dcpromo's "local admin fix" task sets its password to `domain_admin_password`).
+2. Hard-code the literal password in role defaults; never reference `ansible_password` from a default consumed by a task that then rewrites `ansible_password`.
+3. Replace `Start-Job` reboot with `shutdown.exe /r /t 5 /f` — launches a detached system process that survives WinRM session termination.
+
+Also added: try DEFAULT (unqualified `simspace`) creds **first**. On a CLEAN baseline snapshot the machine is in WORKGROUP mode → default creds work → `meta: end_host` with no healing needed. Only fall through to MACHINE\ variants if the default is rejected (true half-joined state).
+
+---
+
 ## 2026-07-13 · enhancement · roles/dcpromo_child_heal — auto-heal half-join residue before init
 
 **Symptom.** Third consecutive fresh-range deploy hit the same failure pattern: `Install-ADDSDomain` on fops-dc01 succeeds far enough to (a) register the `FOPS` cross-reference in bs-dc01's Configuration NC and (b) set fops-dc01's Primary DNS Suffix + Domain hint to `fops.blackstone.mil` — then dies before AD services come up. Every subsequent deploy times out at `init` for 30 min × 3 attempts (NTLM rejects unqualified `simspace` because the machine's now-broken domain hint prefixes it as `fops.blackstone.mil\simspace`). Manual recovery loop (metadata cleanup via Administrator/EA + SimSpace snapshot revert) has taken 4 rounds so far.
