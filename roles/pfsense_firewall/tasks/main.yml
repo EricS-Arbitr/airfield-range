@@ -552,7 +552,6 @@
             }
             if ($changed) {
               write_config("Enable remote syslog forwarding to " . $target);
-              system_syslogd_start();
               echo "CHANGED: remote syslog → " . $target . "\n";
             } else {
               echo "OK: remote syslog already → " . $target . "\n";
@@ -561,6 +560,34 @@
     PFS_SYSLOG_TARGET: "{{ syslog_server_ip | default('') }}"
   register: pfsense_syslog_cfg
   changed_when: "'CHANGED' in pfsense_syslog_cfg.stdout"
+  when: syslog_server_ip is defined
+
+# Always regenerate /etc/syslog.conf from config.xml AND kick syslogd. On
+# 2026-07-14 we observed: bs-edge-fw's syslogd was running but its
+# /etc/syslog.conf had no remote-forward stanza, and bs-ops-fw's syslogd
+# wasn't running at all -- both cases produced no forwarded traffic even
+# though config.xml was correct. Previous version only called
+# system_syslogd_start() when this run had staged a config diff; on a
+# re-deploy where config.xml was already correct but runtime state had
+# drifted, the daemon never got re-synced. This block runs every deploy
+# to enforce runtime = config.xml. See UPSTREAM_FIXES.md 2026-07-14.
+- name: Force pfSense syslogd to reload from config.xml (always)
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/system.inc");
+            # true = force even if PHP thinks nothing changed
+            system_syslogd_start(true);
+            echo "syslogd_reloaded\n";'
+    # Extra belt-and-suspenders: if the daemon didnt come back up, hit it
+    # with the rc.d script. `onerestart` is the pfSense/FreeBSD idiom for
+    # unconditional restart even when service_enable is not set.
+    if ! /bin/pgrep -x syslogd >/dev/null 2>&1; then
+      /usr/sbin/service syslogd onerestart 2>&1 || true
+      echo "syslogd_hard_restart"
+    fi
+    /bin/pgrep -lx syslogd || echo "syslogd_still_down"
+  register: pfsense_syslog_reload
+  changed_when: false
   when: syslog_server_ip is defined
 
 # Start zebra and bgpd DIRECTLY rather than via `watchfrr` / `service frr`.
