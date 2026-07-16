@@ -231,16 +231,20 @@ check_sh fuel-farm-sim \
   'OK' \
   "fuel-farm-sim config file deployed"
 
+# Timeline was populated (wc returns N). Match the count with the (stdout)
+# prefix ansible --one-line prepends -- the previous `^[1-9]` anchor
+# assumed the count would be at line start, which it never is.
 check_sh fuel-farm-sim \
   "test -f /opt/fuelsim/timelines/fuel_ops_timeline.jsonl && wc -l < /opt/fuelsim/timelines/fuel_ops_timeline.jsonl" \
-  '^[1-9]' \
+  '\(stdout\) [1-9]' \
   "fuel-farm-sim replay timeline deployed"
 
 # Field-bus Modbus slave on :502 (fuel-farm-sim exposes this to the PLC).
-# NOTE: Only meaningful once fuelsim/modbus.py is authored; today the
-# service will start but no port opens. This check will FAIL until then.
+# Bound to prod NIC (172.16.46.17). Only meaningful once fuelsim/modbus.py
+# is authored; today the service will start but no port opens. This check
+# will FAIL until modbus.py is fleshed out.
 check_sh fuel-farm-sim \
-  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/502' 2>/dev/null && echo MODBUS_ACCEPTS || echo MODBUS_REFUSED" \
+  "timeout 2 bash -c 'echo > /dev/tcp/172.16.46.17/502' 2>/dev/null && echo MODBUS_ACCEPTS || echo MODBUS_REFUSED" \
   'MODBUS_ACCEPTS' \
   "fuel-farm-sim field-bus Modbus :502 accepting TCP (needs modbus.py)"
 
@@ -254,19 +258,21 @@ check_sh ff-plc-1 \
   'openplc.*Up' \
   "ff-plc-1 OpenPLC container running"
 
+# OpenPLC container publishes ports to the prod-NIC IP (172.16.45.10) only,
+# not 0.0.0.0 or 127.0.0.1. Check against that IP directly.
 check_sh ff-plc-1 \
-  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/502' 2>/dev/null && echo MODBUS_ACCEPTS || echo MODBUS_REFUSED" \
+  "timeout 2 bash -c 'echo > /dev/tcp/172.16.45.10/502' 2>/dev/null && echo MODBUS_ACCEPTS || echo MODBUS_REFUSED" \
   'MODBUS_ACCEPTS' \
   "ff-plc-1 Modbus :502 accepting TCP"
 
 check_sh ff-plc-1 \
-  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8080' 2>/dev/null && echo WEB_ACCEPTS || echo WEB_REFUSED" \
+  "timeout 2 bash -c 'echo > /dev/tcp/172.16.45.10/8080' 2>/dev/null && echo WEB_ACCEPTS || echo WEB_REFUSED" \
   'WEB_ACCEPTS' \
   "ff-plc-1 OpenPLC web :8080 accepting TCP"
 
 check_sh ff-plc-1 \
-  "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ --max-time 5" \
-  '^(200|302|401)$' \
+  "curl -sS -o /dev/null -w 'code=%{http_code}\n' --max-time 5 http://172.16.45.10:8080/" \
+  'code=(200|302|401)' \
   "ff-plc-1 OpenPLC web :8080 returns HTTP 200/302/401"
 
 # =========================================================================
@@ -281,24 +287,25 @@ for svc in telegraf influxdb grafana; do
     "fuel-hist $svc container running"
 done
 
+# InfluxDB and Grafana containers publish to the prod-NIC IP (172.16.46.18).
 check_sh fuel-hist \
-  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8086' 2>/dev/null && echo INFLUX_ACCEPTS || echo INFLUX_REFUSED" \
+  "timeout 2 bash -c 'echo > /dev/tcp/172.16.46.18/8086' 2>/dev/null && echo INFLUX_ACCEPTS || echo INFLUX_REFUSED" \
   'INFLUX_ACCEPTS' \
   "fuel-hist InfluxDB :8086 accepting TCP"
 
 check_sh fuel-hist \
-  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/3000' 2>/dev/null && echo GRAFANA_ACCEPTS || echo GRAFANA_REFUSED" \
+  "timeout 2 bash -c 'echo > /dev/tcp/172.16.46.18/3000' 2>/dev/null && echo GRAFANA_ACCEPTS || echo GRAFANA_REFUSED" \
   'GRAFANA_ACCEPTS' \
   "fuel-hist Grafana :3000 accepting TCP"
 
 check_sh fuel-hist \
-  "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8086/health --max-time 5" \
-  '^200$' \
+  "curl -sS -o /dev/null -w 'code=%{http_code}\n' --max-time 5 http://172.16.46.18:8086/health" \
+  'code=200' \
   "fuel-hist InfluxDB /health returns 200"
 
 check_sh fuel-hist \
-  "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/health --max-time 5" \
-  '^200$' \
+  "curl -sS -o /dev/null -w 'code=%{http_code}\n' --max-time 5 http://172.16.46.18:3000/api/health" \
+  'code=200' \
   "fuel-hist Grafana /api/health returns 200"
 
 # InfluxDB `fuel` bucket exists — role should create it during provisioning.
@@ -317,14 +324,15 @@ check_sh control-room-hmi \
   'fuxa.*Up' \
   "control-room-hmi FUXA container running"
 
+# FUXA container publishes to prod-NIC IP (172.16.45.3).
 check_sh control-room-hmi \
-  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/1881' 2>/dev/null && echo FUXA_ACCEPTS || echo FUXA_REFUSED" \
+  "timeout 2 bash -c 'echo > /dev/tcp/172.16.45.3/1881' 2>/dev/null && echo FUXA_ACCEPTS || echo FUXA_REFUSED" \
   'FUXA_ACCEPTS' \
   "control-room-hmi FUXA :1881 accepting TCP"
 
 check_sh control-room-hmi \
-  "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:1881/ --max-time 5" \
-  '^(200|302)$' \
+  "curl -sS -o /dev/null -w 'code=%{http_code}\n' --max-time 5 http://172.16.45.3:1881/" \
+  'code=(200|302)' \
   "control-room-hmi FUXA :1881 returns HTTP 200/302"
 
 # Cross-plane: control-room-hmi should be able to reach ff-plc-1:502 for
