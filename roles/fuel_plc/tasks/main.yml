@@ -43,12 +43,14 @@
 - name: Run OpenPLC v3 runtime container
   community.docker.docker_container:
     name: openplc
-    # The `openplcproject/openplc_v3` name I originally used does not
-    # exist on Docker Hub (404 pull denied 2026-07-16). The maintained
-    # image is `thiagoralves/openplc_v3` (published by OpenPLC's author).
-    # When OpenPLC v4 (Autonomy-Logic) ships an official image we can
-    # switch; for now v3 covers build sheet §4 Modbus TCP + web UI :8080.
-    image: thiagoralves/openplc_v3:latest
+    # OpenPLC has no "official" Docker image on Docker Hub -- both
+    # `openplcproject/openplc_v3` and `thiagoralves/openplc_v3` return
+    # 404. Community image `fdamador/openplc` (57k pulls, dominant vs.
+    # ~1k on any alternative per Hub search 2026-07-16) is the de facto
+    # standard. Not maintained by OpenPLC project directly; if it starts
+    # to lag, revisit either (a) another user fork, or (b) building from
+    # source in the role via git clone + ./install.sh.
+    image: fdamador/openplc:latest
     restart_policy: unless-stopped
     published_ports:
       - "{{ fuel_plc_ip }}:{{ fuel_modbus_port }}:502"        # SCADA-bus
