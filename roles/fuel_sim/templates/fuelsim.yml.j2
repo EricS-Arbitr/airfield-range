@@ -8,7 +8,33 @@ modbus_slave:
 
 physics:
   # 500,000 gal tanks; loading rack ~600 gpm typical
+  # tick_hz configurable per user direction 2026-07-16 (default 5).
   tick_hz: 5
+
+  # Initial tank fill % on boot. `initial_levels_pct` overrides per-tank.
+  default_initial_level_pct: 85.0
+  initial_levels_pct:
+    "T-101": 90.0
+    "T-102": 82.0
+    "T-103": 78.0
+
+  # Interlock switches: T*_LO_LVL trips below lo_pct, T*_HI_LVL above hi_pct.
+  lo_switch_pct: 5.0
+  hi_switch_pct: 95.0
+
+  # Header pressure model: base + running_pumps * per_pump.
+  header_press_base_psi: 20.0
+  header_press_per_pump_psi: 15.0
+
+  # Nominal rack flow when a load is actively dispensing.
+  rack_flow_gpm: 600.0
+
+  # Tank temp is slowly-varying; hold constant for MVP.
+  tank_temp_f: 68.0
+
+  # Seed data mirrored from group_vars/fuel.yml so the sim can boot
+  # without going back to Ansible facts at runtime.
+  tanks_seed: {{ fuel_tanks_seed | to_json }}
 
 replay:
   timeline: /opt/fuelsim/timelines/fuel_ops_timeline.jsonl

@@ -1,13 +1,14 @@
 ---
-# fuel_sim — deploys fuelsim (Python 3.12 systemd service) to
-# fuel-farm-sim. Serves the field-bus Modbus slave (pymodbus) that
-# ff-plc-1 (OpenPLC master) polls, runs the physics model, and drives
-# the logistics state machine from the 48h replay timeline.
+# fuel_sim — deploys fuelsim (Python systemd service) to fuel-farm-sim.
+# Serves the field-bus Modbus slave (pymodbus) that ff-plc-1 (OpenPLC
+# master) polls, runs the physics model, drives the logistics state
+# machine from the 48h replay timeline, and writes audit rows to
+# fuel-db's Postgres.
 #
-# Build sheet §8. The Python code in files/fuelsim/ is a placeholder
-# scaffold -- flesh out the physics model, state machine, and replay
-# runner iteratively. The Ansible plumbing here (venv, systemd unit,
-# config, timeline file) is complete and idempotent.
+# Build sheet §8. The Python source in files/fuelsim/ is now the real
+# implementation (four asyncio-driven modules). The offline dataset
+# generator lives at files/generate_timeline.py; the pre-generated
+# 48h JSONL at files/fuel_ops_timeline.jsonl (seed 20260101).
 
 # Use whichever python3 the OS ships (jammy: 3.10, noble: 3.12).
 # pymodbus 3.6.x supports Python 3.9+ and psycopg2 2.9.x supports 3.7+,
@@ -58,7 +59,7 @@
     virtualenv: /opt/fuelsim/venv
     state: present
 
-- name: Deploy fuelsim source (physics + slave + state machine + replay)
+- name: Deploy fuelsim source (modbus + physics + state_machine + replay + entrypoint)
   ansible.builtin.copy:
     src: fuelsim/
     dest: /opt/fuelsim/bin/
@@ -67,7 +68,18 @@
     mode: '0755'
   notify: restart fuelsim
 
-- name: Render fuelsim config (host addresses + DB creds + register map)
+# Ships the offline dataset generator alongside the daemon so operators
+# can regenerate the timeline with a different --seed / --hours without
+# needing the source repo on the range.
+- name: Deploy timeline generator (offline tool)
+  ansible.builtin.copy:
+    src: generate_timeline.py
+    dest: /opt/fuelsim/bin/generate_timeline.py
+    owner: fuelsim
+    group: fuelsim
+    mode: '0755'
+
+- name: Render fuelsim config (host addresses + DB creds + register map + physics)
   ansible.builtin.template:
     src: fuelsim.yml.j2
     dest: /opt/fuelsim/config/fuelsim.yml
@@ -76,9 +88,12 @@
     mode: '0640'
   notify: restart fuelsim
 
-- name: Deploy 48h replay timeline (deterministic, seeded)
-  ansible.builtin.template:
-    src: fuel_ops_timeline.jsonl.j2
+# Pre-generated 48h timeline (seed 20260101). Bit-for-bit reproducible
+# via `python3 /opt/fuelsim/bin/generate_timeline.py --seed 20260101
+# --hours 48 --output /opt/fuelsim/timelines/fuel_ops_timeline.jsonl`.
+- name: Deploy 48h replay timeline (deterministic, seed 20260101)
+  ansible.builtin.copy:
+    src: fuel_ops_timeline.jsonl
     dest: /opt/fuelsim/timelines/fuel_ops_timeline.jsonl
     owner: fuelsim
     group: fuelsim
