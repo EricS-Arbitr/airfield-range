@@ -315,11 +315,12 @@ check_sh fuel-hist \
   "fuel-hist Grafana /api/health returns 200"
 
 # InfluxDB CLI requires --token + --org for authenticated operations.
-# The bucket exists (verified 2026-07-16 via influx bucket list with token
-# Simspace1SimspaceFuelHistorianAdminToken --org airfield). Emit a token
-# so the check pattern is unambiguous.
+# --name filters server-side; the earlier attempt used --hide-headers which
+# this CLI version doesnt support, so the awk pipeline saw empty output
+# and always reported MISSING. Filtering by name and grepping for the
+# literal name is version-safe.
 check_sh fuel-hist \
-  "docker exec influxdb influx bucket list --token Simspace1SimspaceFuelHistorianAdminToken --org airfield --hide-headers 2>/dev/null | awk '{print \$2}' | grep -Fx fuel >/dev/null && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
+  "docker exec influxdb influx bucket list --name fuel --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 2>/dev/null | grep -qE '(^|[[:space:]])fuel([[:space:]]|$)' && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
   'BUCKET_PRESENT' \
   "fuel-hist InfluxDB 'fuel' bucket exists"
 
