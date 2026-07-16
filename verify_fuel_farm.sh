@@ -260,10 +260,16 @@ check_sh ff-plc-1 \
 
 # OpenPLC container publishes ports to the prod-NIC IP (172.16.45.10) only,
 # not 0.0.0.0 or 127.0.0.1. Check against that IP directly.
+# NOTE: OpenPLC does NOT bind Modbus :502 until you upload + start a
+# program via the web UI. `/opt/openplc/programs/fuel_farm.st` is bind-
+# mounted into the container but the runtime needs a POST to the web API
+# to activate it. Expected-fail until the role gains an API-driven upload
+# (fuel_plc/tasks/main.yml TODO). Manual: log in to :8080 as openplc/openplc,
+# Programs -> upload fuel_farm.st, Runtime -> start.
 check_sh ff-plc-1 \
   "timeout 2 bash -c 'echo > /dev/tcp/172.16.45.10/502' 2>/dev/null && echo MODBUS_ACCEPTS || echo MODBUS_REFUSED" \
   'MODBUS_ACCEPTS' \
-  "ff-plc-1 Modbus :502 accepting TCP"
+  "ff-plc-1 Modbus :502 accepting TCP (needs program uploaded via web UI)"
 
 check_sh ff-plc-1 \
   "timeout 2 bash -c 'echo > /dev/tcp/172.16.45.10/8080' 2>/dev/null && echo WEB_ACCEPTS || echo WEB_REFUSED" \
@@ -308,10 +314,13 @@ check_sh fuel-hist \
   'code=200' \
   "fuel-hist Grafana /api/health returns 200"
 
-# InfluxDB `fuel` bucket exists — role should create it during provisioning.
+# InfluxDB CLI requires --token + --org for authenticated operations.
+# The bucket exists (verified 2026-07-16 via influx bucket list with token
+# Simspace1SimspaceFuelHistorianAdminToken --org airfield). Emit a token
+# so the check pattern is unambiguous.
 check_sh fuel-hist \
-  "docker exec influxdb influx bucket list --hide-headers 2>/dev/null | awk '{print \$2}' | grep -Fx fuel || echo MISSING" \
-  '^fuel$' \
+  "docker exec influxdb influx bucket list --token Simspace1SimspaceFuelHistorianAdminToken --org airfield --hide-headers 2>/dev/null | awk '{print \$2}' | grep -Fx fuel >/dev/null && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
+  'BUCKET_PRESENT' \
   "fuel-hist InfluxDB 'fuel' bucket exists"
 
 # =========================================================================
