@@ -59,6 +59,16 @@
   hosts: fuel-db
   gather_facts: true
   become: true
+  # get_url uses Python urllib which reads HTTP_PROXY from its task
+  # environment. Since we no longer set /etc/environment shell env vars
+  # (curl 7.81's NO_PROXY handling made that break intra-range HTTP),
+  # scope the proxy to just this play so PGDG + TimescaleDB GPG key
+  # downloads can reach out via the mgmt-plane proxy.
+  environment:
+    HTTP_PROXY: "http://10.255.240.1:3128"
+    HTTPS_PROXY: "http://10.255.240.1:3128"
+    http_proxy: "http://10.255.240.1:3128"
+    https_proxy: "http://10.255.240.1:3128"
   roles:
     - fuel_db
   tags:
@@ -89,6 +99,14 @@
   hosts: fuel-hist
   gather_facts: false
   become: true
+  # Same reason as fuel_db play: get_url downloads (InfluxData apt key)
+  # need the proxy in task environment because we no longer set shell
+  # env vars in /etc/environment. Scoped to this play only.
+  environment:
+    HTTP_PROXY: "http://10.255.240.1:3128"
+    HTTPS_PROXY: "http://10.255.240.1:3128"
+    http_proxy: "http://10.255.240.1:3128"
+    https_proxy: "http://10.255.240.1:3128"
   roles:
     - fuel_historian
   tags:
