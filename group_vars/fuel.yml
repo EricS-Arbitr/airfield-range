@@ -21,24 +21,24 @@ fuel_modbus_port: 502
 # --- OpenPLC v4 (ff-plc-1) -----------------------------------
 openplc_web_port: 8080
 openplc_admin_user: "openplc"
-openplc_admin_password: "{{ vault_openplc_admin_password }}"   # rotate from openplc/openplc default
+openplc_admin_password: "{{ vault_openplc_admin_password | default('Simspace1!Simspace1!') }}"   # rotate from openplc/openplc default
 
 # --- FUXA HMI (control-room-hmi, shared with power) ----------
 fuxa_port: 1881
 fuxa_admin_user: "admin"
-fuxa_admin_password: "{{ vault_fuxa_admin_password }}"
+fuxa_admin_password: "{{ vault_fuxa_admin_password | default('Simspace1!Simspace1!') }}"
 
 # --- InfluxDB 2.7 (fuel-hist) — pin major version ------------
 influxdb_image: "influxdb:2.7"               # NEVER :latest (CLAUDE.md §9)
 influxdb_org: "airfield"
 influxdb_bucket_fuel: "fuel"
-influxdb_admin_token: "{{ vault_influxdb_admin_token }}"
+influxdb_admin_token: "{{ vault_influxdb_admin_token | default('Simspace1SimspaceFuelHistorianAdminToken') }}"
 
 # --- PostgreSQL 16 + TimescaleDB (fuel-db) -------------------
 postgres_db_fuel: "fuel_audit"
 postgres_user_fuel_ro: "fuel_ro"
 postgres_user_fuel_rw: "fuel_rw"
-postgres_password_fuel_rw: "{{ vault_fuel_db_password }}"
+postgres_password_fuel_rw: "{{ vault_fuel_db_password | default('Simspace1!Simspace1!') }}"
 
 # --- Replay harness (fuel-farm-sim) --------------------------
 replay_seed: 20260101                          # deterministic
