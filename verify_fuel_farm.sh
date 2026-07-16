@@ -319,8 +319,11 @@ check_sh fuel-hist \
 # this CLI version doesnt support, so the awk pipeline saw empty output
 # and always reported MISSING. Filtering by name and grepping for the
 # literal name is version-safe.
+# Since --name fuel filters server-side, presence == any data row after
+# the header line. Avoids relying on regex anchor `$` which gets consumed
+# by outer double-quoted string expansion in the check_sh helper.
 check_sh fuel-hist \
-  "docker exec influxdb influx bucket list --name fuel --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 2>/dev/null | grep -qE '(^|[[:space:]])fuel([[:space:]]|$)' && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
+  "docker exec influxdb influx bucket list --name fuel --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 2>/dev/null | tail -n +2 | grep -q . && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
   'BUCKET_PRESENT' \
   "fuel-hist InfluxDB 'fuel' bucket exists"
 
