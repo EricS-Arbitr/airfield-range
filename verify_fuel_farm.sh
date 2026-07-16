@@ -1,0 +1,346 @@
+#!/bin/bash
+#
+# verify_fuel_farm.sh — read-only health check for the Fuel Farm OT
+# subsystem after `ansible-playbook fuel_farm_playbook.yml` has run.
+#
+# Covers systems/fuel_farm/fuel-farm-build-sheet.md §11 acceptance tests
+# where they can be probed without a live SCADA client. Checks are grouped:
+#
+#   1. Inventory reachability — mgmt-plane connectivity to every fuel host
+#   2. OT network — bs-modbus-gateway routes + prod-plane bindings
+#   3. fuel-db — PostgreSQL 16 + TimescaleDB + audit schema + seeds
+#   4. fuel-farm-sim — fuelsim service + venv + replay timeline
+#   5. ff-plc-1 — OpenPLC container + Modbus :502 + web :8080
+#   6. fuel-hist — Telegraf + InfluxDB 2.7 (:8086) + Grafana (:3000)
+#   7. control-room-hmi — FUXA :1881
+#
+# What this DOESN'T check (yet): live data flow through the whole stack
+# (PLC polling sim → historian receiving points → audit DB accumulating
+# rows). Those depend on the sim modules being fully authored
+# (roles/fuel_sim/files/fuelsim/{modbus,physics,state_machine,replay}.py
+# are still TODO per README).
+#
+# Usage:
+#   cd /etc/ansible && ./verify_fuel_farm.sh           # summary
+#   cd /etc/ansible && ./verify_fuel_farm.sh -v        # show ansible
+#                                                       # output for each fail
+#
+# Exit 0 if every check passes, 1 if any fails.
+
+set -u
+
+VERBOSE=0
+case "${1:-}" in
+  -v|--verbose) VERBOSE=1 ;;
+  -h|--help)    sed -n '2,30p' "$0"; exit 0 ;;
+esac
+
+# --- colors --------------------------------------------------------------
+if [ -t 1 ]; then
+  G=$'\033[32m'; R=$'\033[31m'; Y=$'\033[33m'; B=$'\033[36m'; D=$'\033[2m'; N=$'\033[0m'
+else
+  G=''; R=''; Y=''; B=''; D=''; N=''
+fi
+
+PASS=0
+FAIL=0
+declare -a FAILURES
+
+pass()    { printf "  ${G}✓${N} %s\n" "$1"; PASS=$((PASS+1)); }
+fail() {
+  printf "  ${R}✗${N} %s\n" "$1"
+  FAIL=$((FAIL+1))
+  FAILURES+=("$1")
+  if [ "$VERBOSE" -eq 1 ] && [ -n "${2:-}" ]; then
+    printf "      ${D}%s${N}\n" "$2" | head -5
+  fi
+}
+section() { printf "\n${B}━━ %s ━━${N}\n" "$1"; }
+note()    { printf "  ${D}%s${N}\n" "$1"; }
+
+A() { ansible "$@" 2>&1; }
+
+n_hosts() {
+  ansible "$1" --list-hosts 2>/dev/null | tail -n +2 | sed '/^$/d' | wc -l | tr -d ' '
+}
+
+# One reachability probe per group.
+probe_group() {
+  local group="$1" module="$2" cmd="$3" label="$4"
+  local total ok out
+  total=$(n_hosts "$group")
+  if [ "$total" -eq 0 ]; then
+    note "$label: 0 hosts in inventory (skipping)"
+    return
+  fi
+  if [ -n "$cmd" ]; then
+    out=$(A "$group" -m "$module" -a "$cmd" --one-line)
+  else
+    out=$(A "$group" -m "$module" --one-line)
+  fi
+  ok=$(echo "$out" | grep -cE '\| (SUCCESS|CHANGED)')
+  if [ "$ok" -eq "$total" ]; then
+    pass "$label: $ok/$total reachable"
+  else
+    fail "$label: $ok/$total reachable" "$out"
+  fi
+}
+
+# Probe one Linux host with a shell command, grep stdout.
+check_sh() {
+  local host="$1" cmd="$2" expect="$3" label="$4"
+  local out
+  out=$(A "$host" -m ansible.builtin.shell -a "$cmd" --one-line)
+  if echo "$out" | grep -qE "$expect"; then
+    pass "$label"
+  else
+    fail "$label" "$out"
+  fi
+}
+
+# Probe one VyOS router.
+check_vyos() {
+  local host="$1" cmd="$2" expect="$3" label="$4"
+  local out
+  out=$(A "$host" -m vyos.vyos.vyos_command -a "commands=\"$cmd\"" --one-line)
+  if echo "$out" | grep -qE "$expect"; then
+    pass "$label"
+  else
+    fail "$label" "$out"
+  fi
+}
+
+# =========================================================================
+# 1. Inventory reachability
+# =========================================================================
+section "1. Inventory reachability"
+
+# The `fuel` group in hosts covers ot_fuel (fuel-db, fuel-farm-sim, fuel-hist)
+# plus the OT bridge hosts (control-room-hmi shared with power, ff-plc-1).
+# bs-modbus-gateway is in [net], probed separately.
+probe_group "fuel"              ansible.builtin.ping   ""  "Fuel enclave hosts (ssh)"
+probe_group "bs-modbus-gateway" vyos.vyos.vyos_facts   ""  "bs-modbus-gateway (network_cli)"
+
+# =========================================================================
+# 2. OT network — bs-modbus-gateway + prod-plane bindings
+# =========================================================================
+section "2. OT network"
+
+# bs-modbus-gateway is the L3 gateway for all three fuel OT segments:
+#   eth1 172.16.45.9  (Fuel-PLC /29)
+#   eth2 172.16.45.1  (MTU /29)
+#   eth3 172.16.46.16 (Fuel-Sim /24)
+# And has default 0.0.0.0/0 → 172.31.1.17 (bs-ops-fw).
+check_vyos bs-modbus-gateway \
+  "show ip route 0.0.0.0/0" \
+  'static|S\*|S>|via 172\.31\.1\.17' \
+  "bs-modbus-gateway default route via bs-ops-fw"
+
+for cidr in "172.16.45.9" "172.16.45.1" "172.16.46.16"; do
+  check_vyos bs-modbus-gateway \
+    "show interfaces" \
+    "$(echo "$cidr" | sed 's/\./\\./g')" \
+    "bs-modbus-gateway interface bound to $cidr"
+done
+
+# Each fuel host's prod NIC bound to the expected /29 or /24 address.
+declare -A FUEL_PROD_IP=(
+  [ff-plc-1]="172.16.45.10"
+  [fuel-farm-sim]="172.16.46.17"
+  [fuel-hist]="172.16.46.18"
+  [fuel-db]="172.16.46.19"
+  [control-room-hmi]="172.16.45.3"
+)
+for h in "${!FUEL_PROD_IP[@]}"; do
+  ip="${FUEL_PROD_IP[$h]}"
+  check_sh "$h" \
+    "ip -4 addr show | awk '/inet /{print \$2}' | grep -F '$ip'" \
+    "$(echo "$ip" | sed 's/\./\\./g')" \
+    "$h prod NIC bound to $ip"
+done
+
+# =========================================================================
+# 3. fuel-db — PostgreSQL 16 + TimescaleDB + audit schema
+# =========================================================================
+section "3. fuel-db (PostgreSQL 16 + TimescaleDB)"
+
+check_sh fuel-db \
+  "systemctl is-active postgresql@16-main 2>/dev/null || systemctl is-active postgresql 2>/dev/null" \
+  'active' \
+  "fuel-db postgresql service active"
+
+check_sh fuel-db \
+  "ss -tln 2>/dev/null | grep -E ':5432 '" \
+  ':5432' \
+  "fuel-db listening on :5432"
+
+check_sh fuel-db \
+  "sudo -u postgres psql -tAc \"SELECT 1 FROM pg_extension WHERE extname='timescaledb';\"" \
+  '^1$' \
+  "fuel-db TimescaleDB extension loaded"
+
+# Audit schema tables (per build sheet §7).
+for tbl in tanks trucks aircraft pads truck_queue load_txn delivery_txn; do
+  check_sh fuel-db \
+    "sudo -u postgres psql -d fuel_audit -tAc \"SELECT to_regclass('public.$tbl') IS NOT NULL;\"" \
+    '^t$' \
+    "fuel-db fuel_audit.$tbl exists"
+done
+
+# Reference tables seeded (non-zero row counts).
+for tbl in tanks trucks aircraft pads; do
+  check_sh fuel-db \
+    "sudo -u postgres psql -d fuel_audit -tAc \"SELECT COUNT(*) > 0 FROM $tbl;\"" \
+    '^t$' \
+    "fuel-db $tbl has seed rows"
+done
+
+# =========================================================================
+# 4. fuel-farm-sim — fuelsim service + venv + replay timeline
+# =========================================================================
+section "4. fuel-farm-sim (fuelsim service + venv + replay)"
+
+check_sh fuel-farm-sim \
+  "test -x /opt/fuelsim/venv/bin/python && echo OK" \
+  'OK' \
+  "fuel-farm-sim /opt/fuelsim venv present"
+
+check_sh fuel-farm-sim \
+  "/opt/fuelsim/venv/bin/pip list 2>/dev/null | grep -Ei '^pymodbus|^psycopg2'" \
+  'pymodbus|psycopg2' \
+  "fuel-farm-sim venv has pymodbus + psycopg2"
+
+check_sh fuel-farm-sim \
+  "systemctl is-active fuelsim.service 2>&1" \
+  'active' \
+  "fuel-farm-sim fuelsim.service active"
+
+check_sh fuel-farm-sim \
+  "test -f /opt/fuelsim/config/fuelsim.yml && echo OK" \
+  'OK' \
+  "fuel-farm-sim config file deployed"
+
+check_sh fuel-farm-sim \
+  "test -f /opt/fuelsim/timelines/fuel_ops_timeline.jsonl && wc -l < /opt/fuelsim/timelines/fuel_ops_timeline.jsonl" \
+  '^[1-9]' \
+  "fuel-farm-sim replay timeline deployed"
+
+# Field-bus Modbus slave on :502 (fuel-farm-sim exposes this to the PLC).
+# NOTE: Only meaningful once fuelsim/modbus.py is authored; today the
+# service will start but no port opens. This check will FAIL until then.
+check_sh fuel-farm-sim \
+  "ss -tln 2>/dev/null | grep -E ':502 '" \
+  ':502' \
+  "fuel-farm-sim field-bus Modbus :502 listening (needs modbus.py)"
+
+# =========================================================================
+# 5. ff-plc-1 — OpenPLC v4 + Modbus :502 + web :8080
+# =========================================================================
+section "5. ff-plc-1 (OpenPLC v4)"
+
+check_sh ff-plc-1 \
+  "docker ps --format '{{.Names}} {{.Status}}' | grep -Ei 'openplc.*Up' || echo NONE" \
+  'openplc.*Up' \
+  "ff-plc-1 OpenPLC container running"
+
+check_sh ff-plc-1 \
+  "ss -tln 2>/dev/null | grep -E ':502 '" \
+  ':502' \
+  "ff-plc-1 Modbus :502 listening"
+
+check_sh ff-plc-1 \
+  "ss -tln 2>/dev/null | grep -E ':8080 '" \
+  ':8080' \
+  "ff-plc-1 OpenPLC web :8080 listening"
+
+check_sh ff-plc-1 \
+  "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ --max-time 5" \
+  '^(200|302|401)$' \
+  "ff-plc-1 OpenPLC web :8080 returns HTTP 200/302/401"
+
+# =========================================================================
+# 6. fuel-hist — Telegraf + InfluxDB 2.7 + Grafana
+# =========================================================================
+section "6. fuel-hist (Telegraf + InfluxDB 2.7 + Grafana)"
+
+for svc in telegraf influxdb grafana; do
+  check_sh fuel-hist \
+    "docker ps --format '{{.Names}} {{.Status}}' | grep -Ei '$svc.*Up' || echo NONE" \
+    "$svc.*Up" \
+    "fuel-hist $svc container running"
+done
+
+check_sh fuel-hist \
+  "ss -tln 2>/dev/null | grep -E ':8086 '" \
+  ':8086' \
+  "fuel-hist InfluxDB :8086 listening"
+
+check_sh fuel-hist \
+  "ss -tln 2>/dev/null | grep -E ':3000 '" \
+  ':3000' \
+  "fuel-hist Grafana :3000 listening"
+
+check_sh fuel-hist \
+  "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8086/health --max-time 5" \
+  '^200$' \
+  "fuel-hist InfluxDB /health returns 200"
+
+check_sh fuel-hist \
+  "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/health --max-time 5" \
+  '^200$' \
+  "fuel-hist Grafana /api/health returns 200"
+
+# InfluxDB `fuel` bucket exists — role should create it during provisioning.
+check_sh fuel-hist \
+  "docker exec influxdb influx bucket list --hide-headers 2>/dev/null | awk '{print \$2}' | grep -Fx fuel || echo MISSING" \
+  '^fuel$' \
+  "fuel-hist InfluxDB 'fuel' bucket exists"
+
+# =========================================================================
+# 7. control-room-hmi — FUXA
+# =========================================================================
+section "7. control-room-hmi (FUXA)"
+
+check_sh control-room-hmi \
+  "docker ps --format '{{.Names}} {{.Status}}' | grep -Ei 'fuxa.*Up' || echo NONE" \
+  'fuxa.*Up' \
+  "control-room-hmi FUXA container running"
+
+check_sh control-room-hmi \
+  "ss -tln 2>/dev/null | grep -E ':1881 '" \
+  ':1881' \
+  "control-room-hmi FUXA :1881 listening"
+
+check_sh control-room-hmi \
+  "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:1881/ --max-time 5" \
+  '^(200|302)$' \
+  "control-room-hmi FUXA :1881 returns HTTP 200/302"
+
+# Cross-plane: control-room-hmi should be able to reach ff-plc-1:502 for
+# Modbus polling. Prod path: control-room-hmi eth0 172.16.45.3 (MTU /29) →
+# bs-modbus-gateway .45.1 → .45.9 → ff-plc-1 .45.10:502.
+check_sh control-room-hmi \
+  "timeout 3 bash -c 'echo > /dev/tcp/172.16.45.10/502' && echo REACHABLE || echo BLOCKED" \
+  'REACHABLE' \
+  "control-room-hmi can reach ff-plc-1:502 (Modbus master path)"
+
+# =========================================================================
+# Summary
+# =========================================================================
+section "Summary"
+TOTAL=$((PASS + FAIL))
+printf "  Total checks : %d\n" "$TOTAL"
+printf "  ${G}Pass${N}         : %d\n" "$PASS"
+printf "  ${R}Fail${N}         : %d\n" "$FAIL"
+
+if [ "$FAIL" -gt 0 ]; then
+  printf "\nFailed checks:\n"
+  for f in "${FAILURES[@]}"; do
+    printf "  ${R}•${N} %s\n" "$f"
+  done
+  printf "\nRe-run with -v to see ansible's output for each failure.\n"
+  exit 1
+else
+  printf "\n${G}All checks passed.${N}\n"
+  exit 0
+fi

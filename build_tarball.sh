@@ -21,7 +21,11 @@
 set -euo pipefail
 
 AIRFIELD_RANGE="$(cd "$(dirname "$0")" && pwd)"
-PLAYBOOK="$AIRFIELD_RANGE/site.yml"
+# Both playbooks contribute to role discovery. site.yml is the primary
+# deploy; fuel_farm_playbook.yml is a standalone OT sub-deploy (per user
+# direction 2026-07-08) whose roles must also ship in the tarball.
+PLAYBOOKS=("$AIRFIELD_RANGE/site.yml")
+[ -f "$AIRFIELD_RANGE/fuel_farm_playbook.yml" ] && PLAYBOOKS+=("$AIRFIELD_RANGE/fuel_farm_playbook.yml")
 ARCHIVE="$AIRFIELD_RANGE/ab_mb.tgz"
 STAGE_PARENT="$(mktemp -d)"
 STAGE="$STAGE_PARENT/abmb_build"
@@ -69,12 +73,16 @@ in_array() {
 
 # --- Discovery -------------------------------------------------------------
 
-[ -f "$PLAYBOOK" ] || { echo "ERROR: playbook not found at $PLAYBOOK" >&2; exit 1; }
+for pb in "${PLAYBOOKS[@]}"; do
+  [ -f "$pb" ] || { echo "ERROR: playbook not found at $pb" >&2; exit 1; }
+done
 [ -d "$AIRFIELD_RANGE/roles" ] || { echo "ERROR: roles dir missing at $AIRFIELD_RANGE/roles" >&2; exit 1; }
 
 seen=()
 queue=()
-while IFS= read -r r; do queue+=("$r"); done < <(extract_playbook_roles "$PLAYBOOK")
+for pb in "${PLAYBOOKS[@]}"; do
+  while IFS= read -r r; do queue+=("$r"); done < <(extract_playbook_roles "$pb")
+done
 
 missing=()
 while [ ${#queue[@]} -gt 0 ]; do
@@ -124,9 +132,16 @@ cp    "$AIRFIELD_RANGE/hosts"      "$STAGE/"
 cp    "$AIRFIELD_RANGE/site.yml"   "$STAGE/"
 cp    "$AIRFIELD_RANGE/deploy.sh"  "$STAGE/"
 chmod +x "$STAGE/deploy.sh"
+if [ -f "$AIRFIELD_RANGE/fuel_farm_playbook.yml" ]; then
+  cp "$AIRFIELD_RANGE/fuel_farm_playbook.yml" "$STAGE/"
+fi
 if [ -f "$AIRFIELD_RANGE/verify_deployment.sh" ]; then
   cp "$AIRFIELD_RANGE/verify_deployment.sh" "$STAGE/"
   chmod +x "$STAGE/verify_deployment.sh"
+fi
+if [ -f "$AIRFIELD_RANGE/verify_fuel_farm.sh" ]; then
+  cp "$AIRFIELD_RANGE/verify_fuel_farm.sh" "$STAGE/"
+  chmod +x "$STAGE/verify_fuel_farm.sh"
 fi
 if [ -f "$AIRFIELD_RANGE/deploy-diagnostic.sh" ]; then
   cp "$AIRFIELD_RANGE/deploy-diagnostic.sh" "$STAGE/"
@@ -158,7 +173,9 @@ fi
 
 cd "$STAGE"
 TAR_PATHS=(roles host_vars group_vars hosts site.yml deploy.sh)
+[ -f "fuel_farm_playbook.yml" ] && TAR_PATHS+=(fuel_farm_playbook.yml)
 [ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
+[ -f "verify_fuel_farm.sh" ] && TAR_PATHS+=(verify_fuel_farm.sh)
 [ -f "deploy-diagnostic.sh" ] && TAR_PATHS+=(deploy-diagnostic.sh)
 [ -f "fetch-fops-log.sh" ] && TAR_PATHS+=(fetch-fops-log.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
