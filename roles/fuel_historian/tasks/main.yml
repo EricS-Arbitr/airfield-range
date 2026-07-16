@@ -22,10 +22,17 @@
 
 # --- InfluxDB 2.7 -----------------------------------------------------
 
+# InfluxDB 2.7 container runs as uid 1000. Host bind mounts must be
+# writable by that UID or the container crashes on init trying to
+# create /var/lib/influxdb2 subdirs. `owner: 1000` chowns the host
+# directory to that numeric UID -- works regardless of whether a
+# matching user exists on the host.
 - name: Directory for InfluxDB persistent state
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
+    owner: '1000'
+    group: '1000'
     mode: '0755'
   loop:
     - /opt/influxdb/data
@@ -96,10 +103,19 @@
 
 # --- Grafana ----------------------------------------------------------
 
+# Grafana container runs as uid 472 -- see the "GF_PATHS_DATA is not
+# writable" crash-loop we hit on 2026-07-16. Chown host bind mounts to
+# 472:472. All four dirs get it: `data` and `dashboards` need write
+# access (grafana writes plugin state + dashboard-live-edit files);
+# provisioning dirs are read-only inside the container but keeping
+# ownership uniform avoids surprise if the provisioning behavior ever
+# changes to require write.
 - name: Directory for Grafana persistent state + provisioning
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
+    owner: '472'
+    group: '472'
     mode: '0755'
   loop:
     - /opt/grafana/data
