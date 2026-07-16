@@ -16,6 +16,52 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-16 · bug · roles/fuel_sim/templates/fuelsim.service.j2 — service can't bind Modbus :502 as unprivileged user
+
+**Symptom.** After fuelsim.service is enabled and running, `verify_fuel_farm.sh` shows fuel-farm-sim :502 `MODBUS_REFUSED` and `ss -tlnp | grep :502` returns nothing. `journalctl -u fuelsim` reveals:
+
+```
+pymodbus.logging Failed to start server [Errno 13] error while attempting to bind on address ('172.16.46.17', 502): permission denied
+```
+
+The pymodbus server-run loop catches the OSError, logs the warning, and *continues* — so the process stays "active (running)" without ever listening. Modbus is silently down.
+
+**Root cause.** The unit runs as `User=fuelsim` (an unprivileged system account, by design — the daemon shouldn't need root). Port 502 is <1024 → privileged on Linux → requires `CAP_NET_BIND_SERVICE` at bind time. The systemd unit granted no capabilities to the exec, so the bind failed.
+
+**Fix (overlay).** Add to the `[Service]` block:
+
+```
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+```
+
+Preferred over lowering `net.ipv4.ip_unprivileged_port_start` (system-wide, affects all users) or running the daemon as root. `AmbientCapabilities` requires systemd ≥ 229 (jammy ships 249, noble 255) — always available on our baseline. Also preferred over `setcap CAP_NET_BIND_SERVICE=+ep` on the venv python binary, which would leak the capability to *every* python invocation on the host (venv builds, ad-hoc `python3 -m` runs, etc.).
+
+**Secondary observation for the upstream `pymodbus` project.** A bind failure inside `StartAsyncTcpServer` shouldn't downgrade to `WARNING` and let the coroutine return "Server listening." — this masks a fatal misconfiguration behind a healthy-looking service. Worth an upstream issue if we hit it again.
+
+---
+
+## 2026-07-16 · bug · roles/fuel_db/tasks/main.yml — fuel_rw got table INSERT but no sequence USAGE, breaking every INSERT with a SERIAL PK
+
+**Symptom.** fuelsim's `state_machine.db_flusher` logs one traceback per event batch:
+
+```
+psycopg2.errors.InsufficientPrivilege: permission denied for sequence truck_queue_queue_id_seq
+psycopg2.errors.InsufficientPrivilege: permission denied for sequence events_event_id_seq
+```
+
+Every INSERT into a table with a SERIAL/bigserial PK fails because Postgres invokes `nextval('<table>_<col>_seq')` under the caller's role, and treats sequence privileges independently from table privileges. Table INSERT alone is not enough.
+
+**Root cause.** The role had one `postgresql_privs` task granting `SELECT,INSERT,UPDATE,DELETE` to `fuel_rw` on `type: table`, but never granted anything on `type: sequence`. All the affected tables in `schema.sql.j2` (`events`, `truck_queue`, `load_txn`, `delivery_txn`, `tank_level_snap`) use SERIAL / bigserial PKs → each has an auto-created sequence → each INSERT hits the missing privilege.
+
+**Fix (overlay).** Add a second `postgresql_privs` task with `type: sequence`, `objs: ALL_IN_SCHEMA`:
+- `fuel_rw` → `USAGE,SELECT,UPDATE` (nextval + currval + `setval` — the last is defensively included so tools like `pg_dump --data-only` restore reads correctly).
+- `fuel_ro` → `SELECT` (currval only, doesn't advance the sequence — safe for read-only dashboards).
+
+**Why the acceptance schema tests missed it.** The verify script checks table *existence* (`\dt` in psql), not INSERT permission under the app role — so the tables all showed up green even though the app couldn't write to them. Post-fix, the verify script should be extended with a fuel_rw round-trip probe (INSERT ... RETURNING pk into a temp row, then DELETE) to catch this class of regression.
+
+---
+
 ## 2026-07-14 · enhancement · site.yml — bootstrap fops.blackstone.mil\simspace from bs-dc01 before create_users
 
 **Symptom.** On a fresh range deploy where fops-dc01 has just been promoted, `create_users` on the `pdc` group tries to open a WinRM connection to fops-dc01 as unqualified `simspace` — and gets `ntlm: the specified credentials were rejected by the server`. `simspace` doesn't exist yet as a `fops.blackstone.mil` domain user (create_users hasn't run there yet), and post-promotion the machine no longer falls back to local-SAM auth for that name. Workaround previously required a temporary `blackstone.mil\Administrator` override in `host_vars/fops-dc01.yml` for the immediate re-run, then removal afterward.

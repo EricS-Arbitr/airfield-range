@@ -13,5 +13,12 @@ ExecStart=/opt/fuelsim/venv/bin/python /opt/fuelsim/bin/fuelsim.py --config /opt
 Restart=on-failure
 RestartSec=5
 
+# Fuelsim binds Modbus TCP on :502 (privileged port <1024) but runs as
+# the unprivileged `fuelsim` user. Grant net_bind capability to this
+# service only rather than running as root or shifting
+# net.ipv4.ip_unprivileged_port_start system-wide.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
 [Install]
 WantedBy=multi-user.target

@@ -172,6 +172,26 @@
     - { role: "{{ postgres_user_fuel_rw }}", privs: "SELECT,INSERT,UPDATE,DELETE" }
     - { role: "{{ postgres_user_fuel_ro }}", privs: "SELECT" }
 
+# INSERTs into tables with SERIAL/bigserial PKs (events, truck_queue,
+# load_txn, delivery_txn, tank_level_snap) call nextval() on their
+# per-column sequence. Postgres treats table privileges and sequence
+# privileges independently, so table INSERT alone yields:
+#   permission denied for sequence <table>_<col>_seq
+# Grant USAGE (nextval+currval) on all sequences to fuel_rw; SELECT only
+# to fuel_ro so read-side callers can currval() without advancing.
+- name: Grant sequence privileges to fuel_rw (nextval) + fuel_ro (currval)
+  become_user: postgres
+  community.postgresql.postgresql_privs:
+    db: "{{ postgres_db_fuel }}"
+    role: "{{ item.role }}"
+    type: sequence
+    schema: public
+    objs: ALL_IN_SCHEMA
+    privs: "{{ item.privs }}"
+  loop:
+    - { role: "{{ postgres_user_fuel_rw }}", privs: "USAGE,SELECT,UPDATE" }
+    - { role: "{{ postgres_user_fuel_ro }}", privs: "SELECT" }
+
 - name: Deploy seed data SQL (tanks / trucks / aircraft / pads)
   ansible.builtin.template:
     src: seeds.sql.j2
