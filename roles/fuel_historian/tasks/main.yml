@@ -65,7 +65,9 @@
     dest: /etc/apt/keyrings/influxdata.asc
     mode: '0644'
 
-- name: Add InfluxData apt repo (noble)
+# InfluxData repo uses "stable main" which is codename-agnostic --
+# works on jammy AND noble (verified 2026-07-16 on jammy SimSpace image).
+- name: Add InfluxData apt repo (codename-agnostic)
   ansible.builtin.apt_repository:
     repo: "deb [signed-by=/etc/apt/keyrings/influxdata.asc] https://repos.influxdata.com/debian stable main"
     state: present

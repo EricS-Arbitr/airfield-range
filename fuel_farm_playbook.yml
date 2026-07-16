@@ -51,8 +51,13 @@
     - fuel
 
 - name: fuel_db — PostgreSQL 16 + TimescaleDB + audit schema + seeds
+  # gather_facts: true so the role can key its apt-repo URLs to
+  # `ansible_distribution_release` (jammy vs noble). SimSpace images
+  # are actually jammy despite CLAUDE.md declaring noble baseline;
+  # PGDG + TimescaleDB packagecloud both support both, keyed by
+  # release codename.
   hosts: fuel-db
-  gather_facts: false
+  gather_facts: true
   become: true
   roles:
     - fuel_db

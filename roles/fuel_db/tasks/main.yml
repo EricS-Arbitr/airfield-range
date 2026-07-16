@@ -15,15 +15,32 @@
     state: present
     update_cache: yes
 
+# postgresql-16 isn't in Ubuntu 22.04 (jammy) main -- it lives in the
+# PGDG (postgresql.org apt) repo, which covers both jammy AND noble.
+# On noble it's ALSO in main, but pinning to PGDG for both keeps the
+# version pinned across image-version drift on the SimSpace platform.
+- name: Add PGDG apt repository key (for postgresql-16)
+  ansible.builtin.get_url:
+    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    dest: /etc/apt/keyrings/pgdg.asc
+    mode: '0644'
+
+- name: Add PGDG apt repository for {{ ansible_distribution_release }}
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
+    state: present
+    filename: pgdg
+    update_cache: yes
+
 - name: Add TimescaleDB apt repository key
   ansible.builtin.get_url:
     url: https://packagecloud.io/timescale/timescaledb/gpgkey
     dest: /etc/apt/keyrings/timescaledb.asc
     mode: '0644'
 
-- name: Add TimescaleDB apt repository (noble)
+- name: Add TimescaleDB apt repository for {{ ansible_distribution_release }}
   ansible.builtin.apt_repository:
-    repo: "deb [signed-by=/etc/apt/keyrings/timescaledb.asc] https://packagecloud.io/timescale/timescaledb/ubuntu/ noble main"
+    repo: "deb [signed-by=/etc/apt/keyrings/timescaledb.asc] https://packagecloud.io/timescale/timescaledb/ubuntu/ {{ ansible_distribution_release }} main"
     state: present
     filename: timescaledb
     update_cache: yes
