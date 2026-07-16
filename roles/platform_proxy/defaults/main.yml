@@ -12,10 +12,34 @@ platform_proxy_port: 3128
 
 # NO_PROXY excludes the internal RFC1918 space so intra-range traffic
 # stays direct rather than being pushed through the proxy.
+#
+# CRITICAL: curl 7.81 (jammy) does NOT support CIDR notation in NO_PROXY.
+# `172.16.0.0/12` gets silently ignored, and curl sends every intra-range
+# HTTP request via the mgmt proxy -- which has no route to OT segments
+# (172.16.x) and hangs the connection (root-caused 2026-07-16). curl DOES
+# respect PREFIX-STYLE entries. `172.16.` matches any host whose address
+# starts with 172.16.  Full RFC1918 space covered via prefix wildcards:
+#   172.16. through 172.31.  → covered by 172.16.,172.17.,...,172.31.
+# We only need the specific /12 subranges the range actually uses:
+#   172.16.x (OT), 172.31.x (corp), 10.255.x (mgmt plane).
 platform_proxy_no_proxy_list:
   - "localhost"
   - "127.0.0.1"
   - "::1"
-  - "10.255.240.0/20"    # mgmt plane
-  - "172.16.0.0/12"      # OT + linked subnets
-  - "172.31.0.0/16"      # corp production
+  - "10.255."
+  - "172.16."
+  - "172.17."
+  - "172.18."
+  - "172.19."
+  - "172.20."
+  - "172.21."
+  - "172.22."
+  - "172.23."
+  - "172.24."
+  - "172.25."
+  - "172.26."
+  - "172.27."
+  - "172.28."
+  - "172.29."
+  - "172.30."
+  - "172.31."
