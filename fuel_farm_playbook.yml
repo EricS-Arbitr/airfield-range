@@ -24,6 +24,22 @@
 # audit data between exercise iterations, use --tags reset (roles honor
 # an optional `reset: true` extra-var; see per-role tasks/main.yml).
 
+# OT hosts have no direct outbound path (L3.5 boundary + bs-modbus-gateway
+# don't route DNS or HTTPS out from 172.16.45/46). The mgmt-plane platform
+# gateway 10.255.240.1 runs a caching HTTP proxy on :3128 that DOES work
+# from these hosts via their mgmt NIC. Configure apt/docker/env to route
+# through it so the downstream fuel roles' package installs succeed.
+# Confirmed 2026-07-16. See UPSTREAM_FIXES.md 2026-07-16.
+- name: platform_proxy — route apt/docker/env through mgmt-plane proxy
+  hosts: fuel
+  gather_facts: false
+  become: true
+  roles:
+    - platform_proxy
+  tags:
+    - platform_proxy
+    - fuel
+
 - name: Common role — fuel enclave (dual-home netplan, hardening, UF)
   hosts: fuel
   gather_facts: true

@@ -1,0 +1,21 @@
+---
+# SimSpace mgmt-plane platform gateway runs a caching HTTP/HTTPS proxy
+# on port 3128 (verified 2026-07-16 from every fuel-enclave host via
+# `curl -x http://10.255.240.1:3128 -o /dev/null https://packagecloud.io/`
+# → HTTP 200). OT hosts sit in segments (172.16.45/46) that have no
+# direct outbound path — DNS to 8.8.8.8 / 10.255.240.1 / 172.31.2.7 is
+# blocked at the L3.5 boundary (bs-ops-fw / bs-modbus-gateway). Routing
+# via mgmt NIC to the gateway and using its HTTP proxy is the working
+# outbound path for apt / pip / docker.
+platform_proxy_host: "10.255.240.1"
+platform_proxy_port: 3128
+
+# NO_PROXY excludes the internal RFC1918 space so intra-range traffic
+# stays direct rather than being pushed through the proxy.
+platform_proxy_no_proxy_list:
+  - "localhost"
+  - "127.0.0.1"
+  - "::1"
+  - "10.255.240.0/20"    # mgmt plane
+  - "172.16.0.0/12"      # OT + linked subnets
+  - "172.31.0.0/16"      # corp production

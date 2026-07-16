@@ -164,15 +164,20 @@ done
 # =========================================================================
 section "3. fuel-db (PostgreSQL 16 + TimescaleDB)"
 
+# Match "active" as a word (not "inactive"). Emit an unambiguous OK/DOWN
+# token so the check pattern doesn't need to disambiguate substrings.
 check_sh fuel-db \
-  "systemctl is-active postgresql@16-main 2>/dev/null || systemctl is-active postgresql 2>/dev/null" \
-  'active' \
+  "s=\$(systemctl is-active postgresql@16-main 2>/dev/null); [ -z \"\$s\" ] && s=\$(systemctl is-active postgresql 2>/dev/null); [ \"\$s\" = active ] && echo POSTGRES_ACTIVE || echo POSTGRES_DOWN:\"\$s\"" \
+  'POSTGRES_ACTIVE' \
   "fuel-db postgresql service active"
 
+# Port bound OR actually accepting TCP -- port-bound alone isn't enough
+# (docker-proxy can hold the port while the service inside is still
+# initializing), so also verify a TCP connect.
 check_sh fuel-db \
-  "ss -tln 2>/dev/null | grep -E ':5432 '" \
-  ':5432' \
-  "fuel-db listening on :5432"
+  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/5432' 2>/dev/null && echo POSTGRES_ACCEPTS || echo POSTGRES_REFUSED" \
+  'POSTGRES_ACCEPTS' \
+  "fuel-db :5432 accepting TCP connections"
 
 check_sh fuel-db \
   "sudo -u postgres psql -tAc \"SELECT 1 FROM pg_extension WHERE extname='timescaledb';\"" \
@@ -211,8 +216,8 @@ check_sh fuel-farm-sim \
   "fuel-farm-sim venv has pymodbus + psycopg2"
 
 check_sh fuel-farm-sim \
-  "systemctl is-active fuelsim.service 2>&1" \
-  'active' \
+  "s=\$(systemctl is-active fuelsim.service 2>/dev/null); [ \"\$s\" = active ] && echo FUELSIM_ACTIVE || echo FUELSIM_DOWN:\"\$s\"" \
+  'FUELSIM_ACTIVE' \
   "fuel-farm-sim fuelsim.service active"
 
 check_sh fuel-farm-sim \
@@ -229,9 +234,9 @@ check_sh fuel-farm-sim \
 # NOTE: Only meaningful once fuelsim/modbus.py is authored; today the
 # service will start but no port opens. This check will FAIL until then.
 check_sh fuel-farm-sim \
-  "ss -tln 2>/dev/null | grep -E ':502 '" \
-  ':502' \
-  "fuel-farm-sim field-bus Modbus :502 listening (needs modbus.py)"
+  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/502' 2>/dev/null && echo MODBUS_ACCEPTS || echo MODBUS_REFUSED" \
+  'MODBUS_ACCEPTS' \
+  "fuel-farm-sim field-bus Modbus :502 accepting TCP (needs modbus.py)"
 
 # =========================================================================
 # 5. ff-plc-1 — OpenPLC v4 + Modbus :502 + web :8080
@@ -244,14 +249,14 @@ check_sh ff-plc-1 \
   "ff-plc-1 OpenPLC container running"
 
 check_sh ff-plc-1 \
-  "ss -tln 2>/dev/null | grep -E ':502 '" \
-  ':502' \
-  "ff-plc-1 Modbus :502 listening"
+  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/502' 2>/dev/null && echo MODBUS_ACCEPTS || echo MODBUS_REFUSED" \
+  'MODBUS_ACCEPTS' \
+  "ff-plc-1 Modbus :502 accepting TCP"
 
 check_sh ff-plc-1 \
-  "ss -tln 2>/dev/null | grep -E ':8080 '" \
-  ':8080' \
-  "ff-plc-1 OpenPLC web :8080 listening"
+  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8080' 2>/dev/null && echo WEB_ACCEPTS || echo WEB_REFUSED" \
+  'WEB_ACCEPTS' \
+  "ff-plc-1 OpenPLC web :8080 accepting TCP"
 
 check_sh ff-plc-1 \
   "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ --max-time 5" \
@@ -271,14 +276,14 @@ for svc in telegraf influxdb grafana; do
 done
 
 check_sh fuel-hist \
-  "ss -tln 2>/dev/null | grep -E ':8086 '" \
-  ':8086' \
-  "fuel-hist InfluxDB :8086 listening"
+  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8086' 2>/dev/null && echo INFLUX_ACCEPTS || echo INFLUX_REFUSED" \
+  'INFLUX_ACCEPTS' \
+  "fuel-hist InfluxDB :8086 accepting TCP"
 
 check_sh fuel-hist \
-  "ss -tln 2>/dev/null | grep -E ':3000 '" \
-  ':3000' \
-  "fuel-hist Grafana :3000 listening"
+  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/3000' 2>/dev/null && echo GRAFANA_ACCEPTS || echo GRAFANA_REFUSED" \
+  'GRAFANA_ACCEPTS' \
+  "fuel-hist Grafana :3000 accepting TCP"
 
 check_sh fuel-hist \
   "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8086/health --max-time 5" \
@@ -307,9 +312,9 @@ check_sh control-room-hmi \
   "control-room-hmi FUXA container running"
 
 check_sh control-room-hmi \
-  "ss -tln 2>/dev/null | grep -E ':1881 '" \
-  ':1881' \
-  "control-room-hmi FUXA :1881 listening"
+  "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/1881' 2>/dev/null && echo FUXA_ACCEPTS || echo FUXA_REFUSED" \
+  'FUXA_ACCEPTS' \
+  "control-room-hmi FUXA :1881 accepting TCP"
 
 check_sh control-room-hmi \
   "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:1881/ --max-time 5" \

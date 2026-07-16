@@ -1,0 +1,77 @@
+---
+# platform_proxy — route apt/docker/env HTTP(S) through the mgmt-plane
+# platform proxy at platform_proxy_host:platform_proxy_port.
+#
+# Applied to hosts that have no direct outbound path (OT segments — fuel,
+# and later power) but CAN reach the mgmt-plane gateway. The gateway's
+# HTTP proxy handles DNS resolution + upstream fetch.
+#
+# Idempotent: config files are content-managed, docker daemon is only
+# restarted when its proxy config actually changes, and the docker
+# restart is failed_when:false so this role is safe to apply on hosts
+# that haven't installed docker yet.
+
+- name: Ensure /etc/apt/apt.conf.d/ exists
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Configure apt to use platform proxy for HTTP + HTTPS
+  ansible.builtin.copy:
+    content: |
+      Acquire::http::Proxy "http://{{ platform_proxy_host }}:{{ platform_proxy_port }}";
+      Acquire::https::Proxy "http://{{ platform_proxy_host }}:{{ platform_proxy_port }}";
+    dest: /etc/apt/apt.conf.d/95platform-proxy
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Add HTTP_PROXY / HTTPS_PROXY / NO_PROXY to /etc/environment
+  ansible.builtin.blockinfile:
+    path: /etc/environment
+    marker: "# {mark} ANSIBLE MANAGED - platform_proxy"
+    block: |
+      HTTP_PROXY=http://{{ platform_proxy_host }}:{{ platform_proxy_port }}
+      HTTPS_PROXY=http://{{ platform_proxy_host }}:{{ platform_proxy_port }}
+      http_proxy=http://{{ platform_proxy_host }}:{{ platform_proxy_port }}
+      https_proxy=http://{{ platform_proxy_host }}:{{ platform_proxy_port }}
+      NO_PROXY={{ platform_proxy_no_proxy_list | join(',') }}
+      no_proxy={{ platform_proxy_no_proxy_list | join(',') }}
+  become: true
+
+- name: Ensure /etc/systemd/system/docker.service.d exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Configure docker daemon proxy (drop-in override)
+  ansible.builtin.copy:
+    content: |
+      [Service]
+      Environment="HTTP_PROXY=http://{{ platform_proxy_host }}:{{ platform_proxy_port }}"
+      Environment="HTTPS_PROXY=http://{{ platform_proxy_host }}:{{ platform_proxy_port }}"
+      Environment="NO_PROXY={{ platform_proxy_no_proxy_list | join(',') }}"
+    dest: /etc/systemd/system/docker.service.d/10-proxy.conf
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  register: docker_proxy_dropin
+
+- name: Reload systemd + restart docker if proxy config changed
+  ansible.builtin.systemd:
+    daemon_reload: true
+    name: docker
+    state: restarted
+  become: true
+  when: docker_proxy_dropin.changed
+  # Docker may not be installed yet on this host -- role has to be safe
+  # to apply BEFORE the fuel_hist / fuel_hmi / fuel_plc plays install
+  # docker. When docker.service doesn't exist, systemd module errors;
+  # ignore that so first-run of the role isn't blocked.
+  failed_when: false
