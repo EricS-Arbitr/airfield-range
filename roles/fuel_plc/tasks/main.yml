@@ -40,13 +40,15 @@
 # NIC (Fuel-PLC /29) so the field-bus (polling fuel-farm-sim) and the
 # SCADA-bus (served to control-room-hmi + fuel-hist) both cross
 # bs-modbus-gateway as designed.
-- name: Run OpenPLC v4 runtime container
+- name: Run OpenPLC v3 runtime container
   community.docker.docker_container:
     name: openplc
-    image: openplcproject/openplc_v3:latest
-    # NB: `openplc_v3` image also serves as v4 runtime (Autonomy-Logic
-    # publishes the v4 tag under this repo until they migrate). Confirm
-    # against build sheet §13 checklist before pinning to :v4.
+    # The `openplcproject/openplc_v3` name I originally used does not
+    # exist on Docker Hub (404 pull denied 2026-07-16). The maintained
+    # image is `thiagoralves/openplc_v3` (published by OpenPLC's author).
+    # When OpenPLC v4 (Autonomy-Logic) ships an official image we can
+    # switch; for now v3 covers build sheet §4 Modbus TCP + web UI :8080.
+    image: thiagoralves/openplc_v3:latest
     restart_policy: unless-stopped
     published_ports:
       - "{{ fuel_plc_ip }}:{{ fuel_modbus_port }}:502"        # SCADA-bus

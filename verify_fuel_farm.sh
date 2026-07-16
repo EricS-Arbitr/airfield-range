@@ -179,24 +179,30 @@ check_sh fuel-db \
   'POSTGRES_ACCEPTS' \
   "fuel-db :5432 accepting TCP connections"
 
+# TimescaleDB extension check MUST target the fuel_audit database where
+# the role enables it -- extension is per-database, not cluster-wide.
+# Also emit an unambiguous token so the match doesnt need to parse
+# psqls output layout.
 check_sh fuel-db \
-  "sudo -u postgres psql -tAc \"SELECT 1 FROM pg_extension WHERE extname='timescaledb';\"" \
-  '^1$' \
-  "fuel-db TimescaleDB extension loaded"
+  "r=\$(sudo -u postgres psql -d fuel_audit -tAc \"SELECT 1 FROM pg_extension WHERE extname='timescaledb';\" 2>/dev/null); [ \"\$r\" = 1 ] && echo TIMESCALE_LOADED || echo TIMESCALE_MISSING" \
+  'TIMESCALE_LOADED' \
+  "fuel-db TimescaleDB extension loaded (in fuel_audit)"
 
-# Audit schema tables (per build sheet §7).
+# Audit schema tables (per build sheet §7). Emit EXISTS/MISSING tokens
+# instead of relying on psql -tA outputting just `t` -- ansibles --one-line
+# format prepends "(stdout) " so `^t$` never matches.
 for tbl in tanks trucks aircraft pads truck_queue load_txn delivery_txn; do
   check_sh fuel-db \
-    "sudo -u postgres psql -d fuel_audit -tAc \"SELECT to_regclass('public.$tbl') IS NOT NULL;\"" \
-    '^t$' \
+    "r=\$(sudo -u postgres psql -d fuel_audit -tAc \"SELECT to_regclass('public.$tbl') IS NOT NULL;\" 2>/dev/null); [ \"\$r\" = t ] && echo EXISTS || echo MISSING" \
+    'EXISTS' \
     "fuel-db fuel_audit.$tbl exists"
 done
 
-# Reference tables seeded (non-zero row counts).
+# Reference tables seeded (non-zero row counts). Same token pattern.
 for tbl in tanks trucks aircraft pads; do
   check_sh fuel-db \
-    "sudo -u postgres psql -d fuel_audit -tAc \"SELECT COUNT(*) > 0 FROM $tbl;\"" \
-    '^t$' \
+    "r=\$(sudo -u postgres psql -d fuel_audit -tAc \"SELECT COUNT(*) > 0 FROM $tbl;\" 2>/dev/null); [ \"\$r\" = t ] && echo SEEDED || echo EMPTY" \
+    'SEEDED' \
     "fuel-db $tbl has seed rows"
 done
 
