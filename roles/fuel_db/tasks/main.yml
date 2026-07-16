@@ -12,6 +12,12 @@
       - ca-certificates
       - lsb-release
       - python3-psycopg2
+      # `acl` is required by Ansible for `become_user: postgres` (used by
+      # subsequent postgresql_db / postgresql_user / postgresql_privs tasks).
+      # Without it, Ansible falls back to a Solaris-syntax chmod call that
+      # errors with "chmod: invalid mode: 'A+user:postgres:rx:allow'" and
+      # the DB tasks all fail. Confirmed 2026-07-16.
+      - acl
     state: present
     update_cache: yes
 
