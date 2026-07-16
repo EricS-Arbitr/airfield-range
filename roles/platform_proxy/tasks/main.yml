@@ -29,17 +29,25 @@
     mode: '0644'
   become: true
 
-- name: Add HTTP_PROXY / HTTPS_PROXY / NO_PROXY to /etc/environment
+# Deliberately DO NOT set HTTP_PROXY/HTTPS_PROXY/NO_PROXY in /etc/environment.
+# curl 7.81 (jammy) doesn't support CIDR *or* prefix matching in NO_PROXY --
+# only exact hostname / suffix (.example.com) forms. Any intra-range HTTP
+# curl (verify scripts, health-check tasks, wait_for HTTP, live data flow
+# between fuel hosts) would get sent through the mgmt proxy which can't
+# reach OT segments -> 5s timeouts everywhere.
+#
+# The proxy is still available for apt (via /etc/apt/apt.conf.d/95platform-proxy)
+# and for docker daemon (via /etc/systemd/system/docker.service.d/10-proxy.conf).
+# Those are the ONLY consumers that actually need it. Shell-scope curl / pip /
+# git going direct is what we want.
+#
+# If a task needs the proxy for a one-off curl (e.g. downloading an ISO from
+# the internet) set environment: HTTP(S)_PROXY=... at the task level.
+- name: Ensure no lingering platform_proxy env block in /etc/environment
   ansible.builtin.blockinfile:
     path: /etc/environment
     marker: "# {mark} ANSIBLE MANAGED - platform_proxy"
-    block: |
-      HTTP_PROXY=http://{{ platform_proxy_host }}:{{ platform_proxy_port }}
-      HTTPS_PROXY=http://{{ platform_proxy_host }}:{{ platform_proxy_port }}
-      http_proxy=http://{{ platform_proxy_host }}:{{ platform_proxy_port }}
-      https_proxy=http://{{ platform_proxy_host }}:{{ platform_proxy_port }}
-      NO_PROXY={{ platform_proxy_no_proxy_list | join(',') }}
-      no_proxy={{ platform_proxy_no_proxy_list | join(',') }}
+    state: absent
   become: true
 
 - name: Ensure /etc/systemd/system/docker.service.d exists
