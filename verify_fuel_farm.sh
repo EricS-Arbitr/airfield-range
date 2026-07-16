@@ -324,8 +324,8 @@ check_sh fuel-hist \
 # regex looks for a non-zero count. Avoids all the pipe/redirect/regex-$
 # quirks that bit us on the previous three attempts.
 check_sh fuel-hist \
-  "docker exec influxdb influx bucket list --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 2>/dev/null | awk -F'\\t' 'BEGIN{n=0} \$2==\"fuel\"{n++} END{print n}'" \
-  '^1$' \
+  "docker exec influxdb influx bucket list --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 2>/dev/null | awk -F'\\t' 'BEGIN{n=0} \$2==\"fuel\"{n++} END{if(n>=1) print \"BUCKET_PRESENT\"; else print \"BUCKET_MISSING\"}'" \
+  'BUCKET_PRESENT' \
   "fuel-hist InfluxDB 'fuel' bucket exists"
 
 # =========================================================================
