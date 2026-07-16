@@ -9,11 +9,15 @@
 # runner iteratively. The Ansible plumbing here (venv, systemd unit,
 # config, timeline file) is complete and idempotent.
 
-- name: Ensure python3.12 + venv + build deps
+# Use whichever python3 the OS ships (jammy: 3.10, noble: 3.12).
+# pymodbus 3.6.x supports Python 3.9+ and psycopg2 2.9.x supports 3.7+,
+# so both jammy and noble work without a codename-specific pin. If the
+# fuelsim modules later need 3.12-only features we can add deadsnakes PPA.
+- name: Ensure python3 + venv + build deps
   ansible.builtin.apt:
     name:
-      - python3.12
-      - python3.12-venv
+      - python3
+      - python3-venv
       - python3-pip
       - build-essential
     state: present
@@ -40,9 +44,9 @@
     - /opt/fuelsim/config
     - /opt/fuelsim/timelines
 
-- name: Create Python 3.12 venv
+- name: Create Python venv (uses OS-default python3)
   ansible.builtin.command:
-    cmd: python3.12 -m venv /opt/fuelsim/venv
+    cmd: python3 -m venv /opt/fuelsim/venv
     creates: /opt/fuelsim/venv/bin/python
 
 - name: Install pymodbus + psycopg2 + PyYAML into venv
