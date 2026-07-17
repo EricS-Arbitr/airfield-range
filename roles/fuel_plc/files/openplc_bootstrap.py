@@ -65,26 +65,65 @@ def wait_for_web(base: str, timeout: int = 60) -> None:
     raise SystemExit(f"OpenPLC web at {base} did not answer within {timeout}s")
 
 
-def login(sess: requests.Session, base: str, user: str, pw: str) -> None:
-    """Form-login. Raises on obvious failure. The image redirects to
-    /dashboard on success and re-renders /login with an error banner on
-    failure (200). We check the presence of the login form in the response
-    body to detect the second case.
+_OPENPLC_DEFAULT_USER = "openplc"
+_OPENPLC_DEFAULT_PW = "openplc"
+
+
+def _try_login(sess: requests.Session, base: str, user: str, pw: str) -> bool:
+    """Return True iff (user, pw) successfully authenticated a fresh session.
+
+    We can't reuse a Session across attempts -- a failed login taints the
+    cookie state on some builds and subsequent GET /dashboard doesn't
+    redirect back to /login the way you'd expect. So each attempt clears
+    cookies first and tests validity via GET /dashboard on the new cookie.
     """
+    sess.cookies.clear()
     r = sess.post(
         urljoin(base, "/login"),
         data={"username": user, "password": pw},
         allow_redirects=False,
         timeout=10,
     )
-    if r.status_code == 302:
-        return
-    # 200 + login form still present == bad creds. Follow up:
+    if r.status_code == 302 and "/dashboard" in r.headers.get("Location", ""):
+        return True
+    # Some builds return 200 with the dashboard on success and 200 with the
+    # login form on failure. Distinguish by fetching /dashboard on the new
+    # cookie -- a valid session gets 200 (dashboard HTML), invalid gets 302
+    # to /login.
     r2 = sess.get(urljoin(base, "/dashboard"), timeout=10, allow_redirects=False)
-    if r2.status_code == 302 and "/login" in r2.headers.get("Location", ""):
-        raise SystemExit(f"login failed: bad credentials for user {user!r}")
-    # If /dashboard returns 200, session cookie was set even if login POST
-    # returned a non-redirect status -- ok to proceed.
+    return r2.status_code == 200
+
+
+def login(sess: requests.Session, base: str, user: str, pw: str) -> str:
+    """Try the configured (user, pw) first. If that fails, fall back to
+    OpenPLC's hardcoded default (openplc / openplc) -- this covers the
+    case where the fdamador image didn't seed the env-supplied creds on
+    first boot (image variant mismatch, or the DB was persistent across
+    a boot that predated the env).
+
+    Returns the credential set that succeeded ("configured" or "default")
+    so the caller can log whether rotation is still owed.
+    """
+    if _try_login(sess, base, user, pw):
+        return "configured"
+    if (user, pw) != (_OPENPLC_DEFAULT_USER, _OPENPLC_DEFAULT_PW) and _try_login(
+        sess, base, _OPENPLC_DEFAULT_USER, _OPENPLC_DEFAULT_PW
+    ):
+        # We're now authenticated as the default admin. Emit a WARN so the
+        # role can flag a rotation TODO -- doing the rotation here would
+        # invalidate the current session and require re-login, and the
+        # /change_password endpoint URL varies across forks, so keep this
+        # a follow-up.
+        print(
+            "WARN: authenticated with OpenPLC DEFAULT creds (openplc/openplc). "
+            "Vault creds not applied -- rotation still owed. Proceeding.",
+            file=sys.stderr,
+        )
+        return "default"
+    raise SystemExit(
+        f"login failed: neither configured user {user!r} nor the "
+        f"OpenPLC default ('openplc'/'openplc') was accepted"
+    )
 
 
 # --------------------------------------------------------------------------

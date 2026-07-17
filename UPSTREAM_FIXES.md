@@ -33,6 +33,8 @@ Also adds `python3-requests` to the apt install for the target, and creates `/op
 
 **Follow-up (not blocking).** Container's `openplc.db` isn't persisted — the current bind mounts (`/workdir/etc`, `/workdir/programs`) don't cover the DB path (`/workdir/webserver/openplc.db`). Every container restart re-runs the bootstrap (idempotent, cheap), which is fine for CI/reset semantics but means the OpenPLC admin creds env is re-applied every restart. If persistence is added later, this role needs a real `/change_password` rotation call.
 
+**Amendment (2026-07-17, same day).** First run of the bootstrap script from an actual deploy revealed that `fdamador/openplc` does NOT honor `OPENPLC_ADMIN_USER` / `OPENPLC_ADMIN_PASSWORD` env vars — the container came up with the hardcoded `openplc/openplc` default and rejected the vault password. Bootstrap now tries the vault-configured creds first, falls back to `openplc/openplc` on failure, and stderr-WARNs when the default succeeded so the role can flag "rotation still owed". Real `/change_password` rotation is deferred because the endpoint URL varies across forks and would re-invalidate the session mid-flow.
+
 ---
 
 ## 2026-07-16 · bug · roles/fuel_sim/templates/fuelsim.service.j2 — service can't bind Modbus :502 as unprivileged user
