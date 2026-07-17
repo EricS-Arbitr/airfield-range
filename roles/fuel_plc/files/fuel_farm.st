@@ -69,7 +69,15 @@ PROGRAM main
     LR2_SRC_TANK       AT %QW5 : INT;
     PUMP_LEADLAG_SEL   AT %QW6 : INT;
     SYS_MODE           AT %QW7 : INT;
+  END_VAR
 
+  (* Non-located scratch variables must live in a separate VAR block --
+     matiec on the fdamador image can't parse a non-located declaration
+     that follows a located one in the same block (grammar quirk: the
+     parser enters "expecting AT %..." state after the first located var
+     and errors with "invalid located variable declaration" on any plain
+     name that follows). *)
+  VAR
     LR1_PERMIT : BOOL;
     LR2_PERMIT : BOOL;
   END_VAR
@@ -104,8 +112,8 @@ PROGRAM main
 END_PROGRAM
 
 CONFIGURATION Config0
-  RESOURCE Res0 ON CPU
-    TASK main_task (INTERVAL := T#100ms, PRIORITY := 1);
+  RESOURCE Res0 ON PLC
+    TASK main_task(INTERVAL := T#100ms, PRIORITY := 1);
     PROGRAM main_inst WITH main_task : main;
   END_RESOURCE
 END_CONFIGURATION
