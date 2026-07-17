@@ -333,17 +333,15 @@ check_sh fuel-hist \
   'code=200' \
   "fuel-hist Grafana /api/health returns 200"
 
-# InfluxDB CLI requires --token + --org for authenticated operations.
-# --name filters server-side; the earlier attempt used --hide-headers which
-# this CLI version doesnt support, so the awk pipeline saw empty output
-# and always reported MISSING. Filtering by name and grepping for the
-# literal name is version-safe.
-# awk on tab-separated influx CLI output: column 2 is bucket name.
-# Emits the count of rows where name == "fuel" (0 or 1). Then check_sh
-# regex looks for a non-zero count. Avoids all the pipe/redirect/regex-$
-# quirks that bit us on the previous three attempts.
+# Bucket existence via --json output (this CLI version supports it) +
+# grep for the exact quoted key/value pair. Three earlier revisions all
+# fought InfluxDB's default tab-separated table output -- the last one
+# had -F'\t' arriving at awk as a literal backslash-t (two chars, not a
+# tab) after shell + ansible quoting layers stripped one escape level,
+# so column 2 never matched "fuel". --json output is unambiguous and
+# doesn't require jq.
 check_sh fuel-hist \
-  "docker exec influxdb influx bucket list --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 2>/dev/null | awk -F'\\t' 'BEGIN{n=0} \$2==\"fuel\"{n++} END{if(n>=1) print \"BUCKET_PRESENT\"; else print \"BUCKET_MISSING\"}'" \
+  "docker exec influxdb influx bucket list --token Simspace1SimspaceFuelHistorianAdminToken --org airfield --json 2>/dev/null | grep -q '\"name\": \"fuel\"' && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
   'BUCKET_PRESENT' \
   "fuel-hist InfluxDB 'fuel' bucket exists"
 
