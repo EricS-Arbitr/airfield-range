@@ -32,6 +32,7 @@ except ImportError:
 
 
 EXPECTED_DEVICE_NAME = "PLC-FuelFarm"
+EXPECTED_DEVICE_TYPE = "Modbus"
 EXPECTED_VIEW_IDS = {"v_process_overview", "v_rack_detail"}
 
 
@@ -99,15 +100,23 @@ def get_current_project(base: str, token: str | None) -> dict | None:
 
 
 def project_matches(current: dict, target: dict) -> bool:
-    """Cheap idempotency: same device names + same view IDs -> no reupload."""
+    """Cheap idempotency: PLC-FuelFarm exists AND has type == Modbus AND
+    both view IDs are present. Type check is critical after 2026-07-17
+    schema fix where we changed 'ModbusTCP' (unknown to plugin registry)
+    to 'Modbus' (registered plugin type). Without checking type, a
+    project uploaded before the fix would look OK to this check and
+    the fixed upload would get skipped.
+    """
     if not current:
         return False
-    cur_devs = {
-        d.get("name")
-        for d in (current.get("devices") or {}).values()
-        if isinstance(d, dict)
-    }
-    if EXPECTED_DEVICE_NAME not in cur_devs:
+    devs_by_name = {}
+    for d in (current.get("devices") or {}).values():
+        if isinstance(d, dict) and d.get("name"):
+            devs_by_name[d["name"]] = d
+    plc = devs_by_name.get(EXPECTED_DEVICE_NAME)
+    if not plc:
+        return False
+    if plc.get("type") != EXPECTED_DEVICE_TYPE:
         return False
     cur_views = {
         v.get("id")

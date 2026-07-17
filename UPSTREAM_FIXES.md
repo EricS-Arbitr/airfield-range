@@ -36,6 +36,10 @@ Also — the original `fuxa_project.json.j2` had the wrong top-level schema. FUX
 
 **Follow-up.** The `/api/project` endpoint is inferred from prior FUXA versions and demo-project structure; if the fdamador...err, frangoteam/fuxa image variant we're on uses a different path (`/api/prjresource`, `/api/prj/...`), the bootstrap script's error output will surface it and we iterate. Same pattern that got us through OpenPLC.
 
+**Amendment (2026-07-17, same day).** Project loaded cleanly on first import but FUXA logged `try to create PLC-FuelFarm but plugin is missing!` and never opened a Modbus TCP connection to ff-plc-1:502 (verified via `ss -tn` on both hosts — zero established connections to port 502 from control-room-hmi). Root cause: my template set `"type": "ModbusTCP"`, but FUXA's plugin registry (visible at `/api/plugins`) actually keys the Modbus driver as `"type": "Modbus"`. FUXA's device factory did a plugin lookup by type, found nothing matching `ModbusTCP`, warned once, and silently skipped the device — leaving the JSON structure loaded but the poller inert. TCP vs RTU is inferred from `property.address`+`port` being present (vs serial fields), not from the type string. One-character template change.
+
+Bootstrap `project_matches` also strengthened to compare device *type* (not just name+view IDs), so re-imports after schema fixes don't get silently skipped by the idempotency check.
+
 ---
 
 ## 2026-07-16 · gap · roles/fuel_plc/tasks/main.yml — OpenPLC container comes up with no program loaded (Modbus :502 dead)
