@@ -21,8 +21,9 @@
   works because pymodbus doesn't share matiec's grammar.
 
   NOTE on % in comments: also stripped from this file's comments as a
-  defensive move -- some matiec forks treat "%" as reserved even inside
-  (* ... *) blocks. Comments now say "IW" instead of "%IW".
+  defensive move -- some matiec forks treat the percent character as
+  reserved even inside comment blocks. Comments now say IW instead of
+  percent-IW throughout.
 *)
 
 PROGRAM main
