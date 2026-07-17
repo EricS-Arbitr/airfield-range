@@ -333,15 +333,16 @@ check_sh fuel-hist \
   'code=200' \
   "fuel-hist Grafana /api/health returns 200"
 
-# Bucket existence via --json output (this CLI version supports it) +
-# grep for the exact quoted key/value pair. Three earlier revisions all
-# fought InfluxDB's default tab-separated table output -- the last one
-# had -F'\t' arriving at awk as a literal backslash-t (two chars, not a
-# tab) after shell + ansible quoting layers stripped one escape level,
-# so column 2 never matched "fuel". --json output is unambiguous and
-# doesn't require jq.
+# Bucket existence via server-side --name filter. If the bucket exists,
+# --name matches ONE record and the CLI prints a table row containing
+# "fuel" (regardless of tab/space alignment). If not, it prints only the
+# header row (no "fuel" anywhere). `grep -qw fuel` is safe because the
+# CLI wouldn't have any other reason to mention the word "fuel" in its
+# own output. No quote-nesting through ansible, no --json parsing, no
+# tab-separator gymnastics. If this still misfires, the underlying
+# `docker exec` is failing silently and we need to look at that instead.
 check_sh fuel-hist \
-  "docker exec influxdb influx bucket list --token Simspace1SimspaceFuelHistorianAdminToken --org airfield --json 2>/dev/null | grep -q '\"name\": \"fuel\"' && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
+  "docker exec influxdb influx bucket list --name fuel --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 2>&1 | grep -qw fuel && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
   'BUCKET_PRESENT' \
   "fuel-hist InfluxDB 'fuel' bucket exists"
 
