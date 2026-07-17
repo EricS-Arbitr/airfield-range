@@ -130,22 +130,41 @@ def login(sess: requests.Session, base: str, user: str, pw: str) -> str:
 # Dashboard scrape
 # --------------------------------------------------------------------------
 
-_RUNTIME_RUNNING_PAT = re.compile(
-    r"runtime[^<]*?status.*?running", re.IGNORECASE | re.DOTALL,
+# fdamador/openplc dashboard markup (verified 2026-07-17 against a live
+# container):
+#     <b>Status: <font color = 'Red'>Stopped</font></b>
+#     <b>Program:</b> fuel_farm</p>
+# The color attribute isn't reliable (varies by fork), so we anchor on the
+# state word inside the <font>...</font> and the label text of the Program
+# row. Fall back to the header banner if the panel isn't present.
+_RUNTIME_STATE_PAT = re.compile(
+    r"<b>\s*Status:\s*<font[^>]*>\s*(\w+)\s*</font>", re.IGNORECASE,
+)
+_HEADER_STATE_PAT = re.compile(
+    r"<span[^>]*>\s*(Running|Stopped|Compiling)\s*[:\s]", re.IGNORECASE,
 )
 _CURRENT_PROG_PAT = re.compile(
-    r"currently\s+running[^<]*<[^>]+>\s*([^<]+?)\s*<", re.IGNORECASE | re.DOTALL,
+    r"<b>\s*Program\s*:\s*</b>\s*([^<]+?)\s*</p>", re.IGNORECASE,
 )
 
 
 def dashboard_state(sess: requests.Session, base: str) -> tuple[str, str | None]:
-    """Return ('running'|'stopped', current_program_name_or_None)."""
+    """Return ('running'|'stopped'|'compiling', current_program_name_or_None)."""
     r = sess.get(urljoin(base, "/dashboard"), timeout=10)
     r.raise_for_status()
     text = r.text
-    state = "running" if _RUNTIME_RUNNING_PAT.search(text) else "stopped"
-    m = _CURRENT_PROG_PAT.search(text)
-    current = m.group(1).strip() if m else None
+    m = _RUNTIME_STATE_PAT.search(text) or _HEADER_STATE_PAT.search(text)
+    state_word = m.group(1).lower() if m else "stopped"
+    # Normalize: 'Started' or 'Active' shouldn't appear in this fork but
+    # future-proof by mapping anything non-'stopped'/'compiling' to running.
+    if state_word in ("stopped",):
+        state = "stopped"
+    elif state_word in ("compiling",):
+        state = "compiling"
+    else:
+        state = "running"
+    m2 = _CURRENT_PROG_PAT.search(text)
+    current = m2.group(1).strip() if m2 else None
     return state, current
 
 
@@ -232,31 +251,19 @@ def upload_and_start(
     if r.status_code not in (200, 302):
         raise SystemExit(f"/upload-program-action returned {r.status_code}")
 
-    # Phase 3: compile. This is a streaming endpoint -- OpenPLC streams the
-    # matiec + gcc log as it runs. We drain the stream to completion, then
-    # check the response body for compile-success sentinel.
+    # Phase 3: compile. On fdamador/openplc, /compile-program is ASYNC --
+    # it returns an HTML shell almost immediately, then a background
+    # process runs matiec + gcc. The actual compile log is served
+    # separately at /compilation-logs, which is what the web UI's JS
+    # polls (every 1 s). We do the same server-side.
     r = sess.get(
         urljoin(base, f"/compile-program?file={prog_file}"),
-        timeout=180,
-        stream=True,
+        timeout=15,
     )
-    compile_log = []
-    for chunk in r.iter_content(chunk_size=8192, decode_unicode=True):
-        if chunk:
-            compile_log.append(
-                chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace")
-            )
-    log_text = "".join(compile_log)
-    # Sentinel varies by fork -- accept either the classic
-    # "Compilation finished successfully" or the fdamador "Compiling program"
-    # + absence of gcc error markers.
-    lower = log_text.lower()
-    if "compilation finished successfully" not in lower and (
-        "error:" in lower or "make: ***" in lower
-    ):
-        # Print only the last ~2 KB of the log for context
-        tail = log_text[-2000:]
-        raise SystemExit("compile failed. Tail of compile log:\n" + tail)
+    if r.status_code != 200:
+        raise SystemExit(f"/compile-program returned {r.status_code}")
+
+    _wait_for_compile(sess, base, timeout=300)
 
     # Phase 4: start runtime and poll for Running.
     r = sess.get(urljoin(base, "/start_plc"), timeout=10, allow_redirects=False)
@@ -271,6 +278,43 @@ def upload_and_start(
     raise SystemExit(
         "runtime did not report Running within 60s after /start_plc. "
         "Check /runtime_logs on the web UI for details."
+    )
+
+
+# --------------------------------------------------------------------------
+# Compile-log polling
+# --------------------------------------------------------------------------
+
+_COMPILE_OK = "Compilation finished successfully!"
+_COMPILE_ERR = "Compilation finished with errors!"
+
+
+def _wait_for_compile(sess: requests.Session, base: str, timeout: int) -> None:
+    """Poll /compilation-logs until one of the two sentinels appears.
+
+    The fdamador image (and stock OpenPLC v3) writes one of these exact
+    strings to the log tail when the background compile process reaps:
+      - "Compilation finished successfully!"
+      - "Compilation finished with errors!"
+    Anything else means the compile is still running (or the log endpoint
+    isn't answering, which we treat as a fatal timeout).
+    """
+    deadline = time.time() + timeout
+    log_text = ""
+    while time.time() < deadline:
+        r = sess.get(urljoin(base, "/compilation-logs"), timeout=10)
+        log_text = r.text
+        if _COMPILE_OK in log_text:
+            return
+        if _COMPILE_ERR in log_text:
+            tail = log_text[-2500:]
+            raise SystemExit(
+                "compile FAILED. Last 2.5 KB of /compilation-logs:\n" + tail
+            )
+        time.sleep(2)
+    tail = log_text[-2500:] if log_text else "(empty)"
+    raise SystemExit(
+        f"compile did not finish within {timeout}s. Log tail:\n" + tail
     )
 
 
