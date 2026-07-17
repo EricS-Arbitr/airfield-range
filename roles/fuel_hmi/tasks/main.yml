@@ -68,6 +68,49 @@
     port: "{{ fuxa_port }}"
     timeout: 60
 
+# frangoteam/fuxa:latest ships without the modbus-serial npm package, so
+# even though FUXA's plugin registry lists Modbus (server/runtime/devices/
+# modbus/index.js is present in the image), require('modbus-serial') fails
+# silently at plugin-instantiation time and the device never connects.
+# Install the package into the container's node_modules; it survives
+# normal restarts (writable layer) but is re-installed on container
+# recreation. Check first for idempotency.
+- name: Check if modbus-serial is already installed in FUXA container
+  ansible.builtin.command:
+    cmd: docker exec fuxa test -d /usr/src/app/FUXA/server/node_modules/modbus-serial
+  register: modbus_serial_check
+  failed_when: false
+  changed_when: false
+
+# Container's default network doesn't inherit the host's HTTP proxy
+# env, and OT hosts (including control-room-hmi) can only reach the
+# npm registry via the mgmt-plane proxy at 10.255.240.1:3128 -- pass
+# --proxy / --https-proxy explicitly so npm hits it from inside the
+# container's netns.
+- name: Install modbus-serial into FUXA container (npm install via mgmt proxy)
+  ansible.builtin.command:
+    cmd: >-
+      docker exec -w /usr/src/app/FUXA/server fuxa
+      npm install modbus-serial --no-audit --no-fund --no-save
+      --proxy http://10.255.240.1:3128
+      --https-proxy http://10.255.240.1:3128
+  when: modbus_serial_check.rc != 0
+  register: modbus_serial_install
+
+- name: Restart FUXA container to pick up newly-installed plugin
+  community.docker.docker_container:
+    name: fuxa
+    state: started
+    restart: yes
+  when: modbus_serial_install is changed
+
+- name: Wait for FUXA UI :1881 (post-restart)
+  ansible.builtin.wait_for:
+    host: "{{ fuel_hmi_ip }}"
+    port: "{{ fuxa_port }}"
+    timeout: 60
+  when: modbus_serial_install is changed
+
 # fuxa_bootstrap.py is idempotent: it GETs /api/project, checks whether
 # our device + both views are already present, and only POSTs if they're
 # missing or mismatched. Falls back to auth via /api/signin if the
