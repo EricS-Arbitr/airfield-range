@@ -375,6 +375,15 @@ check_sh control-room-hmi \
   'REACHABLE' \
   "control-room-hmi can reach ff-plc-1:502 (Modbus master path)"
 
+# FUXA project state -- /api/project returns the currently loaded project.
+# Look for our device name and both view IDs; grep -qE with a single anchored
+# pattern covers all three signals in one round-trip. If any is missing, the
+# fuxa_bootstrap.py run didn't take effect (or the container was reset).
+check_sh control-room-hmi \
+  "curl -sS --max-time 5 http://172.16.45.3:1881/api/project | grep -qE 'PLC-FuelFarm.*v_process_overview.*v_rack_detail' && echo FUXA_PROJECT_LOADED || echo FUXA_PROJECT_MISSING" \
+  'FUXA_PROJECT_LOADED' \
+  "control-room-hmi FUXA has fuel_farm project loaded (PLC-FuelFarm + both views)"
+
 # =========================================================================
 # Summary
 # =========================================================================

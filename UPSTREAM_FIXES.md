@@ -16,6 +16,28 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-17 · gap · roles/fuel_hmi -- FUXA container comes up with no project loaded (screens are blank)
+
+**Symptom.** After `fuel_hmi` deploys, the FUXA container is running and :1881 is reachable, but logging in to the web UI shows a blank editor — no devices, no views. The bind-mounted JSON at `/opt/fuxa/projects/fuel_farm.json` is present in the container's `_projects` volume but FUXA doesn't auto-load it.
+
+**Why.** FUXA's `_projects/` bind mount is used by the editor's Save/Load buttons and by the demo-project asset, not by server startup. The active project lives in FUXA's SQLite DB inside `_appdata/` and can only be modified via web-UI editor actions or the `/api/project` REST endpoint. The role's original stopgap was a `debug` task telling the operator to author screens in the FUXA editor — same manual-step problem we hit with OpenPLC, and it broke idempotent redeploy.
+
+Also — the original `fuxa_project.json.j2` had the wrong top-level schema. FUXA expects `{version, projectFile, server, devices, hmi, charts}` with views inside `hmi.views[]`; the old template put `views` at the top level. Modbus tag `memaddress` values were also wrong (strings like `"Coils"` instead of the numeric constants FUXA's Modbus driver expects: `0`, `100000`, `300000`, `400000`). Modbus tag `address` was zero-based; FUXA's driver subtracts 1 internally so it expected 1-based. `variableId` format was `"Device@Tag"` instead of `"Device^~^Tag"`.
+
+**Fix (overlay).**
+
+1. Rewrote `templates/fuxa_project.json.j2` with the schema verified against `frangoteam/FUXA` `client/dist/assets/project.demo.fuxap` + the Modbus driver source (`server/runtime/devices/modbus/index.js`). All four Modbus register classes now use numeric `memaddress`, 1-based `address`, correct `variableId` format, and `divisor = 1/scale` for read-side unit conversion. Deterministic device UUID pinned in `group_vars/fuel.yml` (`fuxa_plc_device_uuid`) so idempotent re-imports don't create duplicate devices.
+
+2. Two SVG views authored in separate `files/svg_process_overview.svg` and `files/svg_rack_detail.svg` (Jinja inlines them into `svgcontent` via `lookup('file', ...) | tojson`). Views use `svg-ext-value` widgets bound to numeric tags (tank levels, flow, header press, meter, active-truck IDs), `svg-ext-shape` widgets with `clockwise` color actions bound to boolean tags (status indicators, ESD banner), and `svg-ext-button` widgets with `onSetView` events for cross-view navigation.
+
+3. New `files/fuxa_bootstrap.py` runs on the target after container start. Idempotent-by-content: GETs `/api/project`, checks whether `PLC-FuelFarm` device + both view IDs (`v_process_overview`, `v_rack_detail`) are present, and only POSTs if not. Falls back to `/api/signin` auth if unauth GET returns 401.
+
+**Verify coverage.** New check hits `/api/project` on `172.16.45.3:1881` and greps for `PLC-FuelFarm.*v_process_overview.*v_rack_detail` in the response — one round-trip proves device + both views are loaded.
+
+**Follow-up.** The `/api/project` endpoint is inferred from prior FUXA versions and demo-project structure; if the fdamador...err, frangoteam/fuxa image variant we're on uses a different path (`/api/prjresource`, `/api/prj/...`), the bootstrap script's error output will surface it and we iterate. Same pattern that got us through OpenPLC.
+
+---
+
 ## 2026-07-16 · gap · roles/fuel_plc/tasks/main.yml — OpenPLC container comes up with no program loaded (Modbus :502 dead)
 
 **Symptom.** After `fuel_plc` deploys, verify shows `ff-plc-1 OpenPLC container running` green and `ff-plc-1 OpenPLC web :8080` green, but `Modbus :502` refuses TCP indefinitely. The container is happy, the web UI works, and `/opt/openplc/programs/fuel_farm.st` is present in the bind mount — but nothing binds :502 because the OpenPLC runtime hasn't been told what program to run.

@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" style="font-family:Arial,sans-serif">
+  <rect width="1280" height="720" fill="#f5f5f5"/>
+
+  <g id="header_bar">
+    <rect x="0" y="0" width="1280" height="44" fill="#1b3d5c"/>
+    <text x="20" y="28" fill="#ffffff" font-size="20" font-weight="bold">AIRFIELD FUEL FARM  ·  LOADING RACK DETAIL</text>
+  </g>
+
+  <g id="rack1_panel">
+    <rect x="20" y="60" width="610" height="480" fill="#ffffff" stroke="#8a8a8a" stroke-width="1"/>
+    <rect x="20" y="60" width="610" height="40" fill="#1b3d5c"/>
+    <text x="325" y="88" text-anchor="middle" font-size="18" font-weight="bold" fill="#ffffff">LR-1  ·  LOADING RACK 1</text>
+
+    <g id="rack1_truck_info">
+      <rect x="40" y="120" width="570" height="80" fill="#f9f9f9" stroke="#c0c0c0"/>
+      <text x="60" y="145" font-size="12" fill="#666">ACTIVE TRUCK</text>
+      <text id="LR1D_ACTIVE_TRUCK_txt" x="60" y="180" font-size="28" font-weight="bold" fill="#1b3d5c">--</text>
+
+      <text x="340" y="145" font-size="12" fill="#666">SOURCE TANK</text>
+      <text id="LR1D_SRC_TANK_txt" x="340" y="180" font-size="28" font-weight="bold" fill="#1b3d5c">--</text>
+    </g>
+
+    <g id="rack1_batch">
+      <rect x="40" y="220" width="570" height="120" fill="#f9f9f9" stroke="#c0c0c0"/>
+      <text x="60" y="245" font-size="12" fill="#666">BATCH PROGRESS</text>
+
+      <text x="60" y="275" font-size="11" fill="#333">Preset:</text>
+      <text id="LR1D_PRESET_GAL_txt" x="130" y="275" font-size="14" font-weight="bold" fill="#1b3d5c">-- gal</text>
+
+      <text x="320" y="275" font-size="11" fill="#333">Delivered (meter):</text>
+      <text id="LR1D_METER_txt" x="470" y="275" font-size="14" font-weight="bold" fill="#1b3d5c">-- gal</text>
+
+      <rect x="60" y="295" width="530" height="30" fill="#e0e0e0" stroke="#333"/>
+      <rect id="LR1D_progress_fill" x="60" y="295" width="0" height="30" fill="#4a90d9"/>
+      <text x="325" y="316" text-anchor="middle" font-size="12" font-weight="bold" fill="#ffffff">
+        <tspan id="LR1D_progress_txt">0%</tspan>
+      </text>
+    </g>
+
+    <g id="rack1_flow">
+      <rect x="40" y="360" width="270" height="100" fill="#f9f9f9" stroke="#c0c0c0"/>
+      <text x="60" y="385" font-size="12" fill="#666">LIVE FLOW</text>
+      <text id="LR1D_FLOW_txt" x="60" y="435" font-size="36" font-weight="bold" fill="#1b3d5c">--</text>
+      <text x="270" y="435" font-size="14" fill="#666" text-anchor="end">gpm</text>
+    </g>
+
+    <g id="rack1_status">
+      <rect x="330" y="360" width="280" height="160" fill="#f9f9f9" stroke="#c0c0c0"/>
+      <text x="350" y="385" font-size="12" fill="#666">STATUS</text>
+
+      <circle id="LR1D_GROUND_OK_dot" cx="360" cy="410" r="8" fill="#c0c0c0" stroke="#333"/>
+      <text x="378" y="415" font-size="12" fill="#333">Ground OK</text>
+
+      <circle id="LR1D_DEADMAN_dot" cx="360" cy="435" r="8" fill="#c0c0c0" stroke="#333"/>
+      <text x="378" y="440" font-size="12" fill="#333">Deadman Held</text>
+
+      <circle id="LR1D_OVERFILL_dot" cx="360" cy="460" r="8" fill="#c0c0c0" stroke="#333"/>
+      <text x="378" y="465" font-size="12" fill="#333">Overfill Trip</text>
+
+      <circle id="LR1D_LOAD_VLV_dot" cx="360" cy="485" r="8" fill="#c0c0c0" stroke="#333"/>
+      <text x="378" y="490" font-size="12" fill="#333">Load Valve Open</text>
+
+      <circle id="LR1D_ESD_dot" cx="510" cy="410" r="8" fill="#c0c0c0" stroke="#333"/>
+      <text x="528" y="415" font-size="12" fill="#333">ESD Active</text>
+    </g>
+  </g>
+
+  <g id="rack2_panel">
+    <rect x="650" y="60" width="610" height="480" fill="#ffffff" stroke="#8a8a8a" stroke-width="1"/>
+    <rect x="650" y="60" width="610" height="40" fill="#1b3d5c"/>
+    <text x="955" y="88" text-anchor="middle" font-size="18" font-weight="bold" fill="#ffffff">LR-2  ·  LOADING RACK 2</text>
+
+    <g id="rack2_truck_info">
+      <rect x="670" y="120" width="570" height="80" fill="#f9f9f9" stroke="#c0c0c0"/>
+      <text x="690" y="145" font-size="12" fill="#666">ACTIVE TRUCK</text>
+      <text id="LR2D_ACTIVE_TRUCK_txt" x="690" y="180" font-size="28" font-weight="bold" fill="#1b3d5c">--</text>
+
+      <text x="970" y="145" font-size="12" fill="#666">SOURCE TANK</text>
+      <text id="LR2D_SRC_TANK_txt" x="970" y="180" font-size="28" font-weight="bold" fill="#1b3d5c">--</text>
+    </g>
+
+    <g id="rack2_batch">
+      <rect x="670" y="220" width="570" height="120" fill="#f9f9f9" stroke="#c0c0c0"/>
+      <text x="690" y="245" font-size="12" fill="#666">BATCH PROGRESS</text>
+
+      <text x="690" y="275" font-size="11" fill="#333">Preset:</text>
+      <text id="LR2D_PRESET_GAL_txt" x="760" y="275" font-size="14" font-weight="bold" fill="#1b3d5c">-- gal</text>
+
+      <text x="950" y="275" font-size="11" fill="#333">Delivered (meter):</text>
+      <text id="LR2D_METER_txt" x="1100" y="275" font-size="14" font-weight="bold" fill="#1b3d5c">-- gal</text>
+
+      <rect x="690" y="295" width="530" height="30" fill="#e0e0e0" stroke="#333"/>
+      <rect id="LR2D_progress_fill" x="690" y="295" width="0" height="30" fill="#4a90d9"/>
+      <text x="955" y="316" text-anchor="middle" font-size="12" font-weight="bold" fill="#ffffff">
+        <tspan id="LR2D_progress_txt">0%</tspan>
+      </text>
+    </g>
+
+    <g id="rack2_flow">
+      <rect x="670" y="360" width="270" height="100" fill="#f9f9f9" stroke="#c0c0c0"/>
+      <text x="690" y="385" font-size="12" fill="#666">LIVE FLOW</text>
+      <text id="LR2D_FLOW_txt" x="690" y="435" font-size="36" font-weight="bold" fill="#1b3d5c">--</text>
+      <text x="900" y="435" font-size="14" fill="#666" text-anchor="end">gpm</text>
+    </g>
+
+    <g id="rack2_status">
+      <rect x="960" y="360" width="280" height="160" fill="#f9f9f9" stroke="#c0c0c0"/>
+      <text x="980" y="385" font-size="12" fill="#666">STATUS</text>
+
+      <circle id="LR2D_GROUND_OK_dot" cx="990" cy="410" r="8" fill="#c0c0c0" stroke="#333"/>
+      <text x="1008" y="415" font-size="12" fill="#333">Ground OK</text>
+
+      <circle id="LR2D_DEADMAN_dot" cx="990" cy="435" r="8" fill="#c0c0c0" stroke="#333"/>
+      <text x="1008" y="440" font-size="12" fill="#333">Deadman Held</text>
+
+      <circle id="LR2D_OVERFILL_dot" cx="990" cy="460" r="8" fill="#c0c0c0" stroke="#333"/>
+      <text x="1008" y="465" font-size="12" fill="#333">Overfill Trip</text>
+
+      <circle id="LR2D_LOAD_VLV_dot" cx="990" cy="485" r="8" fill="#c0c0c0" stroke="#333"/>
+      <text x="1008" y="490" font-size="12" fill="#333">Load Valve Open</text>
+
+      <circle id="LR2D_ESD_dot" cx="1140" cy="410" r="8" fill="#c0c0c0" stroke="#333"/>
+      <text x="1158" y="415" font-size="12" fill="#333">ESD Active</text>
+    </g>
+  </g>
+
+  <g id="nav_bar">
+    <rect x="20" y="560" width="1240" height="100" fill="#ffffff" stroke="#c0c0c0"/>
+    <rect id="navD_overview_btn" x="40" y="580" width="220" height="60" fill="#7a8fa5" stroke="#000"/>
+    <text x="150" y="618" text-anchor="middle" font-size="16" font-weight="bold" fill="#ffffff">Process Overview</text>
+
+    <rect id="navD_rack_detail_btn" x="280" y="580" width="220" height="60" fill="#1b3d5c" stroke="#000"/>
+    <text x="390" y="618" text-anchor="middle" font-size="16" font-weight="bold" fill="#ffffff">Loading Rack Detail</text>
+
+    <text x="1250" y="650" text-anchor="end" font-size="10" fill="#8a8a8a">Airfield Range · Fuel Farm · Ansible-managed</text>
+  </g>
+
+  <g id="footer_bar">
+    <rect x="0" y="680" width="1280" height="40" fill="#e0e0e0"/>
+    <text x="20" y="705" font-size="11" fill="#666">Source: ff-plc-1.blackstone.mil (172.16.45.10)  ·  Modbus TCP :502  ·  Poll 1000 ms</text>
+  </g>
+</svg>

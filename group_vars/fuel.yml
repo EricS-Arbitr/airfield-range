@@ -27,6 +27,11 @@ openplc_admin_password: "{{ vault_openplc_admin_password | default('Simspace1!Si
 fuxa_port: 1881
 fuxa_admin_user: "admin"
 fuxa_admin_password: "{{ vault_fuxa_admin_password | default('Simspace1!Simspace1!') }}"
+# Deterministic UUID for the fuel-farm PLC device inside FUXA's
+# project.json (FUXA keys devices by UUID, not name). Value is stable
+# across deploys so idempotent re-uploads don't produce duplicate
+# device rows.
+fuxa_plc_device_uuid: "c39d10a0-fue1-4fa2-8000-000000000001"
 
 # --- InfluxDB 2.7 (fuel-hist) — pin major version ------------
 influxdb_image: "influxdb:2.7"               # NEVER :latest (CLAUDE.md §9)

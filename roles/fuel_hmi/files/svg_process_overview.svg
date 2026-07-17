@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" style="font-family:Arial,sans-serif">
+  <rect width="1280" height="720" fill="#f5f5f5"/>
+
+  <g id="header_bar">
+    <rect x="0" y="0" width="1280" height="44" fill="#1b3d5c"/>
+    <text x="20" y="28" fill="#ffffff" font-size="20" font-weight="bold">AIRFIELD FUEL FARM  ·  PROCESS OVERVIEW</text>
+    <text x="1180" y="28" fill="#ffffff" font-size="14" text-anchor="end" id="header_clock">SIM</text>
+  </g>
+
+  <g id="tank_farm_group">
+    <rect x="20" y="60" width="360" height="360" fill="#ffffff" stroke="#8a8a8a" stroke-width="1"/>
+    <text x="200" y="82" fill="#1b3d5c" font-size="16" font-weight="bold" text-anchor="middle">TANK FARM</text>
+
+    <g id="tank_T101">
+      <rect x="40" y="105" width="100" height="280" fill="#e9eef5" stroke="#333" stroke-width="1.5"/>
+      <rect id="tank_T101_fill" x="41" y="145" width="98" height="239" fill="#4a90d9"/>
+      <text x="90" y="128" text-anchor="middle" font-size="14" font-weight="bold" fill="#1b3d5c">T-101</text>
+      <text id="T101_LEVEL_txt" x="90" y="170" text-anchor="middle" font-size="18" font-weight="bold" fill="#ffffff">--</text>
+      <text x="90" y="405" text-anchor="middle" font-size="10" fill="#666">JP-8 / 500,000 gal</text>
+    </g>
+
+    <g id="tank_T102">
+      <rect x="150" y="105" width="100" height="280" fill="#e9eef5" stroke="#333" stroke-width="1.5"/>
+      <rect id="tank_T102_fill" x="151" y="155" width="98" height="229" fill="#4a90d9"/>
+      <text x="200" y="128" text-anchor="middle" font-size="14" font-weight="bold" fill="#1b3d5c">T-102</text>
+      <text id="T102_LEVEL_txt" x="200" y="170" text-anchor="middle" font-size="18" font-weight="bold" fill="#ffffff">--</text>
+      <text x="200" y="405" text-anchor="middle" font-size="10" fill="#666">JP-8 / 500,000 gal</text>
+    </g>
+
+    <g id="tank_T103">
+      <rect x="260" y="105" width="100" height="280" fill="#e9eef5" stroke="#333" stroke-width="1.5"/>
+      <rect id="tank_T103_fill" x="261" y="165" width="98" height="219" fill="#4a90d9"/>
+      <text x="310" y="128" text-anchor="middle" font-size="14" font-weight="bold" fill="#1b3d5c">T-103</text>
+      <text id="T103_LEVEL_txt" x="310" y="170" text-anchor="middle" font-size="18" font-weight="bold" fill="#ffffff">--</text>
+      <text x="310" y="405" text-anchor="middle" font-size="10" fill="#666">JP-8 / 500,000 gal</text>
+    </g>
+
+    <text x="40" y="440" font-size="11" fill="#333">T-101 Temp:</text>
+    <text id="T101_TEMP_txt" x="120" y="440" font-size="11" font-weight="bold" fill="#1b3d5c">-- °F</text>
+  </g>
+
+  <g id="pump_house_group">
+    <rect x="410" y="60" width="380" height="360" fill="#ffffff" stroke="#8a8a8a" stroke-width="1"/>
+    <text x="600" y="82" fill="#1b3d5c" font-size="16" font-weight="bold" text-anchor="middle">PUMP HOUSE</text>
+
+    <g id="pump_P201">
+      <circle id="P201_body" cx="510" cy="180" r="50" fill="#e9eef5" stroke="#333" stroke-width="2"/>
+      <text x="510" y="175" text-anchor="middle" font-size="14" font-weight="bold" fill="#1b3d5c">P-201</text>
+      <text x="510" y="192" text-anchor="middle" font-size="10" fill="#666">Main Pump</text>
+      <circle id="P201_RUN_STS_dot" cx="510" cy="250" r="10" fill="#c0c0c0" stroke="#333"/>
+      <text x="510" y="278" text-anchor="middle" font-size="10" fill="#333">Run Status</text>
+    </g>
+
+    <g id="pump_P202">
+      <circle id="P202_body" cx="700" cy="180" r="50" fill="#e9eef5" stroke="#333" stroke-width="2"/>
+      <text x="700" y="175" text-anchor="middle" font-size="14" font-weight="bold" fill="#1b3d5c">P-202</text>
+      <text x="700" y="192" text-anchor="middle" font-size="10" fill="#666">Standby</text>
+      <circle id="P202_RUN_STS_dot" cx="700" cy="250" r="10" fill="#c0c0c0" stroke="#333"/>
+      <text x="700" y="278" text-anchor="middle" font-size="10" fill="#333">Run Status</text>
+    </g>
+
+    <g id="header_pressure_group">
+      <rect x="440" y="315" width="320" height="80" fill="#f9f9f9" stroke="#c0c0c0"/>
+      <text x="600" y="335" text-anchor="middle" font-size="12" font-weight="bold" fill="#1b3d5c">Header Pressure</text>
+      <text id="HEADER_PRESS_txt" x="600" y="375" text-anchor="middle" font-size="30" font-weight="bold" fill="#1b3d5c">-- psi</text>
+    </g>
+  </g>
+
+  <g id="loading_racks_group">
+    <rect x="820" y="60" width="440" height="360" fill="#ffffff" stroke="#8a8a8a" stroke-width="1"/>
+    <text x="1040" y="82" fill="#1b3d5c" font-size="16" font-weight="bold" text-anchor="middle">LOADING RACKS</text>
+
+    <g id="rack_LR1">
+      <rect x="840" y="100" width="400" height="145" fill="#f9f9f9" stroke="#333" stroke-width="1.5"/>
+      <rect id="LR1_LOAD_VLV_bar" x="840" y="100" width="8" height="145" fill="#c0c0c0"/>
+      <text x="860" y="122" font-size="13" font-weight="bold" fill="#1b3d5c">LR-1</text>
+      <text x="860" y="145" font-size="10" fill="#666">Rack 1</text>
+
+      <text x="860" y="172" font-size="11" fill="#333">Active Truck:</text>
+      <text id="LR1_ACTIVE_TRUCK_txt" x="960" y="172" font-size="12" font-weight="bold" fill="#1b3d5c">--</text>
+
+      <text x="860" y="192" font-size="11" fill="#333">Source Tank:</text>
+      <text id="LR1_SRC_TANK_txt" x="960" y="192" font-size="12" font-weight="bold" fill="#1b3d5c">--</text>
+
+      <text x="860" y="212" font-size="11" fill="#333">Preset:</text>
+      <text id="LR1_PRESET_GAL_txt" x="960" y="212" font-size="12" font-weight="bold" fill="#1b3d5c">-- gal</text>
+
+      <text x="860" y="232" font-size="11" fill="#333">Flow:</text>
+      <text id="LR1_FLOW_txt" x="960" y="232" font-size="12" font-weight="bold" fill="#1b3d5c">-- gpm</text>
+
+      <g id="LR1_status_lights">
+        <circle id="LR1_GROUND_OK_dot" cx="1100" cy="172" r="6" fill="#c0c0c0" stroke="#333"/>
+        <text x="1112" y="176" font-size="10" fill="#333">Ground</text>
+
+        <circle id="LR1_DEADMAN_dot" cx="1100" cy="192" r="6" fill="#c0c0c0" stroke="#333"/>
+        <text x="1112" y="196" font-size="10" fill="#333">Deadman</text>
+
+        <circle id="LR1_OVERFILL_dot" cx="1100" cy="212" r="6" fill="#c0c0c0" stroke="#333"/>
+        <text x="1112" y="216" font-size="10" fill="#333">Overfill</text>
+
+        <circle id="P201_RUN_CMD_dot" cx="1100" cy="232" r="6" fill="#c0c0c0" stroke="#333"/>
+        <text x="1112" y="236" font-size="10" fill="#333">Pump Cmd</text>
+      </g>
+    </g>
+
+    <g id="rack_LR2">
+      <rect x="840" y="265" width="400" height="145" fill="#f9f9f9" stroke="#333" stroke-width="1.5"/>
+      <rect id="LR2_LOAD_VLV_bar" x="840" y="265" width="8" height="145" fill="#c0c0c0"/>
+      <text x="860" y="287" font-size="13" font-weight="bold" fill="#1b3d5c">LR-2</text>
+      <text x="860" y="310" font-size="10" fill="#666">Rack 2</text>
+
+      <text x="860" y="337" font-size="11" fill="#333">Active Truck:</text>
+      <text id="LR2_ACTIVE_TRUCK_txt" x="960" y="337" font-size="12" font-weight="bold" fill="#1b3d5c">--</text>
+
+      <text x="860" y="357" font-size="11" fill="#333">Source Tank:</text>
+      <text id="LR2_SRC_TANK_txt" x="960" y="357" font-size="12" font-weight="bold" fill="#1b3d5c">--</text>
+
+      <text x="860" y="377" font-size="11" fill="#333">Preset:</text>
+      <text id="LR2_PRESET_GAL_txt" x="960" y="377" font-size="12" font-weight="bold" fill="#1b3d5c">-- gal</text>
+
+      <text x="860" y="397" font-size="11" fill="#333">Flow:</text>
+      <text id="LR2_FLOW_txt" x="960" y="397" font-size="12" font-weight="bold" fill="#1b3d5c">-- gpm</text>
+
+      <g id="LR2_status_lights">
+        <circle id="LR2_GROUND_OK_dot" cx="1100" cy="337" r="6" fill="#c0c0c0" stroke="#333"/>
+        <text x="1112" y="341" font-size="10" fill="#333">Ground</text>
+
+        <circle id="LR2_DEADMAN_dot" cx="1100" cy="357" r="6" fill="#c0c0c0" stroke="#333"/>
+        <text x="1112" y="361" font-size="10" fill="#333">Deadman</text>
+
+        <circle id="LR2_OVERFILL_dot" cx="1100" cy="377" r="6" fill="#c0c0c0" stroke="#333"/>
+        <text x="1112" y="381" font-size="10" fill="#333">Overfill</text>
+
+        <circle id="P202_RUN_CMD_dot" cx="1100" cy="397" r="6" fill="#c0c0c0" stroke="#333"/>
+        <text x="1112" y="401" font-size="10" fill="#333">Pump Cmd</text>
+      </g>
+    </g>
+  </g>
+
+  <g id="esd_banner">
+    <rect id="esd_banner_rect" x="20" y="450" width="1240" height="70" fill="#2c8f3f" stroke="#000" stroke-width="1"/>
+    <text id="esd_banner_txt" x="640" y="493" text-anchor="middle" font-size="26" font-weight="bold" fill="#ffffff">SYSTEM NORMAL</text>
+  </g>
+
+  <g id="nav_bar">
+    <rect x="20" y="560" width="1240" height="100" fill="#ffffff" stroke="#c0c0c0"/>
+    <rect id="nav_overview_btn" x="40" y="580" width="220" height="60" fill="#1b3d5c" stroke="#000"/>
+    <text x="150" y="618" text-anchor="middle" font-size="16" font-weight="bold" fill="#ffffff">Process Overview</text>
+
+    <rect id="nav_rack_detail_btn" x="280" y="580" width="220" height="60" fill="#7a8fa5" stroke="#000"/>
+    <text x="390" y="618" text-anchor="middle" font-size="16" font-weight="bold" fill="#ffffff">Loading Rack Detail</text>
+
+    <text x="1250" y="650" text-anchor="end" font-size="10" fill="#8a8a8a">Airfield Range · Fuel Farm · Ansible-managed</text>
+  </g>
+
+  <g id="footer_bar">
+    <rect x="0" y="680" width="1280" height="40" fill="#e0e0e0"/>
+    <text x="20" y="705" font-size="11" fill="#666">Source: ff-plc-1.blackstone.mil (172.16.45.10)  ·  Modbus TCP :502  ·  Poll 1000 ms</text>
+  </g>
+</svg>
