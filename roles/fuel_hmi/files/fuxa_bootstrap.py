@@ -32,7 +32,7 @@ except ImportError:
 
 
 EXPECTED_DEVICE_NAME = "PLC-FuelFarm"
-EXPECTED_DEVICE_TYPE = "Modbus"
+EXPECTED_DEVICE_TYPE = "ModbusTCP"
 EXPECTED_VIEW_IDS = {"v_process_overview", "v_rack_detail"}
 
 

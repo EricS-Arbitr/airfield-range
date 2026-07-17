@@ -42,6 +42,27 @@ Bootstrap `project_matches` also strengthened to compare device *type* (not just
 
 **Third amendment (2026-07-17, same day).** Type fixed, plugin found — but still no TCP connection to ff-plc-1:502. Deeper probe showed `ls .../node_modules/modbus-serial` = "No such file or directory". `frangoteam/fuxa:latest` ships with the plugin *metadata* baked in (`server/runtime/devices/modbus/index.js` exists) but does NOT install the actual `modbus-serial` npm dependency — presumably to keep image size down. When FUXA instantiates the device, `require('modbus-serial')` throws, the driver module fails to construct, and no connection is attempted. The initial "plugin is missing!" WARN only fires for *unknown types*, so with type fixed the failure mode goes silent. Role now runs `docker exec fuxa npm install modbus-serial --proxy http://10.255.240.1:3128 --https-proxy http://10.255.240.1:3128` inside the container (proxy flags needed because OT hosts only reach the npm registry via the mgmt-plane proxy) and restarts the container to pick up the new module. Idempotent by pre-check on the target dir. Persists across normal restarts (writable layer); re-runs on container recreation.
 
+**Fourth amendment (2026-07-17, same day). REVERTED the `Modbus` change from amendment #2.** After the modbus-serial npm install landed, still no connection. Read the actual factory source at `server/runtime/devices/device.js:61`:
+
+```javascript
+} else if (data.type === DeviceEnum.ModbusRTU || data.type === DeviceEnum.ModbusTCP) {
+    if (!MODBUSclient) { return null; }
+    comm = MODBUSclient.create(data, logger, events, manager, runtime);
+```
+
+FUXA uses TWO different enums for `type`:
+- `/api/plugins` reports the family: `"Modbus"`.
+- `device.type` in project.json needs the transport-specific value: `"ModbusTCP"` or `"ModbusRTU"`.
+
+My earlier amendment (2) had inferred both from `/api/plugins` and reduced everything to `"Modbus"` — which caused the factory's if-chain to fall through with no branch matching. Silent failure (return `false` at index.js:169 → "plugin is missing!" WARN). The *original* `"ModbusTCP"` from my very first draft was actually correct all along; the real bug was only the missing npm package. Reverted `type` to `"ModbusTCP"` and updated bootstrap `EXPECTED_DEVICE_TYPE` accordingly.
+
+Root-cause tree, for future me:
+- "plugin is missing!" at `devices/index.js:169` fires when `Device.create()` returns `null` or an object without `.start`.
+- `Device.create()` returns `null` for TWO different reasons that look identical:
+  1. Type not matching any if-branch (my amendment 2 hit this).
+  2. Type matches but the sub-driver import (`require('./modbus')`) returned falsy at server load time — because a *transitive* dependency (`modbus-serial`) is not installed. (My original state hit this.)
+- Distinguish by: query `/api/plugins`. If your `type` isn't listed there as an entry's `type`, you're in case (1) — fix the type. If it IS listed with `"current": ""`, you're in case (2) — install the npm dep for that plugin's `module`.
+
 ---
 
 ## 2026-07-16 · gap · roles/fuel_plc/tasks/main.yml — OpenPLC container comes up with no program loaded (Modbus :502 dead)
