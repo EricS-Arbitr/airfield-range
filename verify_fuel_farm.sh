@@ -333,16 +333,16 @@ check_sh fuel-hist \
   'code=200' \
   "fuel-hist Grafana /api/health returns 200"
 
-# Bucket existence via server-side --name filter. If the bucket exists,
-# --name matches ONE record and the CLI prints a table row containing
-# "fuel" (regardless of tab/space alignment). If not, it prints only the
-# header row (no "fuel" anywhere). `grep -qw fuel` is safe because the
-# CLI wouldn't have any other reason to mention the word "fuel" in its
-# own output. No quote-nesting through ansible, no --json parsing, no
-# tab-separator gymnastics. If this still misfires, the underlying
-# `docker exec` is failing silently and we need to look at that instead.
+# Bucket existence via server-side --name filter. `sudo` is required
+# because check_sh doesn't `-b` and the simspace ansible user gets
+# "permission denied while trying to connect to the docker API at
+# unix:///var/run/docker.sock" without it. (`docker ps` in the other
+# fuel-hist checks happens to work for reasons that don't reproduce
+# with `docker exec` -- unclear, but sudo makes both work uniformly.)
+# `grep -qw fuel` is safe because the CLI wouldn't have any other
+# reason to mention the word "fuel" in its own output.
 check_sh fuel-hist \
-  "docker exec influxdb influx bucket list --name fuel --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 2>&1 | grep -qw fuel && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
+  "sudo docker exec influxdb influx bucket list --name fuel --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 2>&1 | grep -qw fuel && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
   'BUCKET_PRESENT' \
   "fuel-hist InfluxDB 'fuel' bucket exists"
 
