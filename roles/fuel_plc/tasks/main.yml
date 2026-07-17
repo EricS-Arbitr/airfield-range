@@ -1,15 +1,23 @@
 ---
-# fuel_plc — OpenPLC v4 runtime as a Docker container on ff-plc-1.
-# Serves the SCADA-bus Modbus TCP image on :502 (per §4 register map)
-# and the OpenPLC Editor web UI on :8080. The role uploads the compiled
-# ST program (files/fuel_farm.st) and rotates the default openplc/openplc
-# creds to the vault-stored password.
+# fuel_plc — OpenPLC v3 runtime as a Docker container on ff-plc-1.
+# Serves the SCADA-bus Modbus TCP image on :502 (per §4 register map) and
+# the OpenPLC web UI on :8080. This role also uploads the compiled ST
+# program (files/fuel_farm.st) via the web API and starts the runtime so
+# :502 opens without any manual web-UI clicks.
+#
+# fdamador/openplc image note: openplc.db lives inside the container at
+# /workdir/webserver/openplc.db and is NOT persisted by the current
+# volume mounts. That's intentional -- every deploy re-uploads the ST via
+# the bootstrap script, which is idempotent (no-op if runtime is already
+# Running with our program) and gives us a deterministic state across
+# range resets. Persistence tuning is a follow-up.
 
-- name: Install docker + python bindings
+- name: Install docker + python bindings + requests (for bootstrap script)
   ansible.builtin.apt:
     name:
       - docker.io
       - python3-docker
+      - python3-requests
     state: present
     update_cache: yes
 
@@ -27,13 +35,20 @@
   loop:
     - /opt/openplc/etc
     - /opt/openplc/programs
+    - /opt/openplc/bin
 
-- name: Upload ST program (author in OpenPLC Editor, drop into files/)
+- name: Upload ST program (SCADA-bus register map matches group_vars/fuel.yml)
   ansible.builtin.copy:
     src: fuel_farm.st
     dest: /opt/openplc/programs/fuel_farm.st
     mode: '0644'
   register: st_program
+
+- name: Deploy OpenPLC bootstrap script
+  ansible.builtin.copy:
+    src: openplc_bootstrap.py
+    dest: /opt/openplc/bin/openplc_bootstrap.py
+    mode: '0755'
 
 # See build sheet §4: interlocks, coil/discrete/register map, and the
 # SCADA-bus Modbus TCP server on 502. Bind port 502 to the production
@@ -70,26 +85,28 @@
     port: "{{ openplc_web_port }}"
     timeout: 60
 
-# Rotating the default openplc/openplc creds via the web API needs a
-# session cookie login. Left as a follow-up task: use ansible.builtin.uri
-# with a form-encoded POST to /login, then PUT /settings to change the
-# admin password. In the meantime, the OPENPLC_ADMIN_PASSWORD env we set
-# above is honored on FIRST container start by the runtime image; if the
-# image was already initialized with defaults, the env is ignored and we
-# need the API dance.  TODO: implement rotate_admin_creds.yml.
-- name: TODO — implement default-cred rotation via web API
-  ansible.builtin.debug:
-    msg: >-
-      OpenPLC admin creds seeded via container env on first start. If this
-      image was previously initialized, rotate manually or extend this role
-      with rotate_admin_creds.yml (see UPSTREAM_FIXES notes).
+# Cred rotation policy: the fdamador image reads OPENPLC_ADMIN_USER /
+# _PASSWORD from env on FIRST boot only, seeding openplc.db. Because the
+# DB isn't persisted here (see role header), every container start is a
+# "first boot" -- so the vault-supplied creds are always applied. If we
+# later add DB persistence, this role needs a rotate_admin_creds step
+# that POSTs to /change_password. Tracked in UPSTREAM_FIXES.md.
 
-# Upload the compiled ST program to the runtime. OpenPLC's web UI has a
-# /programs endpoint accepting a multipart form. Left as follow-up: the
-# uri module can POST it after login. For initial builds the operator can
-# upload via the browser once; subsequent runs pick up any edits via the
-# bind-mounted /opt/openplc/programs.
-- name: Note ST program placement (upload via web UI on first run)
-  ansible.builtin.debug:
-    msg: "ST program at /opt/openplc/programs/fuel_farm.st -- upload via OpenPLC web UI /programs on first deploy."
-  when: st_program.changed
+# Idempotent upload: bootstrap script exits 0 without touching state if
+# the runtime is already Running with our program. On changes to
+# fuel_farm.st (st_program.changed), we still run it, and it will
+# stop-runtime -> upload-fresh -> start. Runs on the target host itself
+# so it talks to the loopback-ish {{ fuel_plc_ip }}:8080 without going
+# through mgmt-plane proxy.
+- name: Bootstrap OpenPLC (upload ST + start runtime, idempotent)
+  ansible.builtin.command:
+    argv:
+      - /opt/openplc/bin/openplc_bootstrap.py
+      - --host={{ fuel_plc_ip }}
+      - --port={{ openplc_web_port }}
+      - --user={{ openplc_admin_user }}
+      - --password={{ openplc_admin_password }}
+      - --program-name=fuel_farm
+      - --program-file=/opt/openplc/programs/fuel_farm.st
+  register: bootstrap_result
+  changed_when: "'no change' not in bootstrap_result.stdout"

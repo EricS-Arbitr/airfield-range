@@ -16,6 +16,25 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-16 · gap · roles/fuel_plc/tasks/main.yml — OpenPLC container comes up with no program loaded (Modbus :502 dead)
+
+**Symptom.** After `fuel_plc` deploys, verify shows `ff-plc-1 OpenPLC container running` green and `ff-plc-1 OpenPLC web :8080` green, but `Modbus :502` refuses TCP indefinitely. The container is happy, the web UI works, and `/opt/openplc/programs/fuel_farm.st` is present in the bind mount — but nothing binds :502 because the OpenPLC runtime hasn't been told what program to run.
+
+**Why the manual step was there.** `fdamador/openplc` (v3 fork) needs a web-UI upload + `/start_plc` to activate a program — merely dropping the .st file into a bind mount doesn't register it in `openplc.db`. The role's original stopgap was a `debug` task printing "upload via web UI on first deploy", which broke the range's promise of full idempotent redeploys.
+
+**Fix (overlay).** New Python helper `roles/fuel_plc/files/openplc_bootstrap.py` runs on the target after container start:
+
+1. GET /dashboard → if runtime is Running with our program, exit 0 (idempotent).
+2. Otherwise: `/stop_plc` → multipart POST `/upload-program` (.st file) → scrape `prog_file` hidden input from response → POST `/upload-program-action` (metadata) → GET `/compile-program?file=…` (drain the streaming matiec log) → GET `/start_plc` → poll `/dashboard` until Running (60s timeout).
+
+Also adds `python3-requests` to the apt install for the target, and creates `/opt/openplc/bin/` for the script. The main.yml task's `changed_when` fires only when the bootstrap actually mutated state (script prints `no change` on idempotent runs).
+
+**Verify coverage.** Old `ff-plc-1 Modbus :502 accepting TCP (needs program uploaded via web UI)` label reworded (no longer needs a hint), and a new stricter probe added: fuel-farm-sim's pymodbus reads HR 0 (`LR1_PRESET_GAL`) from ff-plc-1 → if that succeeds, the program is loaded, the addresses are mapped, and the SCADA-bus is truly usable.
+
+**Follow-up (not blocking).** Container's `openplc.db` isn't persisted — the current bind mounts (`/workdir/etc`, `/workdir/programs`) don't cover the DB path (`/workdir/webserver/openplc.db`). Every container restart re-runs the bootstrap (idempotent, cheap), which is fine for CI/reset semantics but means the OpenPLC admin creds env is re-applied every restart. If persistence is added later, this role needs a real `/change_password` rotation call.
+
+---
+
 ## 2026-07-16 · bug · roles/fuel_sim/templates/fuelsim.service.j2 — service can't bind Modbus :502 as unprivileged user
 
 **Symptom.** After fuelsim.service is enabled and running, `verify_fuel_farm.sh` shows fuel-farm-sim :502 `MODBUS_REFUSED` and `ss -tlnp | grep :502` returns nothing. `journalctl -u fuelsim` reveals:

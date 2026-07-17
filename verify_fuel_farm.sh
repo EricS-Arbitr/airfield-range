@@ -259,17 +259,14 @@ check_sh ff-plc-1 \
   "ff-plc-1 OpenPLC container running"
 
 # OpenPLC container publishes ports to the prod-NIC IP (172.16.45.10) only,
-# not 0.0.0.0 or 127.0.0.1. Check against that IP directly.
-# NOTE: OpenPLC does NOT bind Modbus :502 until you upload + start a
-# program via the web UI. `/opt/openplc/programs/fuel_farm.st` is bind-
-# mounted into the container but the runtime needs a POST to the web API
-# to activate it. Expected-fail until the role gains an API-driven upload
-# (fuel_plc/tasks/main.yml TODO). Manual: log in to :8080 as openplc/openplc,
-# Programs -> upload fuel_farm.st, Runtime -> start.
+# not 0.0.0.0 or 127.0.0.1. Check against that IP directly. After the
+# fuel_plc role's openplc_bootstrap.py runs (upload fuel_farm.st, compile,
+# /start_plc), the runtime opens :502 and serves the SCADA-bus register
+# image defined by the .st program.
 check_sh ff-plc-1 \
   "timeout 2 bash -c 'echo > /dev/tcp/172.16.45.10/502' 2>/dev/null && echo MODBUS_ACCEPTS || echo MODBUS_REFUSED" \
   'MODBUS_ACCEPTS' \
-  "ff-plc-1 Modbus :502 accepting TCP (needs program uploaded via web UI)"
+  "ff-plc-1 SCADA-bus Modbus :502 accepting TCP"
 
 check_sh ff-plc-1 \
   "timeout 2 bash -c 'echo > /dev/tcp/172.16.45.10/8080' 2>/dev/null && echo WEB_ACCEPTS || echo WEB_REFUSED" \
@@ -280,6 +277,28 @@ check_sh ff-plc-1 \
   "curl -sS -o /dev/null -w 'code=%{http_code}\n' --max-time 5 http://172.16.45.10:8080/" \
   'code=(200|302|401)' \
   "ff-plc-1 OpenPLC web :8080 returns HTTP 200/302/401"
+
+# Cross-plane Modbus round-trip: fuel-farm-sim already has pymodbus in its
+# venv, and sits one hop from ff-plc-1 via bs-modbus-gateway. Reading HR 0
+# (LR1_PRESET_GAL) proves three things at once:
+#   - :502 is bound (implicit from a successful TCP connect)
+#   - a program is loaded (raw connect works, but read returns Modbus
+#     "illegal function" if no program's mapped anything)
+#   - the register map matches group_vars/fuel.yml
+# This is stricter than the local TCP-only check above, and catches the
+# "container up but no program loaded" state without requiring an HTTP
+# dashboard scrape.
+check_sh fuel-farm-sim \
+  "/opt/fuelsim/venv/bin/python -c \"
+from pymodbus.client import ModbusTcpClient as C
+c = C('172.16.45.10', port=502, timeout=5)
+if not c.connect(): print('CONNECT_FAILED'); exit()
+r = c.read_holding_registers(address=0, count=1, slave=1)
+c.close()
+print('READ_OK' if not r.isError() else 'READ_ERROR:' + str(r))
+\"" \
+  'READ_OK' \
+  "ff-plc-1 Modbus HR 0 (LR1_PRESET_GAL) readable from fuel-farm-sim"
 
 # =========================================================================
 # 6. fuel-hist — Telegraf + InfluxDB 2.7 + Grafana
