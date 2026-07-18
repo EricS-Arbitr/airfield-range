@@ -96,23 +96,28 @@
         "svgcontent": {{ lookup('file', 'svg_process_overview.svg') | tojson }},
         "items": {
 {% set items_overview = [] %}
-{#   Bind each _txt SVG text element to the corresponding Modbus tag via svg-ext-value #}
+{# Bind each VAL_<tag> SVG group to the corresponding Modbus tag via
+   svg-ext-value. The SVG element itself carries type="svg-ext-value"
+   (matches FUXA's element-attribute-first widget-type detection at
+   getInTreeIdAndType). The property.ranges array carries a single
+   "unit" entry -- the demo project uses this for the unit suffix
+   (e.g. "l" for liters). #}
 {% for pair in [
-    ('T101_LEVEL_txt', 'T101_LEVEL', 'T-101 Level %'),
-    ('T102_LEVEL_txt', 'T102_LEVEL', 'T-102 Level %'),
-    ('T103_LEVEL_txt', 'T103_LEVEL', 'T-103 Level %'),
-    ('T101_TEMP_txt', 'T101_TEMP', 'T-101 Temp F'),
-    ('HEADER_PRESS_txt', 'HEADER_PRESS', 'Header Pressure psi'),
-    ('LR1_ACTIVE_TRUCK_txt', 'LR1_ACTIVE_TRUCK', 'LR-1 Active Truck'),
-    ('LR1_SRC_TANK_txt', 'LR1_SRC_TANK', 'LR-1 Source Tank'),
-    ('LR1_PRESET_GAL_txt', 'LR1_PRESET_GAL', 'LR-1 Preset Gal'),
-    ('LR1_FLOW_txt', 'LR1_FLOW', 'LR-1 Flow gpm'),
-    ('LR2_ACTIVE_TRUCK_txt', 'LR2_ACTIVE_TRUCK', 'LR-2 Active Truck'),
-    ('LR2_SRC_TANK_txt', 'LR2_SRC_TANK', 'LR-2 Source Tank'),
-    ('LR2_PRESET_GAL_txt', 'LR2_PRESET_GAL', 'LR-2 Preset Gal'),
-    ('LR2_FLOW_txt', 'LR2_FLOW', 'LR-2 Flow gpm'),
+    ('VAL_T101_LEVEL',       'T101_LEVEL',       'T-101 Level %',       0, 100, '%'),
+    ('VAL_T102_LEVEL',       'T102_LEVEL',       'T-102 Level %',       0, 100, '%'),
+    ('VAL_T103_LEVEL',       'T103_LEVEL',       'T-103 Level %',       0, 100, '%'),
+    ('VAL_T101_TEMP',        'T101_TEMP',        'T-101 Temp F',        0, 200, 'F'),
+    ('VAL_HEADER_PRESS',     'HEADER_PRESS',     'Header Pressure psi', 0, 100, 'psi'),
+    ('VAL_LR1_ACTIVE_TRUCK', 'LR1_ACTIVE_TRUCK', 'LR-1 Active Truck',   0, 99, ''),
+    ('VAL_LR1_SRC_TANK',     'LR1_SRC_TANK',     'LR-1 Source Tank',    0, 9, ''),
+    ('VAL_LR1_PRESET_GAL',   'LR1_PRESET_GAL',   'LR-1 Preset Gal',     0, 30000, 'gal'),
+    ('VAL_LR1_FLOW',         'LR1_FLOW',         'LR-1 Flow gpm',       0, 1000, 'gpm'),
+    ('VAL_LR2_ACTIVE_TRUCK', 'LR2_ACTIVE_TRUCK', 'LR-2 Active Truck',   0, 99, ''),
+    ('VAL_LR2_SRC_TANK',     'LR2_SRC_TANK',     'LR-2 Source Tank',    0, 9, ''),
+    ('VAL_LR2_PRESET_GAL',   'LR2_PRESET_GAL',   'LR-2 Preset Gal',     0, 30000, 'gal'),
+    ('VAL_LR2_FLOW',         'LR2_FLOW',         'LR-2 Flow gpm',       0, 1000, 'gpm'),
 ] %}
-{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-text","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","events":[],"actions":[],"ranges":[]},"label":"Value"}') %}
+{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-value","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","alarmId":"","alarmSrc":"","alarm":"","alarmColor":"","events":[],"actions":[],"ranges":[{"type":"unit","min":' ~ pair[3] ~ ',"max":' ~ pair[4] ~ ',"color":"","stroke":"","text":"' ~ pair[5] ~ '"}]},"label":"Value"}') %}
 {% endfor %}
 {# Status dots -- FUXA can flip fill color via svg-ext-shape actions on boolean tags #}
 {% for pair in [
@@ -146,18 +151,18 @@
         "items": {
 {% set items_detail = [] %}
 {% for pair in [
-    ('LR1D_ACTIVE_TRUCK_txt', 'LR1_ACTIVE_TRUCK', 'LR-1 Active Truck'),
-    ('LR1D_SRC_TANK_txt', 'LR1_SRC_TANK', 'LR-1 Source Tank'),
-    ('LR1D_PRESET_GAL_txt', 'LR1_PRESET_GAL', 'LR-1 Preset Gal'),
-    ('LR1D_METER_txt', 'LR1_METER_LO', 'LR-1 Meter (low word only)'),
-    ('LR1D_FLOW_txt', 'LR1_FLOW', 'LR-1 Flow gpm'),
-    ('LR2D_ACTIVE_TRUCK_txt', 'LR2_ACTIVE_TRUCK', 'LR-2 Active Truck'),
-    ('LR2D_SRC_TANK_txt', 'LR2_SRC_TANK', 'LR-2 Source Tank'),
-    ('LR2D_PRESET_GAL_txt', 'LR2_PRESET_GAL', 'LR-2 Preset Gal'),
-    ('LR2D_METER_txt', 'LR2_METER_LO', 'LR-2 Meter (low word only)'),
-    ('LR2D_FLOW_txt', 'LR2_FLOW', 'LR-2 Flow gpm'),
+    ('VAL_LR1D_ACTIVE_TRUCK', 'LR1_ACTIVE_TRUCK', 'LR-1 Active Truck',   0, 99, ''),
+    ('VAL_LR1D_SRC_TANK',     'LR1_SRC_TANK',     'LR-1 Source Tank',    0, 9, ''),
+    ('VAL_LR1D_PRESET_GAL',   'LR1_PRESET_GAL',   'LR-1 Preset Gal',     0, 30000, 'gal'),
+    ('VAL_LR1D_METER',        'LR1_METER_LO',     'LR-1 Meter low word', 0, 65535, 'gal'),
+    ('VAL_LR1D_FLOW',         'LR1_FLOW',         'LR-1 Flow gpm',       0, 1000, 'gpm'),
+    ('VAL_LR2D_ACTIVE_TRUCK', 'LR2_ACTIVE_TRUCK', 'LR-2 Active Truck',   0, 99, ''),
+    ('VAL_LR2D_SRC_TANK',     'LR2_SRC_TANK',     'LR-2 Source Tank',    0, 9, ''),
+    ('VAL_LR2D_PRESET_GAL',   'LR2_PRESET_GAL',   'LR-2 Preset Gal',     0, 30000, 'gal'),
+    ('VAL_LR2D_METER',        'LR2_METER_LO',     'LR-2 Meter low word', 0, 65535, 'gal'),
+    ('VAL_LR2D_FLOW',         'LR2_FLOW',         'LR-2 Flow gpm',       0, 1000, 'gpm'),
 ] %}
-{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-text","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","events":[],"actions":[],"ranges":[]},"label":"Value"}') %}
+{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-value","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","alarmId":"","alarmSrc":"","alarm":"","alarmColor":"","events":[],"actions":[],"ranges":[{"type":"unit","min":' ~ pair[3] ~ ',"max":' ~ pair[4] ~ ',"color":"","stroke":"","text":"' ~ pair[5] ~ '"}]},"label":"Value"}') %}
 {% endfor %}
 {% for pair in [
     ('LR1D_GROUND_OK_dot', 'LR1_GROUND_OK'),
