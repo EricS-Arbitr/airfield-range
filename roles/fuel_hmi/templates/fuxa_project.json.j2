@@ -112,7 +112,7 @@
     ('LR2_PRESET_GAL_txt', 'LR2_PRESET_GAL', 'LR-2 Preset Gal'),
     ('LR2_FLOW_txt', 'LR2_FLOW', 'LR-2 Flow gpm'),
 ] %}
-{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-value","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","events":[],"actions":[],"ranges":[]},"label":"Value"}') %}
+{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-text","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","events":[],"actions":[],"ranges":[]},"label":"Value"}') %}
 {% endfor %}
 {# Status dots -- FUXA can flip fill color via svg-ext-shape actions on boolean tags #}
 {% for pair in [
@@ -127,12 +127,13 @@
     ('LR2_OVERFILL_dot', 'LR2_OVERFILL'),
     ('P202_RUN_CMD_dot', 'P202_RUN_CMD'),
 ] %}
-{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shape","name":"' ~ pair[1] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","events":[],"actions":[{"type":"clockwise","range":{"min":1,"max":1},"color":"#2c8f3f"}],"ranges":[]},"label":"Shape"}') %}
+{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-circle","name":"' ~ pair[1] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","events":[],"actions":[{"type":"clockwise","range":{"min":1,"max":1},"color":"#2c8f3f"}],"ranges":[]},"label":"Shape"}') %}
 {% endfor %}
 {# ESD banner turns red when ESD_ACTIVE=1 #}
-{% set _ = items_overview.append('"esd_banner_rect": {"id":"esd_banner_rect","type":"svg-ext-shape","name":"ESD Banner","property":{"variable":"ESD_ACTIVE","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^ESD_ACTIVE","events":[],"actions":[{"type":"clockwise","range":{"min":1,"max":1},"color":"#c62828"}],"ranges":[]},"label":"Shape"}') %}
-{# Nav button to Rack Detail view #}
-{% set _ = items_overview.append('"nav_rack_detail_btn": {"id":"nav_rack_detail_btn","type":"svg-ext-button","name":"Nav to Detail","property":{"events":[{"type":"click","action":"onSetView","actparam":"v_rack_detail"}],"actions":[],"ranges":[]},"label":"Button"}') %}
+{% set _ = items_overview.append('"esd_banner_rect": {"id":"esd_banner_rect","type":"svg-ext-shapes-rect","name":"ESD Banner","property":{"variable":"ESD_ACTIVE","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^ESD_ACTIVE","events":[],"actions":[{"type":"clockwise","range":{"min":1,"max":1},"color":"#c62828"}],"ranges":[]},"label":"Shape"}') %}
+{# Nav button to Rack Detail view -- svg-ext-shapes-rect matches the <rect>
+   element's auto-derived type; the click event still fires via property.events. #}
+{% set _ = items_overview.append('"nav_rack_detail_btn": {"id":"nav_rack_detail_btn","type":"svg-ext-shapes-rect","name":"Nav to Detail","property":{"events":[{"type":"click","action":"onSetView","actparam":"v_rack_detail"}],"actions":[],"ranges":[]},"label":"Button"}') %}
           {{ items_overview | join(',\n          ') }}
         }
       },
@@ -156,7 +157,7 @@
     ('LR2D_METER_txt', 'LR2_METER_LO', 'LR-2 Meter (low word only)'),
     ('LR2D_FLOW_txt', 'LR2_FLOW', 'LR-2 Flow gpm'),
 ] %}
-{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-value","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","events":[],"actions":[],"ranges":[]},"label":"Value"}') %}
+{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-text","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","events":[],"actions":[],"ranges":[]},"label":"Value"}') %}
 {% endfor %}
 {% for pair in [
     ('LR1D_GROUND_OK_dot', 'LR1_GROUND_OK'),
@@ -171,9 +172,9 @@
     ('LR2D_ESD_dot', 'ESD_ACTIVE'),
 ] %}
 {%   set color = '#c62828' if 'OVERFILL' in pair[1] or 'ESD' in pair[1] else '#2c8f3f' %}
-{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shape","name":"' ~ pair[1] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","events":[],"actions":[{"type":"clockwise","range":{"min":1,"max":1},"color":"' ~ color ~ '"}],"ranges":[]},"label":"Shape"}') %}
+{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-circle","name":"' ~ pair[1] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","events":[],"actions":[{"type":"clockwise","range":{"min":1,"max":1},"color":"' ~ color ~ '"}],"ranges":[]},"label":"Shape"}') %}
 {% endfor %}
-{% set _ = items_detail.append('"navD_overview_btn": {"id":"navD_overview_btn","type":"svg-ext-button","name":"Nav to Overview","property":{"events":[{"type":"click","action":"onSetView","actparam":"v_process_overview"}],"actions":[],"ranges":[]},"label":"Button"}') %}
+{% set _ = items_detail.append('"navD_overview_btn": {"id":"navD_overview_btn","type":"svg-ext-shapes-rect","name":"Nav to Overview","property":{"events":[{"type":"click","action":"onSetView","actparam":"v_process_overview"}],"actions":[],"ranges":[]},"label":"Button"}') %}
           {{ items_detail | join(',\n          ') }}
         }
       }
