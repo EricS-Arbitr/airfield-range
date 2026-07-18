@@ -346,13 +346,16 @@ check_sh fuel-hist \
   'BUCKET_PRESENT' \
   "fuel-hist InfluxDB 'fuel' bucket exists"
 
-# Telegraf actually writing data? Query for the last 60s of any 'fuel'
-# measurement -- if the count is > 0, Telegraf is polling ff-plc-1 and
-# InfluxDB is accepting writes.
+# Telegraf actually writing data? Query for the last 60s of the
+# 'modbus' measurement (Telegraf's Modbus plugin uses the measurement
+# name "modbus" by default -- the "name" field in [[inputs.modbus]]
+# becomes a TAG on each series, not the measurement name). If any
+# sample lands, Telegraf is polling ff-plc-1 and InfluxDB is accepting
+# writes.
 check_sh fuel-hist \
-  "sudo docker exec influxdb influx query --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 'from(bucket:\"fuel\") |> range(start: -60s) |> filter(fn:(r) => r._measurement == \"fuel\") |> count() |> yield()' 2>&1 | grep -E '^\s*fuel\s+' | awk '{print \$NF}' | head -1 | grep -qE '^[1-9][0-9]*$' && echo DATA_FLOWING || echo NO_RECENT_DATA" \
+  "sudo docker exec influxdb influx query --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 'from(bucket:\"fuel\") |> range(start: -60s) |> filter(fn:(r) => r._measurement == \"modbus\") |> count() |> limit(n:1)' 2>&1 | grep -qE 'Table:.*_result|_value' && echo DATA_FLOWING || echo NO_RECENT_DATA" \
   'DATA_FLOWING' \
-  "fuel-hist Telegraf writing to InfluxDB (recent samples in 'fuel' bucket)"
+  "fuel-hist Telegraf writing to InfluxDB (recent 'modbus' samples in 'fuel' bucket)"
 
 # Grafana provisioned datasources? Check via API. Needs auth -- use the
 # basic auth path with the admin creds.
