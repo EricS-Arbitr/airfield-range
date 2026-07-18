@@ -115,7 +115,7 @@
 # our device + both views are already present, and only POSTs if they're
 # missing or mismatched. Falls back to auth via /api/signin if the
 # unauth GET returns 401.
-- name: Bootstrap FUXA project (import via /api/project, idempotent)
+- name: Bootstrap FUXA project (import via /api/project)
   ansible.builtin.command:
     argv:
       - /opt/fuxa/bin/fuxa_bootstrap.py
@@ -124,5 +124,10 @@
       - --user={{ fuxa_admin_user }}
       - --password={{ fuxa_admin_password }}
       - --project-file=/opt/fuxa/projects/fuel_farm.json
+      # --force bypasses the shallow "same device name + same view IDs"
+      # idempotency check so intra-project schema changes (tag memaddress
+      # format, item widget types, SVG content) always propagate. We
+      # re-post about ~40 KB of JSON per deploy -- cheap.
+      - --force
   register: fuxa_bootstrap_result
   changed_when: "'no change' not in fuxa_bootstrap_result.stdout"

@@ -45,8 +45,19 @@
       },
       "tags": {
 {% set tag_rows = [] %}
+{# FUXA driver bug workaround: for coils, memaddress must be the STRING
+   "000000" (six zeros), not the numeric 0. The main tag loop keys memory
+   with formatAddress(memaddress, token) = `${token}-${memaddress}`. For
+   numeric 0 that yields "0-0", but the fragmented-loop's getMemoryAddress
+   returns formatAddress('000000', token) = "0-000000" for coils
+   specifically (driver hardcodes the string). Mismatched keys ->
+   memory[lookup] undefined -> "Cannot read properties of undefined
+   (reading 'Items')" fires once per coil. Using the string "000000"
+   makes both code paths agree. DIs/IRs/HRs don't hit this because their
+   constants (100000/300000/400000) go through formatAddress directly
+   both times. #}
 {% for c in fuel_modbus_coils %}
-{%   set _ = tag_rows.append('"' ~ c.tag ~ '": {"id":"' ~ c.tag ~ '","name":"' ~ c.tag ~ '","type":"Bool","address":' ~ (c.addr + 1) ~ ',"memaddress":0}') %}
+{%   set _ = tag_rows.append('"' ~ c.tag ~ '": {"id":"' ~ c.tag ~ '","name":"' ~ c.tag ~ '","type":"Bool","address":' ~ (c.addr + 1) ~ ',"memaddress":"000000"}') %}
 {% endfor %}
 {% for d in fuel_modbus_discrete_inputs %}
 {%   set _ = tag_rows.append('"' ~ d.tag ~ '": {"id":"' ~ d.tag ~ '","name":"' ~ d.tag ~ '","type":"Bool","address":' ~ (d.addr + 1) ~ ',"memaddress":100000}') %}

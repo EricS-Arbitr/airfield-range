@@ -147,6 +147,16 @@ def main() -> int:
     ap.add_argument("--user", required=True)
     ap.add_argument("--password", required=True)
     ap.add_argument("--project-file", required=True, help="Path to the JSON on the target")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Bypass idempotency check and always POST. Use when the schema "
+            "changed inside the project (tag memaddress format, item widget "
+            "type, etc.) without changing device/view names -- the shallow "
+            "idempotency check can't detect those and would skip the upload."
+        ),
+    )
     args = ap.parse_args()
 
     base = f"http://{args.host}:{args.port}"
@@ -167,9 +177,11 @@ def main() -> int:
             )
         current = get_current_project(base, token)
 
-    if project_matches(current or {}, target_project):
+    if not args.force and project_matches(current or {}, target_project):
         print("OK: FUXA already has fuel_farm project loaded -- no change")
         return 0
+    if args.force:
+        print("--force set -- bypassing idempotency check, uploading fresh")
 
     print("FUXA project mismatch or empty -- uploading fuel_farm project")
     post_project(base, token, target_project)

@@ -63,6 +63,15 @@ Root-cause tree, for future me:
   2. Type matches but the sub-driver import (`require('./modbus')`) returned falsy at server load time — because a *transitive* dependency (`modbus-serial`) is not installed. (My original state hit this.)
 - Distinguish by: query `/api/plugins`. If your `type` isn't listed there as an entry's `type`, you're in case (1) — fix the type. If it IS listed with `"current": ""`, you're in case (2) — install the npm dep for that plugin's `module`.
 
+**Fifth amendment (2026-07-17, same day). FUXA driver bug: coil `memaddress` key-format mismatch between main tag loop and fragmented section.** With type corrected and modbus-serial installed, FUXA logged 10 `load error! TypeError: Cannot read properties of undefined (reading 'Items')` — exactly one per coil tag. Read `server/runtime/devices/modbus/index.js` lines 218 and 785-806:
+
+  - Main tag loop keys memory with `formatAddress(data.tags[id].memaddress, token)`. For `memaddress: 0` (my coils), this produces the string `"0-0"`.
+  - The fragmented-section calls `getMemoryAddress(lastStart, true, token)`. For addresses `< 100000` (i.e. coils), that function hardcodes `formatAddress('000000', token)` = `"0-000000"`.
+
+Same memory region, two different string keys — `memory["0-000000"]` is undefined, hence the `.Items` on undefined. Workaround in our template: emit `"memaddress": "000000"` (six-zero string) instead of `"memaddress": 0` for coils. `parseInt("000000")` still evaluates to 0 in the other places the driver reads memaddress numerically, and now both key computations produce the identical `"0-000000"`. DIs/IRs/HRs don't hit this because their constants (100000/300000/400000) are numeric on both code paths.
+
+Bootstrap's idempotency check compares device name + type + view IDs — it doesn't see intra-tag schema changes. Added `--force` flag to bypass the check and always POST, wired into the role. Re-POSTing ~40 KB of JSON per deploy is trivial and guarantees intra-project schema drift always reaches FUXA. Better long-term option is a content hash but not worth building until we have a reason.
+
 ---
 
 ## 2026-07-16 · gap · roles/fuel_plc/tasks/main.yml — OpenPLC container comes up with no program loaded (Modbus :502 dead)
