@@ -59,12 +59,25 @@
 {% for c in fuel_modbus_coils %}
 {%   set _ = tag_rows.append('"' ~ c.tag ~ '": {"id":"' ~ c.tag ~ '","name":"' ~ c.tag ~ '","type":"Bool","address":' ~ (c.addr + 1) ~ ',"memaddress":"000000","daq":{"enabled":true,"changed":true,"interval":60,"restored":false}}') %}
 {% endfor %}
+{# OpenPLC's slave-device polling doesn't overlay onto the ST program's
+   %IX0.0/%IW0 addresses. Instead it lands at %IX100.0+ (= Modbus DI 800+)
+   and %IW100+ (= Modbus IR 100+). See webserver.py:895 -- the "100 + counter"
+   offset is hard-coded. So even though fuel_farm.st declares
+   P201_RUN_STS AT %IX0.0 and T101_LEVEL AT %IW0, the values fuelsim is
+   polled for actually live at IX100.0 / IW100. FUXA needs to poll THOSE
+   addresses to see the live data.
+
+   Group vars fuel_modbus_discrete_inputs / _input_registers give the
+   "logical" address (0-10 / 0-10) matching the .st's %IX0.0 / %IW0 layout.
+   Here we translate to the wire-level Modbus address by adding the
+   slave-mapping base offset (+800 for DIs, +100 for IRs) and then +1 for
+   FUXA's 1-based address scheme. #}
 {% for d in fuel_modbus_discrete_inputs %}
-{%   set _ = tag_rows.append('"' ~ d.tag ~ '": {"id":"' ~ d.tag ~ '","name":"' ~ d.tag ~ '","type":"Bool","address":' ~ (d.addr + 1) ~ ',"memaddress":100000,"daq":{"enabled":true,"changed":true,"interval":60,"restored":false}}') %}
+{%   set _ = tag_rows.append('"' ~ d.tag ~ '": {"id":"' ~ d.tag ~ '","name":"' ~ d.tag ~ '","type":"Bool","address":' ~ (d.addr + 800 + 1) ~ ',"memaddress":100000,"daq":{"enabled":true,"changed":true,"interval":60,"restored":false}}') %}
 {% endfor %}
 {% for r in fuel_modbus_input_registers %}
 {%   set divisor = (1.0 / r.scale) | round(0, 'floor') | int %}
-{%   set _ = tag_rows.append('"' ~ r.tag ~ '": {"id":"' ~ r.tag ~ '","name":"' ~ r.tag ~ '","type":"Int16","address":' ~ (r.addr + 1) ~ ',"memaddress":300000,"divisor":' ~ divisor ~ ',"daq":{"enabled":true,"changed":true,"interval":10,"restored":false}}') %}
+{%   set _ = tag_rows.append('"' ~ r.tag ~ '": {"id":"' ~ r.tag ~ '","name":"' ~ r.tag ~ '","type":"Int16","address":' ~ (r.addr + 100 + 1) ~ ',"memaddress":300000,"divisor":' ~ divisor ~ ',"daq":{"enabled":true,"changed":true,"interval":10,"restored":false}}') %}
 {% endfor %}
 {% for h in fuel_modbus_holding_registers %}
 {%   set _ = tag_rows.append('"' ~ h.tag ~ '": {"id":"' ~ h.tag ~ '","name":"' ~ h.tag ~ '","type":"Int16","address":' ~ (h.addr + 1) ~ ',"memaddress":400000,"daq":{"enabled":true,"changed":true,"interval":10,"restored":false}}') %}
