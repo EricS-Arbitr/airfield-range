@@ -346,6 +346,27 @@ check_sh fuel-hist \
   'BUCKET_PRESENT' \
   "fuel-hist InfluxDB 'fuel' bucket exists"
 
+# Telegraf actually writing data? Query for the last 60s of any 'fuel'
+# measurement -- if the count is > 0, Telegraf is polling ff-plc-1 and
+# InfluxDB is accepting writes.
+check_sh fuel-hist \
+  "sudo docker exec influxdb influx query --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 'from(bucket:\"fuel\") |> range(start: -60s) |> filter(fn:(r) => r._measurement == \"fuel\") |> count() |> yield()' 2>&1 | grep -E '^\s*fuel\s+' | awk '{print \$NF}' | head -1 | grep -qE '^[1-9][0-9]*$' && echo DATA_FLOWING || echo NO_RECENT_DATA" \
+  'DATA_FLOWING' \
+  "fuel-hist Telegraf writing to InfluxDB (recent samples in 'fuel' bucket)"
+
+# Grafana provisioned datasources? Check via API. Needs auth -- use the
+# basic auth path with the admin creds.
+check_sh fuel-hist \
+  "curl -sS --max-time 5 -u admin:Simspace1!Simspace1! http://172.16.46.18:3000/api/datasources | grep -q 'InfluxDB-Fuel' && curl -sS --max-time 5 -u admin:Simspace1!Simspace1! http://172.16.46.18:3000/api/datasources | grep -q 'Postgres-FuelAudit' && echo DS_PROVISIONED || echo DS_MISSING" \
+  'DS_PROVISIONED' \
+  "fuel-hist Grafana datasources (InfluxDB + Postgres) provisioned"
+
+# Grafana loaded the fuel_operations dashboard? Check the search API.
+check_sh fuel-hist \
+  "curl -sS --max-time 5 -u admin:Simspace1!Simspace1! 'http://172.16.46.18:3000/api/search?query=Fuel+Operations' | grep -q 'fuel-operations' && echo DASHBOARD_LOADED || echo DASHBOARD_MISSING" \
+  'DASHBOARD_LOADED' \
+  "fuel-hist Grafana 'Fuel Operations' dashboard loaded (uid fuel-operations)"
+
 # =========================================================================
 # 7. control-room-hmi — FUXA
 # =========================================================================

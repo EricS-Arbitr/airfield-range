@@ -96,6 +96,37 @@ Form field → DB column mapping (learned from `/workdir/webserver/pages.py` and
 
 ---
 
+## 2026-07-17 · deferred · roles/fuel_hmi -- FUXA widget rendering: SVG layout renders, live-value bindings do not
+
+**Symptom.** Hand-authored FUXA project.json + SVG deploys cleanly, browser (from bs-eng05 → Firefox) shows the full Process Overview P&ID (three tank cylinders with fill bars, pump circles, loading rack panels, ESD banner, nav buttons). But every numeric readout stays at the placeholder `--` from the SVG. `svg-ext-shapes-text` items dict entries don't get their content updated from the bound tag values, even though the tag values ARE reaching FUXA (`daq-data_c39d....db` has live rows: T101_LEVEL=90, HEADER_PRESS=20, etc.).
+
+**Root cause.** Reading `client/dist/main.*.js` (`getInTreeIdAndType`): FUXA auto-derives a widget type per SVG element from its tagname (`svg-ext-shapes-text`, `svg-ext-shapes-circle`, etc.) when there's no explicit `type=` attribute. But grepping the client bundle for actual recognized widget types shows only base `svg-ext-shapes` + specialized types like `svg-ext-value`, `svg-ext-gauge_progress`, `svg-ext-html_input`. `svg-ext-shapes-text` isn't a real widget handler — it's a placeholder that renders the raw SVG without variable binding.
+
+The demo project's working value widgets (`VAL_...` IDs, `svg-ext-value` type) are compound `<g>` groups with a specific inner structure (background rect + inner text element + FUXA-editor-injected classes/attrs) that the client's `svg-ext-value` handler expects. A plain `<text>` element without that structure can't be adapted post-hoc via items-dict metadata alone.
+
+**Deferred workarounds (not implementing now, listed for the record):**
+1. Add `type="svg-ext-value"` attribute to each SVG element the items dict claims is a value widget. If FUXA's element-type-attribute path uses the same widget registry as its items-dict-type path, this might work with minimal effort. Not tested.
+2. Hand-author the compound widget structure — refactor SVGs so each value widget is a `<g id="VAL_..."><rect .../><text .../></g>` group matching what the FUXA editor generates. Higher-effort, requires copying the demo project's inner class/attr conventions.
+3. Use `svg-ext-html_input` in read-only mode instead of `svg-ext-value`. HTML input widgets have simpler DOM contracts and might bind more forgivingly.
+4. Skip hand-authoring: use FUXA's own web editor to build the P&ID once, export the resulting `.fuxap`, commit as `files/fuel_farm.fuxap` and have the bootstrap POST that verbatim. Loses templatability from group_vars but sidesteps every schema quirk.
+
+**Why deferred.** The SVG *layout* is validated and looks like a real OT operator screen. The complete OpenPLC → SCADA-bus → FUXA → DAQ data chain is proven with real values landing in Grafana-compatible storage (SQLite). §5 Grafana dashboards give the same "operator sees live values" milestone through a much better-documented and less-adversarial tool. FUXA widget rendering can come back later as polish.
+
+---
+
+## 2026-07-17 · bug · roles/fuel_historian/templates/telegraf.conf.j2 -- multiple `coils = [...]` blocks in Jinja loop = invalid TOML (only last one survives) + missing slave-mapped address offsets
+
+**Symptom.** After the fuel_historian role runs, Grafana panels bound to InfluxDB tags stay empty. Telegraf appears to be running (`systemctl status telegraf` shows active) but InfluxDB's `fuel` bucket has few or wrong-address writes.
+
+**Root causes (two, discovered together).**
+
+1. Old template's `{% for c in fuel_modbus_coils %}coils = [...]` pattern emits one `coils = [{...}]` block PER TAG. TOML is happy to parse each, but each subsequent block *replaces* the prior on the same key. Net result: only the last tag's entry survives per category. Same bug for `discrete_inputs`, `input_registers`, `holding_registers`. Grafana panels bound to any but the last register in each category see no data.
+2. The addresses were the "logical" ones from `group_vars/fuel.yml` (0-9 for coils, 0-10 for DIs, etc.) matching what our .st program declares locally. But now that OpenPLC is configured as a Modbus master polling fuel-farm-sim (post-2026-07-17 fuel_plc slave-device fix), the slave-polled data lands at Modbus DI 800+ / IR 100+ on ff-plc-1, not at DI 0+ / IR 0+. Telegraf reading DI 0+/IR 0+ gets zeros. This mirrors the FUXA fix from the same day (`d.addr + 800` / `r.addr + 100` shifts).
+
+**Fix.** Rewrote the template to emit ONE array per register category with tags joined inline. Applied the +800 shift to DI addresses and +100 to IR addresses. Coils and Holding Registers stay at 0-based direct addresses because those are OpenPLC's own ST-program-set values (fuelsim's own coils/HRs aren't mirrored by design; the state_machine owns them). One-liner comment in the template explains the address-space translation for future maintainers.
+
+---
+
 ## 2026-07-16 · gap · roles/fuel_plc/tasks/main.yml — OpenPLC container comes up with no program loaded (Modbus :502 dead)
 
 **Symptom.** After `fuel_plc` deploys, verify shows `ff-plc-1 OpenPLC container running` green and `ff-plc-1 OpenPLC web :8080` green, but `Modbus :502` refuses TCP indefinitely. The container is happy, the web UI works, and `/opt/openplc/programs/fuel_farm.st` is present in the bind mount — but nothing binds :502 because the OpenPLC runtime hasn't been told what program to run.

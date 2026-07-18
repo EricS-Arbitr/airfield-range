@@ -1,5 +1,23 @@
 # Ansible managed. Polls ff-plc-1's SCADA-bus Modbus TCP server per §4
 # register map; writes into InfluxDB 2.7 bucket `fuel`.
+#
+# Modbus address translation (matches fuel_hmi/FUXA):
+#  * Coils / Holding Registers are OpenPLC's OWN ST-program variables
+#    (%QX0.0-%QX1.1 = coil 0-9, %QW0-%QW7 = HR 0-7). Fuelsim's own
+#    values for these live on fuelsim:502 but OpenPLC as master doesn't
+#    mirror them (do_size = aow_size = aor_size = 0), by design --
+#    fuelsim's state_machine is authoritative and we don't want OpenPLC
+#    clobbering it. So Telegraf reads what our .st sets (mostly zeros).
+#  * Discrete Inputs are OpenPLC-slave-mapped from fuelsim: fuelsim's
+#    DI n lands at OpenPLC %IX(100+n/8).(n%8) = Modbus DI (800 + n).
+#  * Input Registers similarly: fuelsim's IR n lands at %IW(100+n) =
+#    Modbus IR (100 + n).
+#
+# Telegraf's Modbus input plugin uses 0-based addresses and expects ONE
+# array per register category (multiple `coils = [...]` blocks are
+# INVALID TOML -- only the last one wins). Old template had that bug;
+# fixed here by building each category's array via a single Jinja
+# join.
 
 [agent]
   interval = "1s"
@@ -20,34 +38,43 @@
   timeout           = "2s"
   controller        = "tcp://{{ fuel_plc_ip }}:{{ fuel_modbus_port }}"
 
-  # --- Coils (commands) -- FC1
-{% for c in fuel_modbus_coils %}
+  # --- Coils (FC1) -- OpenPLC's own %QX outputs, addresses 0-9 ---
   coils = [
-    { name = "{{ c.tag }}", address = [{{ c.addr }}] },
-  ]
-{% endfor %}
+{% for c in fuel_modbus_coils %}
+    { name = "{{ c.tag }}", address = [{{ c.addr }}] }{% if not loop.last %},{% endif %}
 
-  # --- Discrete inputs (status) -- FC2
-{% for d in fuel_modbus_discrete_inputs %}
+{% endfor %}
+  ]
+
+  # --- Discrete inputs (FC2) -- slave-mapped from fuelsim, addr + 800 ---
   discrete_inputs = [
-    { name = "{{ d.tag }}", address = [{{ d.addr }}] },
-  ]
-{% endfor %}
+{% for d in fuel_modbus_discrete_inputs %}
+    { name = "{{ d.tag }}", address = [{{ d.addr + 800 }}] }{% if not loop.last %},{% endif %}
 
-  # --- Input registers (analog measurements) -- FC4
-{% for r in fuel_modbus_input_registers %}
+{% endfor %}
+  ]
+
+  # --- Input registers (FC4) -- slave-mapped from fuelsim, addr + 100 ---
   input_registers = [
-    { name = "{{ r.tag }}", byte_order = "AB", data_type = "INT16", scale = {{ r.scale }}, address = [{{ r.addr }}] },
-  ]
-{% endfor %}
+{% for r in fuel_modbus_input_registers %}
+    { name = "{{ r.tag }}", byte_order = "AB", data_type = "INT16", scale = {{ r.scale }}, address = [{{ r.addr + 100 }}] }{% if not loop.last %},{% endif %}
 
-  # --- Holding registers (setpoints / assignments) -- FC3
-{% for h in fuel_modbus_holding_registers %}
+{% endfor %}
+  ]
+
+  # --- Holding registers (FC3) -- OpenPLC's own %QW outputs, addr 0-7 ---
+  # These are setpoints the ST program can write; fuelsim's own HRs (which
+  # state_machine sets from replay events) are NOT mirrored here because
+  # aor_size = 0 in the slave-device config. Follow-up: flip aor_size to
+  # see LR*_ACTIVE_TRUCK, LR*_SRC_TANK, etc. from fuelsim.
   holding_registers = [
-    { name = "{{ h.tag }}", byte_order = "AB", data_type = "INT16", scale = 1.0, address = [{{ h.addr }}] },
-  ]
-{% endfor %}
+{% for h in fuel_modbus_holding_registers %}
+    { name = "{{ h.tag }}", byte_order = "AB", data_type = "INT16", scale = 1.0, address = [{{ h.addr }}] }{% if not loop.last %},{% endif %}
 
-  # Totalizers: LR*_METER_LO + LR*_METER_HI reassembled downstream in
-  # Flux (or an aggregation transform) using {{ fuel_totalizer_word_order }}
-  # word order. See build sheet §4 note on 32-bit split.
+{% endfor %}
+  ]
+
+  # Totalizers (LR*_METER_LO + LR*_METER_HI): fuelsim exposes as
+  # 32-bit split hi-first. To reassemble into gallons, add a Flux
+  # transform in Grafana (map + math) rather than another Modbus read.
+  # See build sheet §4 note on 32-bit split.
