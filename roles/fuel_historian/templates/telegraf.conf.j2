@@ -26,8 +26,13 @@
   hostname = "fuel-hist"
   omit_hostname = false
 
+# InfluxDB's container publishes port 8086 to the prod NIC only
+# (fuel_hist_ip = 172.16.46.18), not to 0.0.0.0 or localhost. Telegraf
+# runs on the host (not in a container) so localhost:8086 refuses --
+# nothing's listening there. Use the prod-NIC IP directly. Traffic
+# still stays on the host (loopback via docker's NAT).
 [[outputs.influxdb_v2]]
-  urls   = ["http://localhost:8086"]
+  urls   = ["http://{{ fuel_hist_ip }}:8086"]
   token  = "{{ influxdb_admin_token }}"
   organization = "{{ influxdb_org }}"
   bucket = "{{ influxdb_bucket_fuel }}"
