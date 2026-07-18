@@ -93,12 +93,20 @@
 # that POSTs to /change_password. Tracked in UPSTREAM_FIXES.md.
 
 # Idempotent upload: bootstrap script exits 0 without touching state if
-# the runtime is already Running with our program. On changes to
-# fuel_farm.st (st_program.changed), we still run it, and it will
-# stop-runtime -> upload-fresh -> start. Runs on the target host itself
-# so it talks to the loopback-ish {{ fuel_plc_ip }}:8080 without going
-# through mgmt-plane proxy.
-- name: Bootstrap OpenPLC (upload ST + start runtime, idempotent)
+# the runtime is already Running with our program AND the fuel-farm-sim
+# slave device is already configured. On changes to fuel_farm.st
+# (st_program.changed) OR the very first deploy on a fresh container,
+# the bootstrap re-uploads/re-configures as needed and cycles the
+# runtime. Runs on the target host itself so it talks to
+# {{ fuel_plc_ip }}:8080 without going through mgmt-plane proxy.
+#
+# --slave-* flags configure ff-plc-1 as a Modbus TCP master polling
+# fuel-farm-sim:502. Only READS are mirrored: 11 discrete inputs +
+# 10 input registers -> OpenPLC %IX0.0-%IX1.2 / %IW0-%IW9. Coils
+# and holding registers are intentionally NOT written (do_size=0,
+# aow_size=0, aor_size=0) so OpenPLC doesn't clobber fuelsim's own
+# state_machine, which is authoritative for those.
+- name: Bootstrap OpenPLC (upload ST + start runtime + configure slave device, idempotent)
   ansible.builtin.command:
     argv:
       - /opt/openplc/bin/openplc_bootstrap.py
@@ -108,5 +116,11 @@
       - --password={{ openplc_admin_password }}
       - --program-name=fuel_farm
       - --program-file=/opt/openplc/programs/fuel_farm.st
+      - --slave-name=fuel-farm-sim
+      - --slave-ip={{ fuel_sim_ip }}
+      - --slave-port={{ fuel_modbus_port }}
+      - --slave-id=1
+      - --slave-di-size=11
+      - --slave-ai-size=10
   register: bootstrap_result
   changed_when: "'no change' not in bootstrap_result.stdout"

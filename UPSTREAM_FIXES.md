@@ -74,6 +74,28 @@ Bootstrap's idempotency check compares device name + type + view IDs — it does
 
 ---
 
+## 2026-07-17 · gap · roles/fuel_plc -- OpenPLC exposes an empty memory image because it never polls fuel-farm-sim (field bus §2 missing)
+
+**Symptom.** After the fuel farm subsystem shows 49/49 verify green and FUXA is confirmed polling ff-plc-1 with 40 tags landing 329+ samples in the DAQ SQLite (`daq-data_c39d...db`), every single tag value reads **zero**. `T101_LEVEL=0`, `HEADER_PRESS=0`, `LR1_FLOW=0` — even after 90s+ of runtime while fuelsim's physics simulation is actively running with tanks starting at 78-90% full.
+
+**Root cause.** The fuel_plc role uploaded and started an OpenPLC program on ff-plc-1 with proper %IX/%IW/%QX/%QW variable bindings — but the .st code has no polling logic and OpenPLC has no slave device configured to autonomously fetch data from fuel-farm-sim. So ff-plc-1's Modbus server on :502 was serving OpenPLC's internal memory image, which starts at zero and stayed zero because nothing writes to it. FUXA was reading a fully-functional, correctly-mapped, real Modbus port — just with all-zero values.
+
+CLAUDE.md §7 describes the intended field-bus wiring: OpenPLC as Modbus master polling fuel-farm-sim ("field bus"), exposing a curated image on its own :502 ("SCADA bus"). Build sheet §2. The role only implemented the SCADA-bus side; field-bus polling was never configured.
+
+**Fix (overlay).** Extended `openplc_bootstrap.py` with an optional slave-device configuration step. After the runtime is Running with our program, the script:
+
+1. GETs `/modbus` and checks whether a slave device with the configured name already exists (idempotent).
+2. If not, POSTs `/add-modbus-device` with fuel-farm-sim as a Generic Modbus TCP Device at 172.16.46.17:502, slave_id=1.
+3. Mirrors 11 discrete inputs (di_size=11) + 10 input registers (ai_size=10) into OpenPLC's %IX0.0-%IX1.2 / %IW0-%IW9 — matches our .st's %IX / %IW declarations 1:1.
+4. Explicitly sets `do_size=0`, `aor_size=0`, `aow_size=0` — OpenPLC never writes to fuelsim's coils or holding registers. Fuelsim's own state_machine drives those from the replay timeline and is authoritative; letting OpenPLC clobber them would break the physics loop.
+5. Cycles the runtime (stop_plc → wait → start_plc → poll dashboard until Running) so the new slave device takes effect.
+
+Form field → DB column mapping (learned from `/workdir/webserver/pages.py` and the `Slave_dev` schema): `device_ip` → `ip_address`, `device_port` → `ip_port`, `di_*` → `di_*`, `do_*` → `coil_*`, `ai_*` → `ir_*`, `aor_*` → `hr_read_*`, `aow_*` → `hr_write_*`. The form also requires serial fields (`device_cport`, `device_baud`, `device_parity`, `device_data`, `device_stop`) even for TCP devices — send `/dev/ttyS0`, `19200`, `None`, `8`, `1` as inert defaults.
+
+**Follow-up.** If we ever want OpenPLC's interlock logic to *actually stop the pumps* by writing back to fuelsim (rather than just reading), we'd flip `do_size` to 10 and add ladder logic in the .st that only writes coils under specific conditions. That's a full closed-loop control simulation and out of scope for MVP.
+
+---
+
 ## 2026-07-16 · gap · roles/fuel_plc/tasks/main.yml — OpenPLC container comes up with no program loaded (Modbus :502 dead)
 
 **Symptom.** After `fuel_plc` deploys, verify shows `ff-plc-1 OpenPLC container running` green and `ff-plc-1 OpenPLC web :8080` green, but `Modbus :502` refuses TCP indefinitely. The container is happy, the web UI works, and `/opt/openplc/programs/fuel_farm.st` is present in the bind mount — but nothing binds :502 because the OpenPLC runtime hasn't been told what program to run.

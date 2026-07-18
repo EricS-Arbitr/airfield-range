@@ -322,6 +322,90 @@ def _wait_for_compile(sess: requests.Session, base: str, timeout: int) -> None:
 # main
 # --------------------------------------------------------------------------
 
+def slave_device_exists(sess: requests.Session, base: str, name: str) -> bool:
+    """Check whether a slave device with `name` is already configured.
+
+    The /modbus page lists configured slave devices as a table. Name matches
+    are literal so we grep the response body. Cheap idempotency guard --
+    fdamador's /modbus doesn't offer a JSON API for the slave list.
+    """
+    r = sess.get(urljoin(base, "/modbus"), timeout=10)
+    if r.status_code != 200:
+        return False
+    return name in r.text
+
+
+def add_slave_device(
+    sess: requests.Session,
+    base: str,
+    *,
+    name: str,
+    ip: str,
+    port: int,
+    slave_id: int,
+    di_size: int,
+    ai_size: int,
+) -> None:
+    """POST /add-modbus-device with the fuel-farm-sim TCP mapping.
+
+    Only READS are mapped -- di (discrete inputs) and ai (input registers).
+    do/aor/aow set to 0 so OpenPLC never writes to the slave's coils or
+    holding registers; fuelsim's own state_machine is authoritative for
+    those, and letting OpenPLC clobber them would break physics simulation.
+    """
+    data = {
+        "device_name": name,
+        "device_protocol": "TCP",
+        "device_id": str(slave_id),
+        "device_ip": ip,
+        "device_port": str(port),
+        # Serial fields required by the form but ignored for TCP -- send
+        # sensible defaults so the server-side validator doesn't reject.
+        "device_cport": "/dev/ttyS0",
+        "device_baud": "19200",
+        "device_parity": "None",
+        "device_data": "8",
+        "device_stop": "1",
+        # Register mapping. Start=0 for each (first slave device -> memory
+        # image aligns 1:1 with fuel_farm.st's %IX / %IW declarations at
+        # addresses 0-10 / 0-9).
+        "di_start": "0",
+        "di_size": str(di_size),
+        "do_start": "0",
+        "do_size": "0",   # do not overwrite fuelsim's coils
+        "ai_start": "0",
+        "ai_size": str(ai_size),
+        "aor_start": "0",
+        "aor_size": "0",  # do not read fuelsim's HRs -- state_machine owns them
+        "aow_start": "0",
+        "aow_size": "0",  # do not write fuelsim's HRs
+    }
+    r = sess.post(
+        urljoin(base, "/add-modbus-device"),
+        data=data,
+        timeout=30,
+        allow_redirects=False,
+    )
+    if r.status_code not in (200, 302):
+        raise SystemExit(
+            f"/add-modbus-device returned {r.status_code}: {r.text[:400]!r}"
+        )
+
+
+def restart_runtime(sess: requests.Session, base: str) -> None:
+    """Cycle the OpenPLC runtime so newly-added slave devices take effect."""
+    sess.get(urljoin(base, "/stop_plc"), timeout=15, allow_redirects=False)
+    time.sleep(2)
+    sess.get(urljoin(base, "/start_plc"), timeout=15, allow_redirects=False)
+    # Poll dashboard until Running again
+    for _ in range(30):
+        time.sleep(2)
+        state, _ = dashboard_state(sess, base)
+        if state == "running":
+            return
+    raise SystemExit("runtime did not report Running within 60s after restart")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--host", required=True, help="OpenPLC web host (usually the PLC's IP)")
@@ -334,6 +418,14 @@ def main() -> int:
         "--program-description",
         default="Fuel farm interlocks (Ansible-managed)",
     )
+    # Slave device config (fuel-farm-sim). All optional -- if --slave-name
+    # is unset, the slave-device step is skipped.
+    ap.add_argument("--slave-name", help="If set, ensure a slave device by this name")
+    ap.add_argument("--slave-ip")
+    ap.add_argument("--slave-port", type=int, default=502)
+    ap.add_argument("--slave-id", type=int, default=1)
+    ap.add_argument("--slave-di-size", type=int, default=11)
+    ap.add_argument("--slave-ai-size", type=int, default=10)
     args = ap.parse_args()
 
     base = f"http://{args.host}:{args.port}"
@@ -343,22 +435,49 @@ def main() -> int:
     login(sess, base, args.user, args.password)
 
     state, current = dashboard_state(sess, base)
-    if state == "running" and current == args.program_name:
-        print(f"OK: openplc already Running with program {current!r} -- no change")
-        return 0
+    program_ok = state == "running" and current == args.program_name
 
-    print(
-        f"openplc state={state} current={current!r} -- "
-        f"uploading + (re)starting with {args.program_name!r}"
-    )
-    upload_and_start(
-        sess,
-        base,
-        args.program_name,
-        args.program_description,
-        args.program_file,
-    )
-    print(f"OK: openplc now Running with program {args.program_name!r}")
+    if program_ok:
+        print(f"OK: openplc already Running with program {current!r} -- program step no change")
+    else:
+        print(
+            f"openplc state={state} current={current!r} -- "
+            f"uploading + (re)starting with {args.program_name!r}"
+        )
+        upload_and_start(
+            sess,
+            base,
+            args.program_name,
+            args.program_description,
+            args.program_file,
+        )
+        print(f"OK: openplc now Running with program {args.program_name!r}")
+
+    # Slave device step. Only runs if the caller opted in via --slave-name.
+    if args.slave_name:
+        if slave_device_exists(sess, base, args.slave_name):
+            print(f"OK: slave device {args.slave_name!r} already configured -- no change")
+        else:
+            if not args.slave_ip:
+                raise SystemExit("--slave-ip required when --slave-name is set")
+            print(
+                f"configuring slave device {args.slave_name!r} -> "
+                f"{args.slave_ip}:{args.slave_port} (di={args.slave_di_size}, ai={args.slave_ai_size})"
+            )
+            add_slave_device(
+                sess,
+                base,
+                name=args.slave_name,
+                ip=args.slave_ip,
+                port=args.slave_port,
+                slave_id=args.slave_id,
+                di_size=args.slave_di_size,
+                ai_size=args.slave_ai_size,
+            )
+            # The runtime must be cycled to pick up the new slave device.
+            restart_runtime(sess, base)
+            print(f"OK: slave device {args.slave_name!r} added, runtime restarted")
+
     return 0
 
 
