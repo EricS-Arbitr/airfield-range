@@ -57,17 +57,17 @@
    constants (100000/300000/400000) go through formatAddress directly
    both times. #}
 {% for c in fuel_modbus_coils %}
-{%   set _ = tag_rows.append('"' ~ c.tag ~ '": {"id":"' ~ c.tag ~ '","name":"' ~ c.tag ~ '","type":"Bool","address":' ~ (c.addr + 1) ~ ',"memaddress":"000000"}') %}
+{%   set _ = tag_rows.append('"' ~ c.tag ~ '": {"id":"' ~ c.tag ~ '","name":"' ~ c.tag ~ '","type":"Bool","address":' ~ (c.addr + 1) ~ ',"memaddress":"000000","daq":{"enabled":true,"changed":true,"interval":60,"restored":false}}') %}
 {% endfor %}
 {% for d in fuel_modbus_discrete_inputs %}
-{%   set _ = tag_rows.append('"' ~ d.tag ~ '": {"id":"' ~ d.tag ~ '","name":"' ~ d.tag ~ '","type":"Bool","address":' ~ (d.addr + 1) ~ ',"memaddress":100000}') %}
+{%   set _ = tag_rows.append('"' ~ d.tag ~ '": {"id":"' ~ d.tag ~ '","name":"' ~ d.tag ~ '","type":"Bool","address":' ~ (d.addr + 1) ~ ',"memaddress":100000,"daq":{"enabled":true,"changed":true,"interval":60,"restored":false}}') %}
 {% endfor %}
 {% for r in fuel_modbus_input_registers %}
 {%   set divisor = (1.0 / r.scale) | round(0, 'floor') | int %}
-{%   set _ = tag_rows.append('"' ~ r.tag ~ '": {"id":"' ~ r.tag ~ '","name":"' ~ r.tag ~ '","type":"Int16","address":' ~ (r.addr + 1) ~ ',"memaddress":300000,"divisor":' ~ divisor ~ '}') %}
+{%   set _ = tag_rows.append('"' ~ r.tag ~ '": {"id":"' ~ r.tag ~ '","name":"' ~ r.tag ~ '","type":"Int16","address":' ~ (r.addr + 1) ~ ',"memaddress":300000,"divisor":' ~ divisor ~ ',"daq":{"enabled":true,"changed":true,"interval":10,"restored":false}}') %}
 {% endfor %}
 {% for h in fuel_modbus_holding_registers %}
-{%   set _ = tag_rows.append('"' ~ h.tag ~ '": {"id":"' ~ h.tag ~ '","name":"' ~ h.tag ~ '","type":"Int16","address":' ~ (h.addr + 1) ~ ',"memaddress":400000}') %}
+{%   set _ = tag_rows.append('"' ~ h.tag ~ '": {"id":"' ~ h.tag ~ '","name":"' ~ h.tag ~ '","type":"Int16","address":' ~ (h.addr + 1) ~ ',"memaddress":400000,"daq":{"enabled":true,"changed":true,"interval":10,"restored":false}}') %}
 {% endfor %}
         {{ tag_rows | join(',\n        ') }}
       }
