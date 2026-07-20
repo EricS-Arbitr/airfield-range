@@ -16,6 +16,30 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-20 · bug · roles/fuel_plc/files/fuel_farm.st — ST interlock logic bound to unbound %IX0.x / %IW0-9 (always zero)
+
+**Symptom.** After the 2026-07-17 slave-device fix landed the fuelsim mirror at Modbus DI 800+ / IR 100+, FUXA and Telegraf were rewired to poll those higher addresses and started rendering live values. But the ST program itself continued to declare `LR1_GROUND_OK AT %IX0.2`, `T101_LEVEL AT %IW0`, etc. — OpenPLC's *own* DI 0-10 / IR 0-9 memory, which is unbound to any physical or slave-polled IO on our software-only PLC. So the interlock logic (`LR1_PERMIT`, `LR2_PERMIT`, ESD latch) always saw zeros: `GROUND_OK=False`, `DEADMAN=False`, `OVERFILL=False`, `T101_LO_LVL=False`, `ESD_ACTIVE=False`. Interlocks were effectively no-ops — permissive checks always False (blocking load-valve TRUE, which was already the default), ESD trip never triggered. The visible readouts on the HMI were fine (FUXA polled the slave mirror directly), but the ST program running inside OpenPLC was doing symbolic math on empty inputs.
+
+**Why the naive fix was risky.** The obvious fix — rebind everything from `%IX0.x` → `%IX100.x+800-offset` (i.e. read the slave mirror in the ST source too) — depends on matiec accepting triple-digit `%IX` / `%IW` addresses. The fdamador image's matiec had already rejected multi-digit `%IW10` (`LR2_METER_HI`, dropped as a workaround — see the header comment in `fuel_farm.st`). Bulk-moving 21 variables without probing first risked breaking every input binding.
+
+**Fix (overlay), landed in two commits.**
+
+1. **Probe commit (`c31d31d`)** — added `PROBE_100_0 AT %IX100.0 : BOOL;` alongside the existing `%IX0.x` bindings and deployed. matiec compiled clean. Confirmed the fork accepts triple-digit `%IX` addresses (the earlier `%IW10` failure was almost certainly a different grammar quirk — possibly nested `(* ... *)` comments or mixed VAR blocks — not a "no multi-digit addresses" rule).
+
+2. **Bulk-move commit (`ea91a34`)** — moved all 11 DIs from `%IX0.0-%IX1.2` to `%IX100.0-%IX101.2`, all 10 IRs from `%IW0-%IW9` to `%IW100-%IW109`, and dropped the probe. Modbus DI/IR *offsets* seen by the outside world are unchanged (FUXA/Telegraf still poll DI 800+/IR 100+), because slave-device polling puts the fuelsim mirror at `%IX100.0 == Modbus DI 800`, `%IW100 == Modbus IR 100` on the OpenPLC memory model. Header comment updated to document the new address map + why (post-2026-07-20 reshuffle so inputs read real slave-polled data instead of unbound zeros).
+
+Interlock logic bodies didn't change — they reference variables by name, not address. Only the AT bindings moved.
+
+**Prerequisite fix (same day, commit `6b2aea9`).** The bootstrap script's idempotency check only compared program *name* (`Program: fuel_farm`), not source contents — so edits to fuel_farm.st were silently ignored on redeploy (the runtime stayed on the previously-compiled binary). Added `--force-program` flag to `openplc_bootstrap.py` that bypasses the "already Running with our program" check and re-uploads/recompiles/restarts. The Ansible task wires this on conditionally: `argv: {{ _openplc_bootstrap_argv + (['--force-program'] if st_program.changed else []) }}` — so future .st edits actually propagate.
+
+**Verify.** After bulk-move deploy: `verify_fuel_farm.sh` 52/52 green, FUXA Process Overview still shows all live values (T-101 90%, T-102 82%, T-103 78%, Header 20 psi, T-101 Temp 68°F, LR-1 R-03 loading T-103 preset 9107, LR-2 R-04 loading T-101 preset 5310), ESD banner still green. Nothing regressed on the outside; the invisible change is that the ST program now computes `LR1_PERMIT = GROUND_OK AND DEADMAN AND NOT OVERFILL AND NOT T101_LO_LVL AND NOT ESD_ACTIVE` on real data.
+
+**Note on Ansible's task-status readout.** The bootstrap task's `changed_when: "'no change' not in bootstrap_result.stdout"` reports the task as `ok` (not `changed`) when the slave-device step prints `-- no change` even if the program step re-uploaded. The check trips on the substring anywhere in stdout. Cosmetic — the .st actually recompiled — but if a future maintainer relies on task status to gate a handler, the changed_when should be tightened to match the program-step's own output (e.g. `'re-uploading anyway' in stdout or 'not Running' in stdout`).
+
+**Follow-up (not blocking).** Interlock EFFECT still isn't visually observable on the HMI: the ST only *forces* outputs FALSE on interlock fail, never *sets* them TRUE — so `LR1_LOAD_VLV` etc. always read as False whether the interlock passed or failed. To make the interlock outcome visible, either (a) add `LR1_LOAD_VLV := LR1_PERMIT;` before the `IF NOT LR1_PERMIT THEN` block, or (b) add computed-permit read-back outputs (`LR1_PERMIT_OUT AT %QX2.0 := LR1_PERMIT;`) that FUXA can bind to. Both are trivial ST edits; deferred pending an operator-UX decision on which failure modes deserve their own indicator.
+
+---
+
 ## 2026-07-17 · gap · roles/fuel_hmi -- FUXA container comes up with no project loaded (screens are blank)
 
 **Symptom.** After `fuel_hmi` deploys, the FUXA container is running and :1881 is reachable, but logging in to the web UI shows a blank editor — no devices, no views. The bind-mounted JSON at `/opt/fuxa/projects/fuel_farm.json` is present in the container's `_projects` volume but FUXA doesn't auto-load it.
