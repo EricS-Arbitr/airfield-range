@@ -133,21 +133,41 @@
 ] %}
 {%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-value","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"' ~ pair[1] ~ '","alarmId":"","alarmSrc":"","alarm":"","alarmColor":"","events":[],"actions":[],"ranges":[{"type":"unit","min":' ~ pair[3] ~ ',"max":' ~ pair[4] ~ ',"color":"","stroke":"","text":"' ~ pair[5] ~ '"}]},"label":"Value"}') %}
 {% endfor %}
-{# Status dots (svg-ext-shapes-circle actions), ESD banner (rect action), and
-   nav buttons (rect click) were dropped from items. FUXA's widget-load
-   pipeline invokes getPlaceholderContent -> placeholderToTag on every
-   ITEM entry, which reaches for the SVG element's text content and
-   searches it for @TagName@ placeholders. <rect> and <circle> don't
-   have inner text, so text.indexOf() throws TypeError early in
-   initElementAdded and aborts the ENTIRE widget-init loop -- meaning
-   even the svg-ext-value widgets (which have proper compound <g><text/>
-   structure and would otherwise work) never get their bindings set
-   up. Documented in UPSTREAM_FIXES 2026-07-17 sixth amendment.
+{# Status dots + ESD banner re-added after learning the correct action
+   schema from the demo project's svg-ext-pipe widget:
 
-   Trade-off: no runtime status colors, no click-nav. But every numeric
-   readout DOES bind now. Status colors need a proper svg-ext-shapes
-   action schema (unknown), nav needs svg-ext-html_button. Both
-   follow-ups. #}
+     "actions": [
+       {
+         "options": {},                    // widget-type-specific (color: {fill,stroke})
+         "range": {"min": "1", "max": "1"},  // strings, not numbers
+         "variableSrc": "PLC-FuelFarm",
+         "variableId": "P201_RUN_STS",     // plain tag name per fcb9085
+         "variable": "P201_RUN_STS",
+         "type": "color"                   // svg-ext bundle exposes: clockwise|
+                                           //   stop|blink|color|hide|show|rotate|move
+       }
+     ]
+
+   Trying `color` type with `options.fill` for the "on" color. If FUXA's
+   getPlaceholderContent still trips on the childless <circle>/<rect>,
+   we'll see the same loadWatch error return and can pivot to a text
+   overlay approach. #}
+{% for pair in [
+    ('P201_RUN_STS_dot', 'P201_RUN_STS', '#2c8f3f'),
+    ('P202_RUN_STS_dot', 'P202_RUN_STS', '#2c8f3f'),
+    ('LR1_GROUND_OK_dot', 'LR1_GROUND_OK', '#2c8f3f'),
+    ('LR1_DEADMAN_dot', 'LR1_DEADMAN', '#2c8f3f'),
+    ('LR1_OVERFILL_dot', 'LR1_OVERFILL', '#c62828'),
+    ('P201_RUN_CMD_dot', 'P201_RUN_CMD', '#2c8f3f'),
+    ('LR2_GROUND_OK_dot', 'LR2_GROUND_OK', '#2c8f3f'),
+    ('LR2_DEADMAN_dot', 'LR2_DEADMAN', '#2c8f3f'),
+    ('LR2_OVERFILL_dot', 'LR2_OVERFILL', '#c62828'),
+    ('P202_RUN_CMD_dot', 'P202_RUN_CMD', '#2c8f3f'),
+] %}
+{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-circle","name":"' ~ pair[1] ~ '","property":{"events":[],"actions":[{"options":{"fill":"' ~ pair[2] ~ '"},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"' ~ pair[1] ~ '","variable":"' ~ pair[1] ~ '","type":"color"}],"options":{}},"label":"Shape"}') %}
+{% endfor %}
+{# ESD banner turns red when ESD_ACTIVE=1 -- same action schema. #}
+{% set _ = items_overview.append('"esd_banner_rect": {"id":"esd_banner_rect","type":"svg-ext-shapes-rect","name":"ESD Banner","property":{"events":[],"actions":[{"options":{"fill":"#c62828"},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"ESD_ACTIVE","variable":"ESD_ACTIVE","type":"color"}],"options":{}},"label":"Shape"}') %}
           {{ items_overview | join(',\n          ') }}
         }
       },
@@ -173,9 +193,23 @@
 ] %}
 {%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-value","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"' ~ pair[1] ~ '","alarmId":"","alarmSrc":"","alarm":"","alarmColor":"","events":[],"actions":[],"ranges":[{"type":"unit","min":' ~ pair[3] ~ ',"max":' ~ pair[4] ~ ',"color":"","stroke":"","text":"' ~ pair[5] ~ '"}]},"label":"Value"}') %}
 {% endfor %}
-{# Same as Process Overview -- status dots and nav button items dropped
-   to keep widget-init pipeline from exploding on non-<text> elements.
-   Value widgets are the meat; status colors are follow-up polish. #}
+{# Status dots (svg-ext-shapes-circle with color action) on the Detail
+   view too. Same structure as Process Overview. Nav button (rect click)
+   still deferred -- needs svg-ext-html_button with onSetView event. #}
+{% for pair in [
+    ('LR1D_GROUND_OK_dot', 'LR1_GROUND_OK', '#2c8f3f'),
+    ('LR1D_DEADMAN_dot', 'LR1_DEADMAN', '#2c8f3f'),
+    ('LR1D_OVERFILL_dot', 'LR1_OVERFILL', '#c62828'),
+    ('LR1D_LOAD_VLV_dot', 'LR1_LOAD_VLV', '#2c8f3f'),
+    ('LR1D_ESD_dot', 'ESD_ACTIVE', '#c62828'),
+    ('LR2D_GROUND_OK_dot', 'LR2_GROUND_OK', '#2c8f3f'),
+    ('LR2D_DEADMAN_dot', 'LR2_DEADMAN', '#2c8f3f'),
+    ('LR2D_OVERFILL_dot', 'LR2_OVERFILL', '#c62828'),
+    ('LR2D_LOAD_VLV_dot', 'LR2_LOAD_VLV', '#2c8f3f'),
+    ('LR2D_ESD_dot', 'ESD_ACTIVE', '#c62828'),
+] %}
+{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-circle","name":"' ~ pair[1] ~ '","property":{"events":[],"actions":[{"options":{"fill":"' ~ pair[2] ~ '"},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"' ~ pair[1] ~ '","variable":"' ~ pair[1] ~ '","type":"color"}],"options":{}},"label":"Shape"}') %}
+{% endfor %}
           {{ items_detail | join(',\n          ') }}
         }
       }
