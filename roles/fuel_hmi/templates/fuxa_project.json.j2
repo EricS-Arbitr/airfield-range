@@ -152,15 +152,18 @@
    getPlaceholderContent still trips on the childless <circle>/<rect>,
    we'll see the same loadWatch error return and can pivot to a text
    overlay approach. #}
-{# Two changes from earlier attempt:
-   1. action.variableId uses full "Device^~^Tag" format (actions may need it
-      even though top-level property.variableId works with plain name --
-      testing the theory now).
-   2. Two actions per widget: one for value=1 (fill on-color) and one for
-      value=0 (fill off-color/grey). Pipe demo does this same
-      pattern (clockwise/stop). Without an off-action, once value flips to
-      1 and fills green, the shape stays green forever even after value
-      returns to 0. #}
+{# Color-action options schema (from class le in main.*.js):
+     class le {
+       strokeA = null;   // FROM stroke color
+       strokeB = null;   // TO stroke color
+       fillA   = null;   // FROM fill color
+       fillB   = null;   // TO fill color
+       interval= 1000;   // transition time (ms)
+     }
+   The action transitions fillA -> fillB when the bound tag enters the
+   [min,max] range. When it leaves the range, it reverts to fillA.
+   So a single action is enough (no need for two like the pipe demo,
+   which used clockwise/stop because those are one-shot triggers). #}
 {% for pair in [
     ('P201_RUN_STS_dot', 'P201_RUN_STS', '#2c8f3f'),
     ('P202_RUN_STS_dot', 'P202_RUN_STS', '#2c8f3f'),
@@ -173,10 +176,10 @@
     ('LR2_OVERFILL_dot', 'LR2_OVERFILL', '#c62828'),
     ('P202_RUN_CMD_dot', 'P202_RUN_CMD', '#2c8f3f'),
 ] %}
-{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-circle","name":"' ~ pair[1] ~ '","property":{"events":[],"actions":[{"options":{"fill":"' ~ pair[2] ~ '"},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","variable":"' ~ pair[1] ~ '","type":"color"},{"options":{"fill":"#c0c0c0"},"range":{"min":"0","max":"0"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","variable":"' ~ pair[1] ~ '","type":"color"}],"options":{}},"label":"Shape"}') %}
+{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-circle","name":"' ~ pair[1] ~ '","property":{"events":[],"actions":[{"options":{"strokeA":null,"strokeB":null,"fillA":"#c0c0c0","fillB":"' ~ pair[2] ~ '","interval":1000},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","variable":"' ~ pair[1] ~ '","type":"color"}],"options":{}},"label":"Shape"}') %}
 {% endfor %}
-{# ESD banner: red when ESD_ACTIVE=1, green when 0. #}
-{% set _ = items_overview.append('"esd_banner_rect": {"id":"esd_banner_rect","type":"svg-ext-shapes-rect","name":"ESD Banner","property":{"events":[],"actions":[{"options":{"fill":"#c62828"},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^ESD_ACTIVE","variable":"ESD_ACTIVE","type":"color"},{"options":{"fill":"#2c8f3f"},"range":{"min":"0","max":"0"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^ESD_ACTIVE","variable":"ESD_ACTIVE","type":"color"}],"options":{}},"label":"Shape"}') %}
+{# ESD banner: transition from green to red when ESD_ACTIVE=1. #}
+{% set _ = items_overview.append('"esd_banner_rect": {"id":"esd_banner_rect","type":"svg-ext-shapes-rect","name":"ESD Banner","property":{"events":[],"actions":[{"options":{"strokeA":null,"strokeB":null,"fillA":"#2c8f3f","fillB":"#c62828","interval":1000},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^ESD_ACTIVE","variable":"ESD_ACTIVE","type":"color"}],"options":{}},"label":"Shape"}') %}
           {{ items_overview | join(',\n          ') }}
         }
       },
@@ -217,7 +220,7 @@
     ('LR2D_LOAD_VLV_dot', 'LR2_LOAD_VLV', '#2c8f3f'),
     ('LR2D_ESD_dot', 'ESD_ACTIVE', '#c62828'),
 ] %}
-{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-circle","name":"' ~ pair[1] ~ '","property":{"events":[],"actions":[{"options":{"fill":"' ~ pair[2] ~ '"},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","variable":"' ~ pair[1] ~ '","type":"color"},{"options":{"fill":"#c0c0c0"},"range":{"min":"0","max":"0"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","variable":"' ~ pair[1] ~ '","type":"color"}],"options":{}},"label":"Shape"}') %}
+{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-circle","name":"' ~ pair[1] ~ '","property":{"events":[],"actions":[{"options":{"strokeA":null,"strokeB":null,"fillA":"#c0c0c0","fillB":"' ~ pair[2] ~ '","interval":1000},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","variable":"' ~ pair[1] ~ '","type":"color"}],"options":{}},"label":"Shape"}') %}
 {% endfor %}
           {{ items_detail | join(',\n          ') }}
         }
