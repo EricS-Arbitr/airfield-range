@@ -156,6 +156,106 @@
       "gridPos": { "h": 5, "w": 3, "x": 21, "y": 0 }
     },
     {
+      "type": "stat",
+      "title": "LR-1 Interlocks",
+      "datasource": "InfluxDB-Fuel",
+      "targets": [{
+        "query": "from(bucket: \"{{ influxdb_bucket_fuel }}\") |> range(start: -5m) |> filter(fn: (r) => r._measurement == \"modbus\" and r._field == \"LR1_PERMIT_OUT\") |> last()",
+        "refId": "A"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "BLOCKED", "color": "red" }, "1": { "text": "PERMITTED", "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "red" },
+              { "value": 1, "color": "green" }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 5 }
+    },
+    {
+      "type": "stat",
+      "title": "LR-1 Load Valve",
+      "datasource": "InfluxDB-Fuel",
+      "targets": [{
+        "query": "from(bucket: \"{{ influxdb_bucket_fuel }}\") |> range(start: -5m) |> filter(fn: (r) => r._measurement == \"modbus\" and r._field == \"LR1_LOAD_VLV\") |> last()",
+        "refId": "A"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "CLOSED", "color": "text" }, "1": { "text": "OPEN", "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "text" },
+              { "value": 1, "color": "green" }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 5 }
+    },
+    {
+      "type": "stat",
+      "title": "LR-2 Interlocks",
+      "datasource": "InfluxDB-Fuel",
+      "targets": [{
+        "query": "from(bucket: \"{{ influxdb_bucket_fuel }}\") |> range(start: -5m) |> filter(fn: (r) => r._measurement == \"modbus\" and r._field == \"LR2_PERMIT_OUT\") |> last()",
+        "refId": "A"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "BLOCKED", "color": "red" }, "1": { "text": "PERMITTED", "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "red" },
+              { "value": 1, "color": "green" }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 5 }
+    },
+    {
+      "type": "stat",
+      "title": "LR-2 Load Valve",
+      "datasource": "InfluxDB-Fuel",
+      "targets": [{
+        "query": "from(bucket: \"{{ influxdb_bucket_fuel }}\") |> range(start: -5m) |> filter(fn: (r) => r._measurement == \"modbus\" and r._field == \"LR2_LOAD_VLV\") |> last()",
+        "refId": "A"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "CLOSED", "color": "text" }, "1": { "text": "OPEN", "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "text" },
+              { "value": 1, "color": "green" }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 5 }
+    },
+    {
       "type": "timeseries",
       "title": "Tank Levels (last 1h)",
       "datasource": "InfluxDB-Fuel",
@@ -170,7 +270,7 @@
           "max": 100
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 }
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 }
     },
     {
       "type": "timeseries",
@@ -180,7 +280,7 @@
         "query": "from(bucket: \"{{ influxdb_bucket_fuel }}\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"modbus\" and (r._field == \"HEADER_PRESS\" or r._field == \"LR1_FLOW\" or r._field == \"LR2_FLOW\"))",
         "refId": "A"
       }],
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 }
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 }
     },
     {
       "type": "table",
@@ -192,7 +292,7 @@
         "format": "table",
         "refId": "A"
       }],
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 }
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 }
     },
     {
       "type": "table",
@@ -204,7 +304,7 @@
         "format": "table",
         "refId": "A"
       }],
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 }
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 }
     },
     {
       "type": "table",
@@ -216,7 +316,7 @@
         "format": "table",
         "refId": "A"
       }],
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 21 }
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 26 }
     },
     {
       "type": "table",
@@ -228,7 +328,7 @@
         "format": "table",
         "refId": "A"
       }],
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 21 }
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 26 }
     },
     {
       "type": "table",
@@ -240,7 +340,7 @@
         "format": "table",
         "refId": "A"
       }],
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 21 }
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 26 }
     }
   ],
   "refresh": "5s",

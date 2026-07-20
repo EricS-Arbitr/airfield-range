@@ -95,6 +95,16 @@ fuel_modbus_coils:
   - { addr: 7,  tag: "FSII_INJ_CMD",  desc: "Additive injection enable" }
   - { addr: 8,  tag: "ESD_RESET",     desc: "Clear latched ESD" }
   - { addr: 9,  tag: "ALARM_ACK",     desc: "Acknowledge alarms" }
+  # Diagnostic mirrors of the ST-computed LR{1,2}_PERMIT booleans, set
+  # at end-of-scan (see roles/fuel_plc/files/fuel_farm.st). Written by
+  # OpenPLC only, never by outside masters. Enables the historian to
+  # trend "interlocks satisfied?" without inferring it from a chain of
+  # DI reads, and lets the HMI show a PERMITTED/BLOCKED indicator on
+  # its own dedicated coil. Add-only -- earlier addresses (0-9) stay
+  # stable so any downstream tooling coded to specific coil numbers
+  # keeps working.
+  - { addr: 10, tag: "LR1_PERMIT_OUT", desc: "Rack 1 interlock permit (computed mirror)" }
+  - { addr: 11, tag: "LR2_PERMIT_OUT", desc: "Rack 2 interlock permit (computed mirror)" }
 
 fuel_modbus_discrete_inputs:
   - { addr: 0,  tag: "P201_RUN_STS",   desc: "Pump 1 running feedback" }

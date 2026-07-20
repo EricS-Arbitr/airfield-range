@@ -7,7 +7,7 @@
 
   Address map (post-2026-07-20 reshuffle so inputs read real
   slave-polled data instead of unbound zeros):
-    QX0.0-QX1.1        --> Modbus coils    0-9    (ST OUTPUTS -- pump/valve commands)
+    QX0.0-QX1.3        --> Modbus coils    0-11   (ST OUTPUTS -- pump/valve commands + LR permit mirrors)
     IX100.0-IX101.2    --> Modbus DIs      800-810 (fuelsim mirror -- status feedback)
     IW100-IW109        --> Modbus IRs      100-109 (fuelsim mirror -- analog measurements)
     QW0-QW7            --> Modbus HRs      0-7    (ST OUTPUTS -- setpoints, unused)
@@ -41,6 +41,15 @@ PROGRAM main
     FSII_INJ_CMD    AT %QX0.7 : BOOL;
     ESD_RESET       AT %QX1.0 : BOOL;
     ALARM_ACK       AT %QX1.1 : BOOL;
+    (* Diagnostic mirrors of the computed interlock permit -- exposed as
+       Modbus coils 10/11 so the historian can trend permit state and
+       the HMI can render a PERMITTED/BLOCKED indicator. Set at the end
+       of the scan from LR{1,2}_PERMIT. Distinct from LR{1,2}_LOAD_VLV
+       so a future operator-command layer (HMI open/close pushbutton)
+       can drive the valve as PERMIT AND OPERATOR_CMD while the permit
+       output stays a pure diagnostic. *)
+    LR1_PERMIT_OUT  AT %QX1.2 : BOOL;
+    LR2_PERMIT_OUT  AT %QX1.3 : BOOL;
 
     (* Input DIs (status feedback from fuelsim). Bound at %IX100.0+
        so the ST reads OpenPLC's slave-device-polling mirror of
@@ -105,12 +114,20 @@ PROGRAM main
                 AND NOT T101_LO_LVL
                 AND NOT ESD_ACTIVE;
 
-  IF NOT LR1_PERMIT THEN
-    LR1_LOAD_VLV := FALSE;
-  END_IF;
-  IF NOT LR2_PERMIT THEN
-    LR2_LOAD_VLV := FALSE;
-  END_IF;
+  (* Load valve outputs. Without a proper operator-command layer (HMI
+     open/close pushbuttons that write to a separate operator-intent
+     coil), the only defensible thing to drive the valve with is the
+     permit itself: valve is "open / ready to flow" when interlocks
+     are satisfied and "closed" otherwise. When an operator layer is
+     added later, this becomes LR{1,2}_LOAD_VLV := LR{1,2}_PERMIT AND
+     LR{1,2}_OPERATOR_OPEN;. The ESD block below still force-clears
+     as belt-and-suspenders. *)
+  LR1_LOAD_VLV := LR1_PERMIT;
+  LR2_LOAD_VLV := LR2_PERMIT;
+
+  (* Diagnostic mirrors -- exposed to historian/HMI as coils 10/11. *)
+  LR1_PERMIT_OUT := LR1_PERMIT;
+  LR2_PERMIT_OUT := LR2_PERMIT;
 
   IF ESD_ACTIVE THEN
     P201_RUN_CMD := FALSE;
@@ -120,6 +137,13 @@ PROGRAM main
     T103_OUT_VLV := FALSE;
     LR1_LOAD_VLV := FALSE;
     LR2_LOAD_VLV := FALSE;
+    (* Permit mirrors intentionally NOT cleared here -- they reflect
+       the *computed* permit (which already includes NOT ESD_ACTIVE),
+       so they'll go False naturally on the same scan. Preserving that
+       makes the "why is it blocked?" story readable from the coil
+       alone: PERMIT_OUT=False + ESD_ACTIVE=True means ESD tripped;
+       PERMIT_OUT=False + ESD_ACTIVE=False means a different interlock
+       fell (deadman released, overfill, T101 low). *)
   END_IF;
 
 END_PROGRAM

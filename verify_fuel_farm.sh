@@ -300,6 +300,25 @@ print('READ_OK' if not r.isError() else 'READ_ERROR:' + str(r))
   'READ_OK' \
   "ff-plc-1 Modbus HR 0 (LR1_PRESET_GAL) readable from fuel-farm-sim"
 
+# Interlock permit mirrors -- confirms the ST program at end-of-scan is
+# writing coils 10/11 (LR{1,2}_PERMIT_OUT). If the .st program is stale
+# or the runtime is stopped, the read succeeds (coil defaults to 0) but
+# from a different code path than the ST-write path; distinguishing
+# needs a state-change probe. Simpler here: just confirm the read
+# doesn't error (which would happen if the coil address is out of the
+# server's registered range -- e.g. the ST doesn't declare it).
+check_sh fuel-farm-sim \
+  "/opt/fuelsim/venv/bin/python -c \"
+from pymodbus.client import ModbusTcpClient as C
+c = C('172.16.45.10', port=502, timeout=5)
+if not c.connect(): print('CONNECT_FAILED'); exit()
+r = c.read_coils(address=10, count=2, slave=1)
+c.close()
+print('READ_OK' if not r.isError() else 'READ_ERROR:' + str(r))
+\"" \
+  'READ_OK' \
+  "ff-plc-1 Modbus coils 10-11 (LR{1,2}_PERMIT_OUT) readable from fuel-farm-sim"
+
 # =========================================================================
 # 6. fuel-hist — Telegraf + InfluxDB 2.7 + Grafana
 # =========================================================================
