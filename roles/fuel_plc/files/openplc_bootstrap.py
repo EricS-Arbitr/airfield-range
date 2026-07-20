@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 import time
 from html.parser import HTMLParser
@@ -335,6 +336,46 @@ def slave_device_exists(sess: requests.Session, base: str, name: str) -> bool:
     return name in r.text
 
 
+def _query_slave_dev_field(name: str, field: str) -> str | None:
+    """Query openplc.db directly for one column of the fuel-farm-sim row.
+    Returns the value as a string, or None if the row doesn't exist or the
+    query fails. Runs `docker exec sqlite3` under the hood -- bootstrap
+    executes on the target host (ff-plc-1), not inside the container, so
+    docker CLI is available. Requires root or docker-group access; the
+    role runs with become: yes so this is fine.
+    """
+    try:
+        r = subprocess.run(
+            [
+                "docker", "exec", "openplc",
+                "sqlite3", "/workdir/webserver/openplc.db",
+                f"SELECT {field} FROM Slave_dev WHERE dev_name='{name}';",
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return None
+        out = r.stdout.strip()
+        return out if out else None
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+
+def _delete_slave_dev_row(name: str) -> None:
+    """Delete a slave device row from openplc.db. Used to force a re-add
+    when the existing row's config differs from what we want (idempotency
+    beyond bare name matching).
+    """
+    subprocess.run(
+        [
+            "docker", "exec", "openplc",
+            "sqlite3", "/workdir/webserver/openplc.db",
+            f"DELETE FROM Slave_dev WHERE dev_name='{name}';",
+        ],
+        capture_output=True, text=True, timeout=10,
+    )
+
+
 def add_slave_device(
     sess: requests.Session,
     base: str,
@@ -345,13 +386,17 @@ def add_slave_device(
     slave_id: int,
     di_size: int,
     ai_size: int,
+    aor_size: int = 0,
 ) -> None:
     """POST /add-modbus-device with the fuel-farm-sim TCP mapping.
 
-    Only READS are mapped -- di (discrete inputs) and ai (input registers).
-    do/aor/aow set to 0 so OpenPLC never writes to the slave's coils or
-    holding registers; fuelsim's own state_machine is authoritative for
-    those, and letting OpenPLC clobber them would break physics simulation.
+    Reads: di (discrete inputs), ai (input registers), and optionally aor
+    (holding registers READ). do/aow always 0 -- OpenPLC never WRITES to
+    fuelsim's coils or HRs; fuelsim's own state_machine is authoritative
+    for those, and letting OpenPLC clobber them would break physics.
+    aor_size=8 mirrors fuelsim's HRs (LR*_ACTIVE_TRUCK, LR*_SRC_TANK,
+    LR*_PRESET_GAL, etc.) into OpenPLC's %QW100+ region for FUXA/Grafana
+    to display.
     """
     data = {
         "device_name": name,
@@ -376,7 +421,7 @@ def add_slave_device(
         "ai_start": "0",
         "ai_size": str(ai_size),
         "aor_start": "0",
-        "aor_size": "0",  # do not read fuelsim's HRs -- state_machine owns them
+        "aor_size": str(aor_size),   # 0 skips HR mirror, 8 pulls fuelsim's HRs
         "aow_start": "0",
         "aow_size": "0",  # do not write fuelsim's HRs
     }
@@ -426,6 +471,10 @@ def main() -> int:
     ap.add_argument("--slave-id", type=int, default=1)
     ap.add_argument("--slave-di-size", type=int, default=11)
     ap.add_argument("--slave-ai-size", type=int, default=10)
+    ap.add_argument(
+        "--slave-aor-size", type=int, default=0,
+        help="Holding registers to mirror from slave into %%QW100+ (0 skips)"
+    )
     args = ap.parse_args()
 
     base = f"http://{args.host}:{args.port}"
@@ -454,16 +503,35 @@ def main() -> int:
         print(f"OK: openplc now Running with program {args.program_name!r}")
 
     # Slave device step. Only runs if the caller opted in via --slave-name.
+    # Idempotency: query openplc.db directly for hr_read_size. If the row
+    # exists AND all expected sizes match, skip. Otherwise DELETE + re-add
+    # (add-modbus-device rejects duplicate dev_name, so we must delete
+    # first to change config).
     if args.slave_name:
-        if slave_device_exists(sess, base, args.slave_name):
-            print(f"OK: slave device {args.slave_name!r} already configured -- no change")
-        else:
-            if not args.slave_ip:
-                raise SystemExit("--slave-ip required when --slave-name is set")
+        if not args.slave_ip:
+            raise SystemExit("--slave-ip required when --slave-name is set")
+
+        current_di = _query_slave_dev_field(args.slave_name, "di_size")
+        current_ai = _query_slave_dev_field(args.slave_name, "ir_size")
+        current_aor = _query_slave_dev_field(args.slave_name, "hr_read_size")
+        desired = (str(args.slave_di_size), str(args.slave_ai_size), str(args.slave_aor_size))
+        found = (current_di, current_ai, current_aor)
+
+        if found == desired:
             print(
-                f"configuring slave device {args.slave_name!r} -> "
-                f"{args.slave_ip}:{args.slave_port} (di={args.slave_di_size}, ai={args.slave_ai_size})"
+                f"OK: slave device {args.slave_name!r} already configured "
+                f"(di={current_di}, ai={current_ai}, aor={current_aor}) -- no change"
             )
+        else:
+            if current_di is not None:
+                print(
+                    f"slave device {args.slave_name!r} exists with "
+                    f"(di={current_di}, ai={current_ai}, aor={current_aor}), "
+                    f"desired {desired} -- delete + re-add"
+                )
+                _delete_slave_dev_row(args.slave_name)
+            else:
+                print(f"slave device {args.slave_name!r} not present -- configuring")
             add_slave_device(
                 sess,
                 base,
@@ -473,10 +541,11 @@ def main() -> int:
                 slave_id=args.slave_id,
                 di_size=args.slave_di_size,
                 ai_size=args.slave_ai_size,
+                aor_size=args.slave_aor_size,
             )
             # The runtime must be cycled to pick up the new slave device.
             restart_runtime(sess, base)
-            print(f"OK: slave device {args.slave_name!r} added, runtime restarted")
+            print(f"OK: slave device {args.slave_name!r} configured, runtime restarted")
 
     return 0
 

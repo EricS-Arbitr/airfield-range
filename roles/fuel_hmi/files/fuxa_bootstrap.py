@@ -140,6 +140,43 @@ def post_project(base: str, token: str | None, project: dict) -> None:
         )
 
 
+def ensure_broadcast_all(base: str, token: str | None) -> None:
+    """Set settings.broadcastAll = true so the server pushes ALL tag values
+    to every client every poll, without the client having to send an
+    explicit tag-subscription first. Without this, the runtime's
+    updateDeviceValues() function (see server/runtime/index.js:555) takes
+    the "subscription-only" branch and sends an empty values array to
+    clients that haven't subscribed. Our compound-widget project doesn't
+    trigger the subscription registration path on load, so widgets get
+    starved of values indefinitely.
+
+    Setting persists to _appdata/mysettings.json. Idempotent -- POSTing
+    the same value repeatedly is a no-op on FUXA's side.
+    """
+    r = requests.get(urljoin(base, "/api/settings"), headers=_headers(token), timeout=10)
+    if r.status_code == 200:
+        try:
+            current = r.json()
+            if current.get("broadcastAll") is True:
+                return  # already set, no action needed
+        except ValueError:
+            pass
+    # POST the setting
+    r = requests.post(
+        urljoin(base, "/api/settings"),
+        json={"broadcastAll": True},
+        headers=_headers(token),
+        timeout=10,
+    )
+    if r.status_code >= 400:
+        # Non-fatal -- warn but continue
+        print(
+            f"WARN: POST /api/settings broadcastAll=true returned {r.status_code}. "
+            "Widgets may show empty values until this is set manually.",
+            file=sys.stderr,
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--host", required=True)
@@ -176,6 +213,10 @@ def main() -> int:
                 "accepted the vault-supplied creds."
             )
         current = get_current_project(base, token)
+
+    # Persist broadcastAll:true regardless of project upload path. It's an
+    # orthogonal setting that just needs to be right for widgets to bind.
+    ensure_broadcast_all(base, token)
 
     if not args.force and project_matches(current or {}, target_project):
         print("OK: FUXA already has fuel_farm project loaded -- no change")

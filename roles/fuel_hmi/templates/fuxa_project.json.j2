@@ -79,8 +79,14 @@
 {%   set divisor = (1.0 / r.scale) | round(0, 'floor') | int %}
 {%   set _ = tag_rows.append('"' ~ r.tag ~ '": {"id":"' ~ r.tag ~ '","name":"' ~ r.tag ~ '","type":"Int16","address":' ~ (r.addr + 100 + 1) ~ ',"memaddress":300000,"divisor":' ~ divisor ~ ',"daq":{"enabled":true,"changed":true,"interval":10,"restored":false}}') %}
 {% endfor %}
+{# HRs: OpenPLC master's slave-device polling puts the mirrored HR
+   values at %QW100+ (= Modbus HR 100+), same pattern as IR+100 / DI+800
+   in the earlier fixes. Shifted by +100 so FUXA polls the mirrored
+   values (state_machine's LR*_ACTIVE_TRUCK etc.) instead of OpenPLC's
+   own unset %QW0-7 which stays at zeros. Requires --slave-aor-size=8
+   in the openplc_bootstrap call. #}
 {% for h in fuel_modbus_holding_registers %}
-{%   set _ = tag_rows.append('"' ~ h.tag ~ '": {"id":"' ~ h.tag ~ '","name":"' ~ h.tag ~ '","type":"Int16","address":' ~ (h.addr + 1) ~ ',"memaddress":400000,"daq":{"enabled":true,"changed":true,"interval":10,"restored":false}}') %}
+{%   set _ = tag_rows.append('"' ~ h.tag ~ '": {"id":"' ~ h.tag ~ '","name":"' ~ h.tag ~ '","type":"Int16","address":' ~ (h.addr + 100 + 1) ~ ',"memaddress":400000,"daq":{"enabled":true,"changed":true,"interval":10,"restored":false}}') %}
 {% endfor %}
         {{ tag_rows | join(',\n        ') }}
       }

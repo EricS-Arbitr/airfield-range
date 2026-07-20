@@ -122,5 +122,13 @@
       - --slave-id=1
       - --slave-di-size=11
       - --slave-ai-size=10
+      # aor-size=8 mirrors fuelsim's 8 holding registers into OpenPLC's
+      # %QW100+ region (LR*_ACTIVE_TRUCK, LR*_SRC_TANK, LR*_PRESET_GAL,
+      # PUMP_LEADLAG_SEL, SYS_MODE). FUXA polls those at Modbus HR 100+
+      # so the LR-1/LR-2 detail panels can show the active-truck /
+      # source-tank / preset-gal values fuelsim's state_machine sets
+      # from replay events. aow_size stays 0 -- OpenPLC never writes
+      # back to fuelsim (state_machine is authoritative).
+      - --slave-aor-size=8
   register: bootstrap_result
   changed_when: "'no change' not in bootstrap_result.stdout"
