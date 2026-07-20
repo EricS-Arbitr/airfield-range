@@ -16,6 +16,41 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-07-20 · bug · roles/fuel_sim/files/fuelsim/physics.py — totalizer arithmetic `float & int` TypeError silently kills physics tick 1
+
+**Symptom.** User asks "why do tank levels + header pressure never change?" — Grafana shows T-101/T-102/T-103 pinned at their initial fills (90/82/78 %) for hours, header pressure flat at 20 psi. Truck queue advances (`R-01 DISPENSING`, `R-02 LOADING`, ...), audit-DB rows accumulate, ST interlocks show PERMITTED — everything looks alive except sensor values.
+
+**Diagnostic trail.**
+1. Rate-check probe: `P202_RUN_CMD` True 120/120 samples over 60s (pump 2 commanded on the whole time) but `LR2_FLOW = 0/120`. So state_machine sets pump-run coils correctly, but physics never observes them → no drain, no pressure boost.
+2. Header-pressure probe: `HEADER_PRESS` = 200 (0.1 psi units = 20.0 psi = base only, `running_pumps = 0`) — constant for 10s. Physics.tick's formula is `20 + running × 15`, so this proves physics is either dead or writing a constant value.
+3. Full state snapshot during an active load: ALL interlock inputs True (valve=1, ground=1, deadman=1, overfill=0, src_tank=1, ESD=0, T101_LO=0, outlet=1), but `P201_RUN_STS = 0` (the DI physics writes back from `p1_actually_runs`). So `_interlock_ok()` was somehow returning False — impossible per the observed inputs.
+4. Added a conditional `log.warning("LR1 blocked: ...")` at the point where the interlock decision is made. Redeployed. Log was silent → the conditional branch never executed → physics tick isn't running the code.
+5. Added an unconditional heartbeat `log.warning("physics heartbeat: tick_ctr=%d", ...)` + wrapped `_tick(...)` in `try/except log.exception; raise`. Redeployed. Heartbeat never fired but the try/except caught the exception:
+   ```
+   TypeError: unsupported operand type(s) for &: 'float' and 'int'
+     File "/opt/fuelsim/bin/physics.py", line 232, in _tick
+       (physics.racks[1].totalizer_gal + flow_lr1_gal) & 0xFFFFFFFF
+   ```
+
+**Root cause.** `flow_lr{1,2}_gal = physics.rack_flow_gpm * (dt_s / 60.0)` is a float (even at flow_gpm=0 → `0.0`). `physics.racks[1].totalizer_gal + flow_lr{1,2}_gal` → float. Then `float & 0xFFFFFFFF` → TypeError. The `int()` cast in the old form `int((tot + flow) & 0xFFFFFFFF)` applied to the *result* of the `&` — but the `&` never runs because the operands are wrong-typed. Fires on every tick, including the first (before any flow).
+
+**Why nobody noticed for four days.** asyncio's `gather(return_exceptions=True)` at shutdown silently swallows unhandled task exceptions. During runtime, a dead coroutine just… stays dead; no message ever hits the journal. state_machine kept running as a separate coroutine, kept advancing the replay, kept writing coil/HR values that FUXA/Telegraf polled and showed on the HMI. Every downstream observer thought the sim was working. The only tell was that sensor timeseries never changed — but with tank capacities of 500,000 gal (INT-percent resolution = 5,000 gal/tick), that would have been hard to distinguish from realistic slow drawdown anyway.
+
+**Fix (overlay).** Move the `int()` cast *inside* the `& 0xFFFFFFFF`:
+```python
+physics.racks[1].totalizer_gal = int(physics.racks[1].totalizer_gal + flow_lr1_gal) & 0xFFFFFFFF
+physics.racks[2].totalizer_gal = int(physics.racks[2].totalizer_gal + flow_lr2_gal) & 0xFFFFFFFF
+```
+Now: int of the float sum → int, then `int & int` → int. Assigned back to `totalizer_gal`, which was already typed as int in `RackState`.
+
+**Hardening (kept permanently).** Wrapped `_tick(...)` in try/except that calls `log.exception(...)` before re-raising. The exception still exits the coroutine (correct behavior — a broken tick shouldn't silently mask), but now a traceback lands in the journal on the *first* failing tick instead of getting swallowed until process shutdown. This would have caught the July-16 issue in seconds instead of four days.
+
+**Related.** The 2026-07-16 `fuel_rw` sequence-USAGE grant fix (entry above) had regressed on the range (fuel_db redeploy dropped/recreated grants without re-running the sequence-privs task). That was fixed in the same redeploy cycle and is why the state_machine's `_on_load_end` warnings about "no open load in memory" also stopped: the old service instance was crashing DB inserts in the middle of `_on_load_start`, leaving `open_loads` unpopulated. Fresh service + fresh grants = clean state.
+
+**Follow-up.** Consider tightening tank-level Modbus reporting to decipercent (INT × 0.1 %) or per-mille so slow drawdowns are visible on the Grafana panel resolution without needing to wait hours.
+
+---
+
 ## 2026-07-20 · bug · roles/fuel_plc/files/fuel_farm.st — ST interlock logic bound to unbound %IX0.x / %IW0-9 (always zero)
 
 **Symptom.** After the 2026-07-17 slave-device fix landed the fuelsim mirror at Modbus DI 800+ / IR 100+, FUXA and Telegraf were rewired to poll those higher addresses and started rendering live values. But the ST program itself continued to declare `LR1_GROUND_OK AT %IX0.2`, `T101_LEVEL AT %IW0`, etc. — OpenPLC's *own* DI 0-10 / IR 0-9 memory, which is unbound to any physical or slave-polled IO on our software-only PLC. So the interlock logic (`LR1_PERMIT`, `LR2_PERMIT`, ESD latch) always saw zeros: `GROUND_OK=False`, `DEADMAN=False`, `OVERFILL=False`, `T101_LO_LVL=False`, `ESD_ACTIVE=False`. Interlocks were effectively no-ops — permissive checks always False (blocking load-valve TRUE, which was already the default), ESD trip never triggered. The visible readouts on the HMI were fine (FUXA polled the slave mirror directly), but the ST program running inside OpenPLC was doing symbolic math on empty inputs.

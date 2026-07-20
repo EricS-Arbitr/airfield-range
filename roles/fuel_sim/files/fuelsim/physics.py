@@ -134,7 +134,12 @@ async def run(cfg: dict, sim: "SimState", physics: Physics) -> None:
     # Seed initial values so first Modbus poll sees sane data.
     _write_slow_state(sim, physics)
     _write_totalizers(sim, physics)
-    tick_ctr = 0
+    # Guard the tick with try/except so any exception is logged with a
+    # traceback instead of silently killing the coroutine. asyncio's
+    # gather(return_exceptions=True) at shutdown swallows unhandled task
+    # exceptions -- without this guard the July-20 float&int TypeError
+    # went undiagnosed for four days while state_machine kept advancing
+    # (fooled everyone into thinking the sim was working).
     while True:
         await asyncio.sleep(dt_s)
         try:
@@ -142,9 +147,6 @@ async def run(cfg: dict, sim: "SimState", physics: Physics) -> None:
         except Exception:
             log.exception("physics tick raised — task will exit")
             raise
-        tick_ctr += 1
-        if tick_ctr % 25 == 0:   # heartbeat every 5s
-            log.warning("physics heartbeat: tick_ctr=%d esd_latched=%s", tick_ctr, physics.esd_latched)
 
 
 def _tick(sim: "SimState", physics: Physics, dt_s: float) -> None:
@@ -188,29 +190,6 @@ def _tick(sim: "SimState", physics: Physics, dt_s: float) -> None:
     p1_actually_runs = p1_cmd and lr1_ok
     p2_actually_runs = p2_cmd and lr2_ok
 
-    # DEBUG: when a pump is commanded but interlock blocks, log the reason
-    # (rate-limited via a monotonic tick counter to avoid log spam at 5 Hz).
-    if not hasattr(physics, '_debug_tick_ctr'):
-        physics._debug_tick_ctr = 0
-    physics._debug_tick_ctr += 1
-    if physics._debug_tick_ctr % 25 == 0:   # ~every 5 sec at 5 Hz
-        if p1_cmd and not p1_actually_runs:
-            log.warning(
-                "LR1 blocked: cmd=%d valve=%d ground=%d dead=%d over=%d src=%s "
-                "esd_latched=%s lo_sw=%s",
-                p1_cmd, lr1_valve, lr1_ground, lr1_deadman, lr1_overfill,
-                lr1_src, physics.esd_latched,
-                physics.tanks[lr1_src].lo_switch if lr1_src in physics.tanks else 'NO_SRC',
-            )
-        if p2_cmd and not p2_actually_runs:
-            log.warning(
-                "LR2 blocked: cmd=%d valve=%d ground=%d dead=%d over=%d src=%s "
-                "esd_latched=%s lo_sw=%s",
-                p2_cmd, lr2_valve, lr2_ground, lr2_deadman, lr2_overfill,
-                lr2_src, physics.esd_latched,
-                physics.tanks[lr2_src].lo_switch if lr2_src in physics.tanks else 'NO_SRC',
-            )
-
     # ---- Flow integration -------------------------------------------
     flow_lr1_gpm = physics.rack_flow_gpm if p1_actually_runs else 0.0
     flow_lr2_gpm = physics.rack_flow_gpm if p2_actually_runs else 0.0
@@ -228,12 +207,13 @@ def _tick(sim: "SimState", physics: Physics, dt_s: float) -> None:
         )
 
     # Increment totalizers (32-bit wraparound handled at set_totalizer).
-    physics.racks[1].totalizer_gal = int(
-        (physics.racks[1].totalizer_gal + flow_lr1_gal) & 0xFFFFFFFF
-    )
-    physics.racks[2].totalizer_gal = int(
-        (physics.racks[2].totalizer_gal + flow_lr2_gal) & 0xFFFFFFFF
-    )
+    # int() cast MUST be inside the & 0xFFFFFFFF -- flow_lr{1,2}_gal is
+    # a float (physics.rack_flow_gpm * dt_s/60), so the sum is float, and
+    # `float & int` raises TypeError. Old form `int((tot + flow) & MASK)`
+    # applied int() to the mask result, but the mask never ran because
+    # the & op errored first, silently killing the physics task.
+    physics.racks[1].totalizer_gal = int(physics.racks[1].totalizer_gal + flow_lr1_gal) & 0xFFFFFFFF
+    physics.racks[2].totalizer_gal = int(physics.racks[2].totalizer_gal + flow_lr2_gal) & 0xFFFFFFFF
     physics.racks[1].dispensed_this_batch_gal += flow_lr1_gal
     physics.racks[2].dispensed_this_batch_gal += flow_lr2_gal
 
