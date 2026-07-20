@@ -51,6 +51,15 @@ PROGRAM main
     T101_LO_LVL     AT %IX1.1 : BOOL;
     ESD_ACTIVE      AT %IX1.2 : BOOL;
 
+    (* Probe: single test binding at %IX100.0 to verify matiec accepts
+       triple-digit addresses. Not referenced by any interlock logic --
+       only presence in VAR block matters. If compile succeeds, we can
+       bulk-move all input bindings from %IX0.x/%IW0-9 to %IX100.x/%IW100+
+       so the ST reads real slave-polled data. If compile fails at line
+       ~55 with 'invalid located variable declaration', matiec chokes on
+       three-digit %IX addresses and we need a different strategy. *)
+    PROBE_100_0     AT %IX100.0 : BOOL;
+
     T101_LEVEL      AT %IW0 : INT;
     T102_LEVEL      AT %IW1 : INT;
     T103_LEVEL      AT %IW2 : INT;
