@@ -79,14 +79,22 @@
 {%   set divisor = (1.0 / r.scale) | round(0, 'floor') | int %}
 {%   set _ = tag_rows.append('"' ~ r.tag ~ '": {"id":"' ~ r.tag ~ '","name":"' ~ r.tag ~ '","type":"Int16","address":' ~ (r.addr + 100 + 1) ~ ',"memaddress":300000,"divisor":' ~ divisor ~ ',"daq":{"enabled":true,"changed":true,"interval":10,"restored":false}}') %}
 {% endfor %}
-{# HRs: OpenPLC master's slave-device polling puts the mirrored HR
-   values at %QW100+ (= Modbus HR 100+), same pattern as IR+100 / DI+800
-   in the earlier fixes. Shifted by +100 so FUXA polls the mirrored
-   values (state_machine's LR*_ACTIVE_TRUCK etc.) instead of OpenPLC's
-   own unset %QW0-7 which stays at zeros. Requires --slave-aor-size=8
-   in the openplc_bootstrap call. #}
+{# HRs mirrored from fuelsim by OpenPLC's slave-device polling land in
+   the INPUT REGISTER area (not HR area) at IR 111+ -- specifically:
+     * ai_size=10 fills OpenPLC IR 100-109
+     * then a single-word padding gap at IR 110 (OpenPLC quirk)
+     * aor_size=8 fills IR 111-118 with fuelsim's HR 0-7
+
+   Verified empirically via pymodbus sweep 2026-07-20: fuelsim HR 0 =
+   5210 shows up at ff-plc-1 IR 111.
+
+   So memaddress goes to INPUT_REGISTERS (300000, not 400000) and the
+   offset is +111 zero-based (+112 in FUXA's 1-based address scheme).
+   Semantic downgrade: these tags become READ-ONLY (which is fine --
+   fuelsim's state_machine is authoritative and we set aow_size=0
+   anyway, so FUXA was never going to write these). #}
 {% for h in fuel_modbus_holding_registers %}
-{%   set _ = tag_rows.append('"' ~ h.tag ~ '": {"id":"' ~ h.tag ~ '","name":"' ~ h.tag ~ '","type":"Int16","address":' ~ (h.addr + 100 + 1) ~ ',"memaddress":400000,"daq":{"enabled":true,"changed":true,"interval":10,"restored":false}}') %}
+{%   set _ = tag_rows.append('"' ~ h.tag ~ '": {"id":"' ~ h.tag ~ '","name":"' ~ h.tag ~ '","type":"Int16","address":' ~ (h.addr + 111 + 1) ~ ',"memaddress":300000,"divisor":1,"daq":{"enabled":true,"changed":true,"interval":10,"restored":false}}') %}
 {% endfor %}
         {{ tag_rows | join(',\n        ') }}
       }

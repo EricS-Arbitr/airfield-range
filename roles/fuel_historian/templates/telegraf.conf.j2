@@ -59,25 +59,29 @@
 {% endfor %}
   ]
 
-  # --- Input registers (FC4) -- slave-mapped from fuelsim, addr + 100 ---
+  # --- Input registers (FC4) -- slave-mapped from fuelsim ---
+  #   IR + 100 : ai_size=10 mirror of fuelsim's INPUT registers (IR 0-9)
+  #   IR + 111 : aor_size=8 mirror of fuelsim's HOLDING registers (HR 0-7)
+  # Both land in OpenPLC's Modbus IR area (not HR). The single-word gap
+  # at IR 110 is a padding quirk of OpenPLC's slave-device memory map.
+  # Verified empirically 2026-07-20 via pymodbus sweep. So HRs get
+  # bundled INTO input_registers, not the FC3 section.
   input_registers = [
 {% for r in fuel_modbus_input_registers %}
-    { name = "{{ r.tag }}", byte_order = "AB", data_type = "INT16", scale = {{ r.scale }}, address = [{{ r.addr + 100 }}] }{% if not loop.last %},{% endif %}
+    { name = "{{ r.tag }}", byte_order = "AB", data_type = "INT16", scale = {{ r.scale }}, address = [{{ r.addr + 100 }}] }{% if not loop.last or fuel_modbus_holding_registers %},{% endif %}
 
 {% endfor %}
-  ]
-
-  # --- Holding registers (FC3) -- slave-mapped from fuelsim, addr + 100 ---
-  # OpenPLC's slave-device polling (aor_size=8 in the fuel_plc bootstrap)
-  # mirrors fuelsim's HR 0-7 into OpenPLC's %QW100+ = Modbus HR 100+.
-  # Telegraf polls the mirrored region so Grafana sees the values fuelsim's
-  # state_machine actually sets (LR*_ACTIVE_TRUCK, LR*_SRC_TANK, etc.).
-  holding_registers = [
 {% for h in fuel_modbus_holding_registers %}
-    { name = "{{ h.tag }}", byte_order = "AB", data_type = "INT16", scale = 1.0, address = [{{ h.addr + 100 }}] }{% if not loop.last %},{% endif %}
+    { name = "{{ h.tag }}", byte_order = "AB", data_type = "INT16", scale = 1.0, address = [{{ h.addr + 111 }}] }{% if not loop.last %},{% endif %}
 
 {% endfor %}
   ]
+
+  # --- Holding registers (FC3) -- OpenPLC's own %QW0-7 outputs (unset) ---
+  # Empty by design. fuelsim's real HR values are polled via IR above
+  # (OpenPLC's slave-device aor lands them there). Keeping the section
+  # commented so future edits are unambiguous.
+  # holding_registers = []
 
   # Totalizers (LR*_METER_LO + LR*_METER_HI): fuelsim exposes as
   # 32-bit split hi-first. To reassemble into gallons, add a Flux
