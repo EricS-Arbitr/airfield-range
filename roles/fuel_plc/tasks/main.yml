@@ -108,7 +108,14 @@
 # state_machine, which is authoritative for those.
 - name: Bootstrap OpenPLC (upload ST + start runtime + configure slave device, idempotent)
   ansible.builtin.command:
-    argv:
+    # `+ ['--force-program']` only when st_program.changed. That way the
+    # bootstrap's own idempotency-check ("runtime already running with
+    # 'fuel_farm', skip") gets bypassed when the .st on disk actually
+    # changed. Without this, edits to the .st file are silently ignored
+    # by the running OpenPLC container until it gets recreated.
+    argv: "{{ _openplc_bootstrap_argv + (['--force-program'] if st_program is defined and st_program.changed else []) }}"
+  vars:
+    _openplc_bootstrap_argv:
       - /opt/openplc/bin/openplc_bootstrap.py
       - --host={{ fuel_plc_ip }}
       - --port={{ openplc_web_port }}

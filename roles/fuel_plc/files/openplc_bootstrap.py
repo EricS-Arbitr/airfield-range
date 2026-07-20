@@ -463,6 +463,17 @@ def main() -> int:
         "--program-description",
         default="Fuel farm interlocks (Ansible-managed)",
     )
+    ap.add_argument(
+        "--force-program",
+        action="store_true",
+        help=(
+            "Bypass the 'runtime already running with our program' idempotency "
+            "check and always re-upload/re-compile/re-start. Use when the .st "
+            "source file has changed on disk -- the bootstrap script can't "
+            "detect .st content drift on its own (only checks program NAME). "
+            "Pass conditionally on Ansible's st_program.changed from the role."
+        ),
+    )
     # Slave device config (fuel-farm-sim). All optional -- if --slave-name
     # is unset, the slave-device step is skipped.
     ap.add_argument("--slave-name", help="If set, ensure a slave device by this name")
@@ -486,13 +497,19 @@ def main() -> int:
     state, current = dashboard_state(sess, base)
     program_ok = state == "running" and current == args.program_name
 
-    if program_ok:
+    if program_ok and not args.force_program:
         print(f"OK: openplc already Running with program {current!r} -- program step no change")
     else:
-        print(
-            f"openplc state={state} current={current!r} -- "
-            f"uploading + (re)starting with {args.program_name!r}"
-        )
+        if args.force_program and program_ok:
+            print(
+                f"--force-program set -- runtime already Running with {current!r} but "
+                f"re-uploading anyway (caller signaled .st file changed on disk)"
+            )
+        else:
+            print(
+                f"openplc state={state} current={current!r} -- "
+                f"uploading + (re)starting with {args.program_name!r}"
+            )
         upload_and_start(
             sess,
             base,
