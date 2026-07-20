@@ -180,6 +180,29 @@ def _tick(sim: "SimState", physics: Physics, dt_s: float) -> None:
     p1_actually_runs = p1_cmd and lr1_ok
     p2_actually_runs = p2_cmd and lr2_ok
 
+    # DEBUG: when a pump is commanded but interlock blocks, log the reason
+    # (rate-limited via a monotonic tick counter to avoid log spam at 5 Hz).
+    if not hasattr(physics, '_debug_tick_ctr'):
+        physics._debug_tick_ctr = 0
+    physics._debug_tick_ctr += 1
+    if physics._debug_tick_ctr % 25 == 0:   # ~every 5 sec at 5 Hz
+        if p1_cmd and not p1_actually_runs:
+            log.warning(
+                "LR1 blocked: cmd=%d valve=%d ground=%d dead=%d over=%d src=%s "
+                "esd_latched=%s lo_sw=%s",
+                p1_cmd, lr1_valve, lr1_ground, lr1_deadman, lr1_overfill,
+                lr1_src, physics.esd_latched,
+                physics.tanks[lr1_src].lo_switch if lr1_src in physics.tanks else 'NO_SRC',
+            )
+        if p2_cmd and not p2_actually_runs:
+            log.warning(
+                "LR2 blocked: cmd=%d valve=%d ground=%d dead=%d over=%d src=%s "
+                "esd_latched=%s lo_sw=%s",
+                p2_cmd, lr2_valve, lr2_ground, lr2_deadman, lr2_overfill,
+                lr2_src, physics.esd_latched,
+                physics.tanks[lr2_src].lo_switch if lr2_src in physics.tanks else 'NO_SRC',
+            )
+
     # ---- Flow integration -------------------------------------------
     flow_lr1_gpm = physics.rack_flow_gpm if p1_actually_runs else 0.0
     flow_lr2_gpm = physics.rack_flow_gpm if p2_actually_runs else 0.0
