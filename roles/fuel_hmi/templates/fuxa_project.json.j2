@@ -152,34 +152,28 @@
    getPlaceholderContent still trips on the childless <circle>/<rect>,
    we'll see the same loadWatch error return and can pivot to a text
    overlay approach. #}
-{# Color-action options schema (from class le in main.*.js):
-     class le {
-       strokeA = null;   // FROM stroke color
-       strokeB = null;   // TO stroke color
-       fillA   = null;   // FROM fill color
-       fillB   = null;   // TO fill color
-       interval= 1000;   // transition time (ms)
-     }
-   The action transitions fillA -> fillB when the bound tag enters the
-   [min,max] range. When it leaves the range, it reverts to fillA.
-   So a single action is enough (no need for two like the pipe demo,
-   which used clockwise/stop because those are one-shot triggers). #}
-{% for pair in [
-    ('P201_RUN_STS_dot', 'P201_RUN_STS', '#2c8f3f'),
-    ('P202_RUN_STS_dot', 'P202_RUN_STS', '#2c8f3f'),
-    ('LR1_GROUND_OK_dot', 'LR1_GROUND_OK', '#2c8f3f'),
-    ('LR1_DEADMAN_dot', 'LR1_DEADMAN', '#2c8f3f'),
-    ('LR1_OVERFILL_dot', 'LR1_OVERFILL', '#c62828'),
-    ('P201_RUN_CMD_dot', 'P201_RUN_CMD', '#2c8f3f'),
-    ('LR2_GROUND_OK_dot', 'LR2_GROUND_OK', '#2c8f3f'),
-    ('LR2_DEADMAN_dot', 'LR2_DEADMAN', '#2c8f3f'),
-    ('LR2_OVERFILL_dot', 'LR2_OVERFILL', '#c62828'),
-    ('P202_RUN_CMD_dot', 'P202_RUN_CMD', '#2c8f3f'),
-] %}
-{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-circle","name":"' ~ pair[1] ~ '","property":{"events":[],"actions":[{"options":{"strokeA":null,"strokeB":null,"fillA":"#c0c0c0","fillB":"' ~ pair[2] ~ '","interval":1000},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","variable":"' ~ pair[1] ~ '","type":"color"}],"options":{}},"label":"Shape"}') %}
-{% endfor %}
-{# ESD banner: transition from green to red when ESD_ACTIVE=1. #}
-{% set _ = items_overview.append('"esd_banner_rect": {"id":"esd_banner_rect","type":"svg-ext-shapes-rect","name":"ESD Banner","property":{"events":[],"actions":[{"options":{"strokeA":null,"strokeB":null,"fillA":"#2c8f3f","fillB":"#c62828","interval":1000},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^ESD_ACTIVE","variable":"ESD_ACTIVE","type":"color"}],"options":{}},"label":"Shape"}') %}
+{# Status dots + ESD banner color actions deferred as follow-up.
+   Attempted schemas that crashed FUXA's widget-load pipeline:
+     - action.options = {fill:"#..."}          -> silent (no color change)
+     - action.options = {strokeA:null, strokeB:null, fillA:"#c0c0c0",
+                          fillB:"#2c8f3f", interval:1000}  -> pipeline crashes
+   The class le definition (from main.*.js) shows the fill/stroke A/B/
+   interval fields ARE the schema, but null values or field ordering seem
+   to break widget-load somewhere downstream of getPlaceholderContent.
+
+   Reverse-engineering the exact accepted structure from the minified
+   client bundle without a known-good live example (FUXA editor-generated
+   dashboard) is a rabbit hole beyond §4 scope. Deferred to a future
+   session where we can (a) author a working color widget in the FUXA
+   editor via the UI, export the .fuxap, and copy the exact structure;
+   or (b) fetch an example from a FUXA community project.
+
+   Current shipped state:
+     - All numeric readouts (tank levels, temp, pressure, flow, active
+       truck, source tank, preset) render live values -- 90% of the
+       operator utility.
+     - Status dots stay static grey (no color change on boolean flip).
+     - ESD banner stays static green ("SYSTEM NORMAL"). #}
           {{ items_overview | join(',\n          ') }}
         }
       },
@@ -208,20 +202,9 @@
 {# Status dots (svg-ext-shapes-circle with color action) on the Detail
    view too. Same structure as Process Overview. Nav button (rect click)
    still deferred -- needs svg-ext-html_button with onSetView event. #}
-{% for pair in [
-    ('LR1D_GROUND_OK_dot', 'LR1_GROUND_OK', '#2c8f3f'),
-    ('LR1D_DEADMAN_dot', 'LR1_DEADMAN', '#2c8f3f'),
-    ('LR1D_OVERFILL_dot', 'LR1_OVERFILL', '#c62828'),
-    ('LR1D_LOAD_VLV_dot', 'LR1_LOAD_VLV', '#2c8f3f'),
-    ('LR1D_ESD_dot', 'ESD_ACTIVE', '#c62828'),
-    ('LR2D_GROUND_OK_dot', 'LR2_GROUND_OK', '#2c8f3f'),
-    ('LR2D_DEADMAN_dot', 'LR2_DEADMAN', '#2c8f3f'),
-    ('LR2D_OVERFILL_dot', 'LR2_OVERFILL', '#c62828'),
-    ('LR2D_LOAD_VLV_dot', 'LR2_LOAD_VLV', '#2c8f3f'),
-    ('LR2D_ESD_dot', 'ESD_ACTIVE', '#c62828'),
-] %}
-{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-shapes-circle","name":"' ~ pair[1] ~ '","property":{"events":[],"actions":[{"options":{"strokeA":null,"strokeB":null,"fillA":"#c0c0c0","fillB":"' ~ pair[2] ~ '","interval":1000},"range":{"min":"1","max":"1"},"variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","variable":"' ~ pair[1] ~ '","type":"color"}],"options":{}},"label":"Shape"}') %}
-{% endfor %}
+{# Same deferral as Process Overview -- status dot color actions stay
+   out to keep widget-init pipeline healthy for the value widgets that
+   ARE working. See comment in items_overview block above for details. #}
           {{ items_detail | join(',\n          ') }}
         }
       }

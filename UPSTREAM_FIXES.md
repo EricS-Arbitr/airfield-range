@@ -112,6 +112,16 @@ The demo project's working value widgets (`VAL_...` IDs, `svg-ext-value` type) a
 
 **Why deferred.** The SVG *layout* is validated and looks like a real OT operator screen. The complete OpenPLC → SCADA-bus → FUXA → DAQ data chain is proven with real values landing in Grafana-compatible storage (SQLite). §5 Grafana dashboards give the same "operator sees live values" milestone through a much better-documented and less-adversarial tool. FUXA widget rendering can come back later as polish.
 
+**Update (2026-07-20).** Deep-dive session solved the value-widget path. Findings, in order:
+
+  1. **Compound-widget structure** — `svg-ext-value` needs an outer `<g id="VAL_..." type="svg-ext-value">` with an inner `<text id="VAL_..._inner">` containing placeholder content. Auto-derived types like `svg-ext-shapes-text` from a plain `<text>` are not real widget handlers.
+  2. **Server-side broadcast subscription** — `settings.broadcastAll:false` is the default; widgets only receive values for tags the client explicitly subscribed to. Our project doesn't trigger client-side subscription registration, so the server was pushing empty `values: []` arrays. Fix: POST `{broadcastAll:true}` to `/api/settings` on every deploy. Now wired into `fuxa_bootstrap.py:ensure_broadcast_all`.
+  3. **Client-side value routing** — the client-side handler `this.socket.on(DEVICE_VALUES, ...)` uses `fi.values[i].id` DIRECTLY as the `this.variables[]` key. So `variableId` in widget items should be the plain tag name (e.g. `"T101_LEVEL"`), NOT the demo project's `"DeviceName^~^TagName"` format — the demo works because a `deviceAdapterService` translates plain-tag-name → adapter-scoped ID, but the adapter mechanism doesn't kick in for our project. Plain name works universally.
+  4. **HR mirror lands in IR area, not HR area** — OpenPLC's slave-device polling with `aor_size=8` doesn't put values at Modbus HR 100+ as the display code implied. Empirical `pymodbus` sweep of ff-plc-1 showed fuelsim's HR 0 (5210) shows up at **Modbus IR 111** on ff-plc-1 — the mirror lives in the input-register memory area with a single-word padding gap after `ai_size`. So FUXA/Telegraf HR-mapped tags need `memaddress: 300000` (IR) and `address: h.addr + 111 + 1`.
+  5. **Status-dot color actions — deferred.** `svg-ext-shapes-circle` items with `type: "color"` action and `options: {fillA, fillB, strokeA, strokeB, interval}` (per the `class le` schema found in the client bundle) crash FUXA's widget-init pipeline. Attempted `options: {fill:"#..."}` also silently didn't fire. The exact accepted structure requires an editor-generated live example to compare against; reverse-engineering the minified Angular bundle without one hit diminishing returns.
+
+Final shipped state: numeric readouts render live (tank levels, temp, pressure, active-truck, source-tank, preset, flow across both views); status dots stay static grey; ESD banner stays static green. Grafana provides the color-coded state-change operator glance in the meantime.
+
 ---
 
 ## 2026-07-17 · bug · roles/fuel_historian/templates/telegraf.conf.j2 -- multiple `coils = [...]` blocks in Jinja loop = invalid TOML (only last one survives) + missing slave-mapped address offsets
