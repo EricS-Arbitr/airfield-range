@@ -5,11 +5,14 @@
   here: it MUST match group_vars/fuel.yml (fuel_modbus_coils /
   discrete_inputs / input_registers / holding_registers) exactly.
 
-  Address map:
-    QX0.0-QX1.1  --> Modbus coils     0-9
-    IX0.0-IX1.2  --> Modbus DIs       0-10
-    IW0-IW9      --> Modbus IRs       0-9   (10 registers -- see NOTE below)
-    QW0-QW7      --> Modbus HRs       0-7
+  Address map (post-2026-07-20 reshuffle so inputs read real
+  slave-polled data instead of unbound zeros):
+    QX0.0-QX1.1        --> Modbus coils    0-9    (ST OUTPUTS -- pump/valve commands)
+    IX100.0-IX101.2    --> Modbus DIs      800-810 (fuelsim mirror -- status feedback)
+    IW100-IW109        --> Modbus IRs      100-109 (fuelsim mirror -- analog measurements)
+    QW0-QW7            --> Modbus HRs      0-7    (ST OUTPUTS -- setpoints, unused)
+  Interlock LOGIC references variable names not addresses, so only
+  the AT bindings change; no logic edits needed.
 
   NOTE on IW10: the meter totalizer high-word for rack 2 (LR2_METER_HI)
   would sit at input register 10, but matiec on the fdamador image
@@ -39,37 +42,37 @@ PROGRAM main
     ESD_RESET       AT %QX1.0 : BOOL;
     ALARM_ACK       AT %QX1.1 : BOOL;
 
-    P201_RUN_STS    AT %IX0.0 : BOOL;
-    P202_RUN_STS    AT %IX0.1 : BOOL;
-    LR1_GROUND_OK   AT %IX0.2 : BOOL;
-    LR2_GROUND_OK   AT %IX0.3 : BOOL;
-    LR1_DEADMAN     AT %IX0.4 : BOOL;
-    LR2_DEADMAN     AT %IX0.5 : BOOL;
-    LR1_OVERFILL    AT %IX0.6 : BOOL;
-    LR2_OVERFILL    AT %IX0.7 : BOOL;
-    T101_HI_LVL     AT %IX1.0 : BOOL;
-    T101_LO_LVL     AT %IX1.1 : BOOL;
-    ESD_ACTIVE      AT %IX1.2 : BOOL;
+    (* Input DIs (status feedback from fuelsim). Bound at %IX100.0+
+       so the ST reads OpenPLC's slave-device-polling mirror of
+       fuelsim's DI 0-10 (verified via probe c31d31d that matiec
+       accepts triple-digit %IX addresses). Previous %IX0.x bindings
+       always saw zero because OpenPLC's own DI 0-10 are unbound to
+       any local IO on our software-only PLC. *)
+    P201_RUN_STS    AT %IX100.0 : BOOL;
+    P202_RUN_STS    AT %IX100.1 : BOOL;
+    LR1_GROUND_OK   AT %IX100.2 : BOOL;
+    LR2_GROUND_OK   AT %IX100.3 : BOOL;
+    LR1_DEADMAN     AT %IX100.4 : BOOL;
+    LR2_DEADMAN     AT %IX100.5 : BOOL;
+    LR1_OVERFILL    AT %IX100.6 : BOOL;
+    LR2_OVERFILL    AT %IX100.7 : BOOL;
+    T101_HI_LVL     AT %IX101.0 : BOOL;
+    T101_LO_LVL     AT %IX101.1 : BOOL;
+    ESD_ACTIVE      AT %IX101.2 : BOOL;
 
-    (* Probe: single test binding at %IX100.0 to verify matiec accepts
-       triple-digit addresses. Not referenced by any interlock logic --
-       only presence in VAR block matters. If compile succeeds, we can
-       bulk-move all input bindings from %IX0.x/%IW0-9 to %IX100.x/%IW100+
-       so the ST reads real slave-polled data. If compile fails at line
-       ~55 with 'invalid located variable declaration', matiec chokes on
-       three-digit %IX addresses and we need a different strategy. *)
-    PROBE_100_0     AT %IX100.0 : BOOL;
-
-    T101_LEVEL      AT %IW0 : INT;
-    T102_LEVEL      AT %IW1 : INT;
-    T103_LEVEL      AT %IW2 : INT;
-    T101_TEMP       AT %IW3 : INT;
-    LR1_FLOW        AT %IW4 : INT;
-    LR2_FLOW        AT %IW5 : INT;
-    HEADER_PRESS    AT %IW6 : INT;
-    LR1_METER_LO    AT %IW7 : INT;
-    LR1_METER_HI    AT %IW8 : INT;
-    LR2_METER_LO    AT %IW9 : INT;
+    (* Input IRs (analog measurements from fuelsim). Bound at %IW100+
+       for the same reason as the DIs above -- OpenPLC's own %IW0-9
+       are unbound. *)
+    T101_LEVEL      AT %IW100 : INT;
+    T102_LEVEL      AT %IW101 : INT;
+    T103_LEVEL      AT %IW102 : INT;
+    T101_TEMP       AT %IW103 : INT;
+    LR1_FLOW        AT %IW104 : INT;
+    LR2_FLOW        AT %IW105 : INT;
+    HEADER_PRESS    AT %IW106 : INT;
+    LR1_METER_LO    AT %IW107 : INT;
+    LR1_METER_HI    AT %IW108 : INT;
+    LR2_METER_LO    AT %IW109 : INT;
 
     LR1_PRESET_GAL     AT %QW0 : INT;
     LR2_PRESET_GAL     AT %QW1 : INT;
