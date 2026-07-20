@@ -117,7 +117,7 @@
     ('VAL_LR2_PRESET_GAL',   'LR2_PRESET_GAL',   'LR-2 Preset Gal',     0, 30000, 'gal'),
     ('VAL_LR2_FLOW',         'LR2_FLOW',         'LR-2 Flow gpm',       0, 1000, 'gpm'),
 ] %}
-{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-value","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","alarmId":"","alarmSrc":"","alarm":"","alarmColor":"","events":[],"actions":[],"ranges":[{"type":"unit","min":' ~ pair[3] ~ ',"max":' ~ pair[4] ~ ',"color":"","stroke":"","text":"' ~ pair[5] ~ '"}]},"label":"Value"}') %}
+{%   set _ = items_overview.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-value","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"' ~ pair[1] ~ '","alarmId":"","alarmSrc":"","alarm":"","alarmColor":"","events":[],"actions":[],"ranges":[{"type":"unit","min":' ~ pair[3] ~ ',"max":' ~ pair[4] ~ ',"color":"","stroke":"","text":"' ~ pair[5] ~ '"}]},"label":"Value"}') %}
 {% endfor %}
 {# Status dots (svg-ext-shapes-circle actions), ESD banner (rect action), and
    nav buttons (rect click) were dropped from items. FUXA's widget-load
@@ -157,7 +157,7 @@
     ('VAL_LR2D_METER',        'LR2_METER_LO',     'LR-2 Meter low word', 0, 65535, 'gal'),
     ('VAL_LR2D_FLOW',         'LR2_FLOW',         'LR-2 Flow gpm',       0, 1000, 'gpm'),
 ] %}
-{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-value","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"PLC-FuelFarm^~^' ~ pair[1] ~ '","alarmId":"","alarmSrc":"","alarm":"","alarmColor":"","events":[],"actions":[],"ranges":[{"type":"unit","min":' ~ pair[3] ~ ',"max":' ~ pair[4] ~ ',"color":"","stroke":"","text":"' ~ pair[5] ~ '"}]},"label":"Value"}') %}
+{%   set _ = items_detail.append('"' ~ pair[0] ~ '": {"id":"' ~ pair[0] ~ '","type":"svg-ext-value","name":"' ~ pair[2] ~ '","property":{"variable":"' ~ pair[1] ~ '","variableSrc":"PLC-FuelFarm","variableId":"' ~ pair[1] ~ '","alarmId":"","alarmSrc":"","alarm":"","alarmColor":"","events":[],"actions":[],"ranges":[{"type":"unit","min":' ~ pair[3] ~ ',"max":' ~ pair[4] ~ ',"color":"","stroke":"","text":"' ~ pair[5] ~ '"}]},"label":"Value"}') %}
 {% endfor %}
 {# Same as Process Overview -- status dots and nav button items dropped
    to keep widget-init pipeline from exploding on non-<text> elements.
