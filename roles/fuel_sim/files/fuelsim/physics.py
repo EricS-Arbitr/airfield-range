@@ -134,9 +134,17 @@ async def run(cfg: dict, sim: "SimState", physics: Physics) -> None:
     # Seed initial values so first Modbus poll sees sane data.
     _write_slow_state(sim, physics)
     _write_totalizers(sim, physics)
+    tick_ctr = 0
     while True:
         await asyncio.sleep(dt_s)
-        _tick(sim, physics, dt_s)
+        try:
+            _tick(sim, physics, dt_s)
+        except Exception:
+            log.exception("physics tick raised — task will exit")
+            raise
+        tick_ctr += 1
+        if tick_ctr % 25 == 0:   # heartbeat every 5s
+            log.warning("physics heartbeat: tick_ctr=%d esd_latched=%s", tick_ctr, physics.esd_latched)
 
 
 def _tick(sim: "SimState", physics: Physics, dt_s: float) -> None:
