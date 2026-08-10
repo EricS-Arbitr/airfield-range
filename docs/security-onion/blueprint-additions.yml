@@ -1,0 +1,182 @@
+# =========================================================================
+# blueprint-additions.yml — Security Onion for airfield-range (Blackstone)
+# =========================================================================
+# Draft for the platform blueprint. Mirrors the architecture proven in
+# PowerPlant/ss-pp-ab: distributed grid (manager + search + sensors) with
+# VyOS GRE mirroring into each sensor's tun0.
+#
+# Decisions taken 2026-08-10: distributed (not standalone), four sensors
+# covering corp / flight-ops / OT / edge.
+#
+# ONE MODIFICATION + FIVE ADDITIONS.
+# =========================================================================
+
+# -------------------------------------------------------------------------
+# 1. MODIFY AN EXISTING VM — soc-elastic
+# -------------------------------------------------------------------------
+# soc-elastic already exists at 172.31.7.15 (mgmt 10.255.240.131), reserved in
+# the inventory as "future Elastic / Security Onion stack" and deliberately
+# left without splunk-forwarder. It becomes the SO MANAGER.
+#
+# ** ITS IMAGE MUST CHANGE. ** It is currently
+# global/RDP_Ubuntu_Server_24.04:1.1.0 (noble). Security Onion 2.4 at our
+# pinned SHA rejects it: setup/so-functions does not accept even jammy
+# (22.04) -- PowerPlant works only because so_base fakes jammy as focal
+# (UPSTREAM_FIXES 2026-07-22). Noble is two releases beyond what that hack
+# covers, and there is no Ansible-side workaround: so-setup exits before we
+# get a say.
+#
+# Use the same image PowerPlant's SO nodes run.
+#
+# Also needs resizing -- it was specced as a placeholder, not as a manager
+# running 14 containers plus Elasticsearch.
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-elastic"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"   # WAS RDP_Ubuntu_Server_24.04
+    cpuCount: 16                                        # confirm current value
+    memory: "32768"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.15"                          # unchanged
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.131"                       # unchanged
+      position: "FIRST"
+
+# -------------------------------------------------------------------------
+# 2. NEW — Elasticsearch data node
+# -------------------------------------------------------------------------
+# Storage-bound rather than CPU-bound; size for retention. In PowerPlant this
+# node carried roughly half the cluster's shards.
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-elastic-search"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 16
+    memory: "32768"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.20"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.182"
+      position: "FIRST"
+
+# -------------------------------------------------------------------------
+# 3-6. NEW — four sensors
+# -------------------------------------------------------------------------
+# Each pairs with one VyOS router over a GRE tunnel and binds Suricata + Zeek
+# to tun0. All four live on the SOC subnet with the manager; mirrored traffic
+# arrives encapsulated, so they need no interface in the segments they watch.
+#
+# Sensor -> router -> segments monitored:
+#   corp  <- bs-core-rtr        Services .2, HQ .14, IT .15, Supply .16
+#   fops  <- bs-ops-rtr         Flight-Ops-Services .3, Flight-Control .5,
+#                               Flight-Ops-Users .6
+#   ot    <- bs-modbus-gateway  MTU 172.16.45.0/29, Fuel PLC 172.16.45.8/29,
+#                               Fuel Sim 172.16.46.0/24
+#   edge  <- bs-edge-rtr        Internet 200.200.200.0/24, transit to bs-edge-fw
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-sensor-corp"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 8
+    memory: "16384"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.21"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.183"
+      position: "FIRST"
+
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-sensor-fops"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 8
+    memory: "16384"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.22"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.184"
+      position: "FIRST"
+
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-sensor-ot"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 8
+    memory: "16384"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.23"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.185"
+      position: "FIRST"
+
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "soc-sensor-edge"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 8
+    memory: "16384"
+    networkInterfaces:
+    - name: "SOC"
+      ipAddress: "172.31.7.24"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.186"
+      position: "FIRST"
+
+# =========================================================================
+# ADDRESSING NOTES
+# =========================================================================
+# SOC subnet 172.31.7.0/24 currently in use:
+#   .1 bs-sec-rtr   .13 soc-syslog  .15 soc-elastic  .16 soc-openvas
+#   .19 soc-splunk  .31-.36 soc-analyst01-06
+# .20-.24 are free and contiguous.
+#
+# Management: this range uses a contiguous block 10.255.240.100-.181 (82
+# hosts). New allocations continue at .182-.186 rather than backfilling low
+# addresses.
+#
+# VERIFY BOTH RANGES AGAINST THE PLATFORM before applying. host_vars is not
+# authoritative for what the platform has already handed out -- a PowerPlant
+# blueprint draft collided on 10.255.240.136 for exactly this reason.
+#
+# Note also that VyOS host_vars in this repo declare their management address
+# via `ansible_host` with NO matching network_interfaces entry. Any script
+# that enumerates used addresses must read both, or it will report router
+# addresses as free (.100, .109 and .133 are bs-ops-rtr, bs-modbus-gateway and
+# bs-edge-rtr respectively).
+#
+# =========================================================================
+# WHAT STILL NEEDS CONFIRMING ON LIVE DEVICES (not from host_vars)
+# =========================================================================
+# 1. Router interface numbering. PORTING_GUIDE 9.9: blueprint NIC order did
+#    not match VyOS ethN on the dev range. Run `show interfaces` on each of
+#    bs-core-rtr, bs-ops-rtr, bs-modbus-gateway and bs-edge-rtr before setting
+#    vyos_mirror_source_interfaces. Draft mapping from host_vars:
+#      bs-core-rtr        eth1 172.31.2.1   eth2 .14.1  eth3 .15.1  eth4 .16.1
+#      bs-ops-rtr         eth1 172.31.3.1   eth2 .5.1   eth3 .6.1
+#      bs-modbus-gateway  eth1 172.16.45.9  eth2 .45.1  eth3 .46.16
+#      bs-edge-rtr        eth0 200.200.200.1  eth1 199.252.163.2
+#    eth0/eth5 on core and eth0/eth4 on ops are 172.31.1.x transit /30s -- do
+#    NOT mirror those; they carry the GRE itself, and mirroring a tunnel's own
+#    transit is how you build a feedback loop.
+#
+# 2. GRE source address per router -- must be an address with a route to
+#    172.31.7.0/24. Sensors sit behind bs-sec-rtr, which sits behind
+#    bs-ops-fw, so the path differs per router and cannot be inferred here.
+#    This is the value so_sensor's so_gre_remote_underlay must match EXACTLY;
+#    getting it wrong produces a tunnel that is UP with zero RX forever
+#    (PORTING_GUIDE 9.10b).
+#
+# 3. Proto 47 through bs-edge-fw and bs-ops-fw. The edge and OT tunnels cross
+#    both. PowerPlant needed explicit rules even where lab-mode permit-any
+#    already passed GRE.

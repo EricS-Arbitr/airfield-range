@@ -16,6 +16,100 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-08-10 · bug · `dcpromo_child_heal` could only ever run its first task — and that task uses the credentials it exists to repair
+
+**Symptom.** A clean airfield deployment failed all three attempts:
+
+```
+fatal: [fops-dc01]: FAILED! => {"elapsed": 1832,
+  "msg": "timed out waiting for ping module test: ntlm: the specified
+          credentials were rejected by the server"}
+```
+
+Attempt 1 got `fops-dc01` to `ok=24 changed=15` then `unreachable=1`; attempts
+2 and 3 died in `init` after 30 minutes each. Total cost: ~1.5 hours of a
+deploy to a single host.
+
+**State on the machine, read from the console** (Ansible could not reach it):
+
+```
+Domain: fops.blackstone.mil   PartOfDomain: True
+ADWS / NTDS / Netlogon:       all Stopped
+```
+
+That is precisely the HALF_JOINED state `dcpromo_child_heal` was written for
+(UPSTREAM_FIXES 2026-07-13). The role's diagnosis and its repair path are both
+correct.
+
+**It never got to run them.** The log shows exactly one task per attempt:
+
+```
+TASK [dcpromo_child_heal : Try to reach on default (unqualified simspace) creds]
+fatal: [fops-dc01]: UNREACHABLE! ...ignoring
+PLAY [Init] ...
+```
+
+Two things combine:
+1. The role probed with DEFAULT unqualified `simspace` FIRST — the exact
+   credentials broken in the half-joined state, because Windows prefixes the
+   username with the machine's now-bad domain hint. The probe is guaranteed to
+   fail in the only state the role acts on.
+2. `hosts: pdc_fops` contains ONE host. `ignore_unreachable: true` does not
+   keep a play alive when its sole host is unreachable — the play ends and
+   `init` runs next. The three credential fallbacks below the probe were
+   unreachable code on every real failure.
+
+The role had `MACHINE\simspace` and `MACHINE\Administrator` fallbacks written
+specifically for this, and could not reach either.
+
+**Fix.** Probe with credentials that work in the states the role acts on.
+`MACHINE\simspace` resolves to the local SAM on BOTH a clean (WORKGROUP) host
+and a half-joined one, bypassing the broken domain hint. It fails only on a
+genuinely promoted DC — the one state where we want to no-op anyway. Order is
+now:
+
+1. `MACHINE\simspace`  (clean + half-joined)
+2. `MACHINE\Administrator`  (dcpromo resets this to domain_admin_password)
+3. default unqualified  (already-promoted DC, or clean)
+
+then state detection and heal as before.
+
+**The general shape, worth carrying.** A repair routine whose first action
+requires the thing being repaired cannot work. Same family as the
+"self-blessing marker" and "guard blocks its own remediation" entries in the
+so-ansible log — but sharper, because here the working alternatives were
+already present and simply out of reach.
+
+**Also relevant:** single-host plays have no partial-failure mode. This is the
+second time that has cost a run — PowerPlant's `so-firewall` play died the same
+way (ss-pp-ab UPSTREAM_FIXES 2026-08-04 later 11).
+
+**Status: PROPOSED** — verify by re-running; the heal play should now reach
+`Announce detected state` with `HALF_JOINED` and complete the repair.
+
+## 2026-08-10 · bug · build_tarball shipped ~50% AppleDouble junk (same defect as ss-pp-ab and so-ansible)
+
+`ab_mb.tgz` was **836 members with 418 junk** — one `._name` companion per real
+file. Apple's `tar` emits AppleDouble for any file carrying an extended
+attribute, and `com.apple.provenance` is set on anything downloaded.
+
+`--no-xattrs`, which this script carried, does nothing for it. `COPYFILE_DISABLE=1`
+is the load-bearing setting. Measured 2026-08-07 on a directory with one
+xattr'd file: plain tar 2 junk, `--no-xattrs` 2 junk, `COPYFILE_DISABLE=1` zero.
+
+It hides because Apple's `tar -tzf` MERGES AppleDouble members back into xattrs
+when listing — a macOS `tar -tzf | grep '\._'` reports 0 against an archive
+that is half junk. **Verify archive contents with `python3 tarfile`.**
+
+Fixed with `COPYFILE_DISABLE=1`, `--exclude` for both patterns, and a
+whole-stage `find -delete`. Now 418 members, 0 junk.
+
+Note `tar -xzf` is ADDITIVE on the controller: every junk file shipped so far
+persists in `/etc/ansible`, as does anything ever shipped and later deleted.
+
+**Status: VERIFIED** — measured before and after with a tool that can see the
+difference.
+
 ## 2026-07-20 · bug · roles/fuel_sim/files/fuelsim/physics.py — totalizer arithmetic `float & int` TypeError silently kills physics tick 1
 
 **Symptom.** User asks "why do tank levels + header pressure never change?" — Grafana shows T-101/T-102/T-103 pinned at their initial fills (90/82/78 %) for hours, header pressure flat at 20 psi. Truck queue advances (`R-01 DISPENSING`, `R-02 LOADING`, ...), audit-DB rows accumulate, ST interlocks show PERMITTED — everything looks alive except sensor values.

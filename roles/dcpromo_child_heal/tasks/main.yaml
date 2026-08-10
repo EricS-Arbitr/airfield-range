@@ -22,24 +22,24 @@
 #
 # See UPSTREAM_FIXES.md 2026-07-13.
 
-# Try unqualified `simspace` FIRST. Works on:
-#   - CLEAN baseline (snapshot-reverted, WORKGROUP -> local SAM)
-#   - Any state where default group_vars/windows.yml creds succeed
-# If this works, the host doesn't need healing -- end_host so init picks
-# it up on the same default creds.
-- name: Try to reach on default (unqualified simspace) creds
-  ansible.windows.win_ping:
-  register: heal_default_ping
-  ignore_errors: true
-  ignore_unreachable: true
-
-- name: End host — default creds work, no heal needed
-  ansible.builtin.meta: end_host
-  when: heal_default_ping is succeeded
-
-# Default creds failed -- likely half-joined state (unqualified `simspace`
-# is prefixed with the broken domain hint). Try MACHINE\simspace which
-# routes to local SAM regardless of domain hint.
+# ORDER MATTERS, AND THE ORIGINAL ORDER COULD NOT WORK.
+#
+# This role used to probe with DEFAULT (unqualified `simspace`) credentials
+# first. Those are precisely the credentials broken in the state it exists to
+# repair, so on a half-joined host the first task went UNREACHABLE -- and
+# because `hosts: pdc_fops` contains exactly one host, the play ended there.
+# `ignore_unreachable: true` does not keep a play alive when its only host is
+# unreachable. The three credential fallbacks below were therefore unreachable
+# code on every real failure. Observed 2026-08-10: three deploy attempts, each
+# running exactly one task of this role before init timed out for 30 minutes.
+#
+# MACHINE\simspace is the right first probe because it works in BOTH states
+# this role acts on:
+#   CLEAN (WORKGROUP)  -> resolves to the local SAM
+#   HALF_JOINED        -> resolves to the local SAM, bypassing the broken
+#                         domain hint that rejects unqualified auth
+# It fails only on a genuinely promoted DC, where there is no local SAM left --
+# and that is the one state where we want to no-op anyway.
 - name: Reach candidate child-DC via local MACHINE\simspace auth
   vars:
     ansible_user: "{{ heal_local_user }}"
@@ -49,10 +49,9 @@
   ignore_errors: true
   ignore_unreachable: true
 
-# If MACHINE\simspace doesn't work (rare, e.g. platform reset the user),
-# try MACHINE\Administrator. dcpromo's "local admin guest customization"
-# task resets local Administrator to `domain_admin_password`, so after
-# any dcpromo attempt this path always works.
+# dcpromo's "local admin guest customization" resets local Administrator to
+# domain_admin_password, so after any dcpromo attempt this path works even if
+# the simspace account was disturbed.
 - name: Fallback — reach via local MACHINE\Administrator auth
   vars:
     ansible_user: "{{ inventory_hostname | upper }}\\Administrator"
@@ -61,21 +60,39 @@
   register: heal_admin_ping
   ignore_errors: true
   ignore_unreachable: true
-  when: heal_local_ping is failed
+  when: heal_local_ping is not succeeded
 
-- name: Pick which local credential succeeded
+# Last resort: default unqualified creds. Succeeds on an ALREADY-PROMOTED DC
+# (local SAM gone, domain account answers) and on a clean host. Kept LAST
+# precisely because it is the one probe that cannot work in the half-joined
+# state.
+- name: Fallback — reach via default unqualified creds
+  ansible.windows.win_ping:
+  register: heal_default_ping
+  ignore_errors: true
+  ignore_unreachable: true
+  when:
+    - heal_local_ping is not succeeded
+    - heal_admin_ping is defined and heal_admin_ping is not succeeded
+
+- name: Pick which credential succeeded
   ansible.builtin.set_fact:
     heal_auth_user: >-
       {{ heal_local_user if heal_local_ping is succeeded
-         else (inventory_hostname | upper ~ '\\Administrator') }}
+         else ((inventory_hostname | upper ~ '\\Administrator')
+               if (heal_admin_ping is defined and heal_admin_ping is succeeded)
+               else ansible_user) }}
     heal_auth_password: >-
       {{ heal_local_password if heal_local_ping is succeeded
-         else domain_admin_password }}
+         else (domain_admin_password
+               if (heal_admin_ping is defined and heal_admin_ping is succeeded)
+               else ansible_password) }}
     heal_reachable: >-
-      {{ (heal_local_ping is succeeded) or
-         (heal_admin_ping is defined and heal_admin_ping is succeeded) }}
+      {{ (heal_local_ping is succeeded)
+         or (heal_admin_ping is defined and heal_admin_ping is succeeded)
+         or (heal_default_ping is defined and heal_default_ping is succeeded) }}
 
-- name: End host — unreachable via any local auth (platform issue)
+- name: End host — unreachable via any credential (platform issue)
   ansible.builtin.meta: end_host
   when: not (heal_reachable | bool)
 
