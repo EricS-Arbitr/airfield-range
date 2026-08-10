@@ -16,6 +16,62 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-08-10 (later 3) · bug · `group_vars/vault.yml` was shipping PLAINTEXT inside the tarball
+
+**Found while answering a question about boot delays**, not by looking for it.
+
+```
+group_vars/vault.yml            -> PLAINTEXT
+ansible.cfg vault_password_file -> /home/simspace/.vault_pass   (never created)
+in ab_mb.tgz                    -> yes
+deploy.sh vault guard           -> none
+```
+
+Seven credentials in the clear — `vault_simspace_password`,
+`vault_openplc_admin_password`, `vault_fuxa_admin_password`,
+`vault_influxdb_admin_token`, `vault_mqtt_password`, and both DB passwords —
+distributed in every tarball, while `ansible.cfg` was configured as though the
+file were encrypted. Nothing would ever have reported it: with the file in
+plaintext, Ansible never needs the password, so the missing `.vault_pass` was
+silent too. Two settings that only make sense together, neither checking the
+other.
+
+This is exactly the condition PowerPlant's fail-closed guard exists for. Its
+comment reads *"a plaintext vault would have shipped silently"* — and here it
+did, because that guard was never ported.
+
+**Fix.**
+- `group_vars/vault.yml` encrypted (AES256), password `simspace1`, matching the
+  PowerPlant / so-ansible convention so one dev password covers all three
+  ranges. Round-tripped before committing: all 7 keys recover.
+- `deploy.sh` gains PowerPlant's fail-closed guard plus the unattended
+  prerequisites (retry-dir ownership, `.vault_pass` ownership/mode via
+  `sudo -n`).
+
+**Three fatal checks, all exercised locally before shipping:**
+
+| case | result |
+|---|---|
+| encrypted vault + readable password file | exit 0, one line of output |
+| encrypted vault + MISSING password file | exit 1, names the blueprint's responsibility |
+| PLAINTEXT vault | exit 1, refuses to ship credentials |
+
+**NEW BLUEPRINT DEPENDENCY — read this before the next deploy.** Now that the
+vault is encrypted, `/home/simspace/.vault_pass` must exist on the controller
+containing `simspace1`, or every play fails at parse time. The blueprint must
+place it, as PowerPlant's does. `deploy.sh` now fails in the first seconds with
+the exact commands rather than failing obscurely later.
+
+**Not done: the boot delay.** The question that surfaced this was whether to
+port PowerPlant's `BOOT_DELAY`. No — airfield's `init` already waits
+`timeout: 1800`, against PowerPlant's 60s, so a slow boot is already absorbed.
+A host silent after 30 minutes is not booting slowly, and none of today's
+failures were timing.
+
+**Status: VERIFIED** for the guard logic (three cases exercised) and the
+encryption round-trip; the blueprint dependency is **OPEN** until
+`.vault_pass` is placed.
+
 ## 2026-08-10 (later 2) · bug · ROOT CAUSE — `Install-ADDSDomain` used `-NoRebootOnCompletion` and a handler that cannot authenticate
 
 **This is the defect. Everything else in today's log was treating its symptom.**
