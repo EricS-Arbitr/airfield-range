@@ -121,16 +121,38 @@ if ! head -1 "$VAULT_FILE" | grep -q '^\$ANSIBLE_VAULT'; then
 	exit 1
 fi
 
+# CREATE the password file if the platform did not. These deployments are
+# blueprint-driven with nobody at a keyboard, so "the blueprint must place
+# this" is a defect, not documentation -- the same reasoning that moved the
+# retry-dir chown in here.
+#
+# THE TRADE, STATED SO NOBODY REDISCOVERS IT LATER: the vault password now
+# ships inside ab_mb.tgz alongside the encrypted vault, so anyone holding the
+# tarball can decrypt it. What encryption still buys is real but narrower --
+# credentials stay out of the repo, out of `git log`, and out of a casual grep
+# of a checkout. It is NOT protection against someone with the artifact.
+#
+# Revisit when the tarball moves to the in-platform Nexus: the platform can
+# inject VAULT_PASS_VALUE as a real secret, and this default should go away.
+VAULT_PASS_VALUE="${VAULT_PASS_VALUE:-simspace1}"
+
 if [ ! -f "$VAULT_PASS_FILE" ]; then
-	echo "ERROR: $VAULT_PASS_FILE not found, but $VAULT_FILE is encrypted."
-	echo "       ansible.cfg points vault_password_file here, so every play"
-	echo "       will fail at parse time without it."
-	echo ""
-	echo "       The range blueprint is responsible for placing this file."
-	echo "       A hands-off deploy cannot prompt for it. To unblock manually:"
-	echo "         sudo bash -c 'echo -n \"simspace1\" > $VAULT_PASS_FILE'"
-	echo "         sudo chown $ANSIBLE_OWNER:$ANSIBLE_OWNER $VAULT_PASS_FILE"
-	echo "         sudo chmod 600 $VAULT_PASS_FILE"
+	echo "  $VAULT_PASS_FILE missing — creating it"
+	as_root install -m 0600 -o "$ANSIBLE_OWNER" -g "$ANSIBLE_OWNER" /dev/null "$VAULT_PASS_FILE" 2>/dev/null \
+		|| as_root touch "$VAULT_PASS_FILE" 2>/dev/null || true
+	# `tee` via as_root rather than a redirect: the redirect is performed by
+	# THIS shell, which is not root, so `as_root echo ... > file` writes as the
+	# unprivileged user and fails on a root-owned path.
+	printf '%s' "$VAULT_PASS_VALUE" | as_root tee "$VAULT_PASS_FILE" >/dev/null 2>&1 || true
+	as_root chown "$ANSIBLE_OWNER:$ANSIBLE_OWNER" "$VAULT_PASS_FILE" 2>/dev/null || true
+	as_root chmod 0600 "$VAULT_PASS_FILE" 2>/dev/null || true
+fi
+
+if [ ! -f "$VAULT_PASS_FILE" ]; then
+	echo "ERROR: $VAULT_PASS_FILE does not exist and could not be created."
+	echo "       $VAULT_FILE is encrypted, and ansible.cfg points"
+	echo "       vault_password_file here, so every play would fail at parse"
+	echo "       time. Check that the deploy account has passwordless sudo."
 	exit 1
 fi
 
@@ -147,7 +169,23 @@ if [ ! -s "$VAULT_PASS_FILE" ]; then
 	echo "ERROR: $VAULT_PASS_FILE is empty. Refusing to deploy."
 	exit 1
 fi
-echo "  vault encrypted; password file present and readable"
+
+# PROVE THE PASSWORD ACTUALLY DECRYPTS THE VAULT. Existence, readability and
+# non-emptiness are all satisfiable by a WRONG password -- and a wrong one
+# fails much later as an opaque parse error on the first vaulted variable,
+# which reads as a YAML problem rather than a credential one.
+if command -v ansible-vault >/dev/null 2>&1; then
+	if ! ansible-vault view "$VAULT_FILE" --vault-password-file "$VAULT_PASS_FILE" >/dev/null 2>&1; then
+		echo "ERROR: $VAULT_PASS_FILE does not decrypt $VAULT_FILE."
+		echo "       A pre-existing password file may hold a different secret."
+		echo "       Remove it and re-run to have deploy.sh recreate it, or set"
+		echo "       VAULT_PASS_VALUE to the correct password."
+		exit 1
+	fi
+	echo "  vault encrypted; password file present and DECRYPTS"
+else
+	echo "  vault encrypted; password file present and readable (ansible-vault absent, decrypt unverified)"
+fi
 
 for i in $(seq 1 $MAX_ATTEMPTS); do
 	# Attempt 2 gets the retry-file scope IF the previous attempt actually

@@ -56,11 +56,34 @@ did, because that guard was never ported.
 | encrypted vault + MISSING password file | exit 1, names the blueprint's responsibility |
 | PLAINTEXT vault | exit 1, refuses to ship credentials |
 
-**NEW BLUEPRINT DEPENDENCY — read this before the next deploy.** Now that the
-vault is encrypted, `/home/simspace/.vault_pass` must exist on the controller
-containing `simspace1`, or every play fails at parse time. The blueprint must
-place it, as PowerPlant's does. `deploy.sh` now fails in the first seconds with
-the exact commands rather than failing obscurely later.
+**deploy.sh now handles the password file itself** (2026-08-10, later 4).
+These deploys are blueprint-driven with nobody at a keyboard, so "the blueprint
+must place this file" is a defect rather than documentation. `deploy.sh`:
+- creates `/home/simspace/.vault_pass` if absent, mode 0600, owned by the
+  ansible user, from `VAULT_PASS_VALUE` (default `simspace1`, env-overridable);
+- RESPECTS a pre-existing file — the airfield controller image ships one baked
+  in, and it is never overwritten;
+- **proves the password actually decrypts the vault** before running anything.
+
+That last check is the important one. Existence, readability and non-emptiness
+are all satisfiable by a WRONG password, and a wrong password fails much later
+as an opaque parse error on the first vaulted variable — which reads as a YAML
+problem, not a credential one. The image's baked-in secret and the password
+this repo was encrypted with are two independently-set values with no reason to
+agree; nothing but this check would notice.
+
+**The trade, recorded so nobody rediscovers it.** The password now ships inside
+`ab_mb.tgz` beside the encrypted vault, so anyone holding the tarball can
+decrypt it. What encryption still buys is narrower but real: credentials stay
+out of the repo, out of `git log`, and out of a casual grep of a checkout. It
+is NOT protection against someone with the artifact. Revisit when the tarball
+moves to the in-platform Nexus, where the platform can inject
+`VAULT_PASS_VALUE` as a real secret and the default should be removed.
+
+**Four cases exercised locally** (with `as_root` and `ansible-vault` stubbed so
+the logic ran without root): absent -> created 0600 and decrypts; re-run ->
+idempotent; pre-existing WRONG password -> refuses with a named cause;
+pre-existing CORRECT password -> respected untouched.
 
 **Not done: the boot delay.** The question that surfaced this was whether to
 port PowerPlant's `BOOT_DELAY`. No — airfield's `init` already waits
