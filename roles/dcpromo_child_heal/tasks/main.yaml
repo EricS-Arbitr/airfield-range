@@ -60,7 +60,13 @@
   register: heal_admin_ping
   ignore_errors: true
   ignore_unreachable: true
-  when: heal_local_ping is not succeeded
+  # `is not succeeded` is WRONG for this and cost a deploy on 2026-08-10: an
+  # unreachable-but-ignored result has failed=false, so `is succeeded` PASSES
+  # and this fallback was skipped. The succeeded/failed tests say nothing about
+  # reachability. Test both explicitly.
+  when: >-
+    (heal_local_ping.unreachable | default(false))
+    or (heal_local_ping.failed | default(false))
 
 # Last resort: default unqualified creds. Succeeds on an ALREADY-PROMOTED DC
 # (local SAM gone, domain account answers) and on a clean host. Kept LAST
@@ -72,25 +78,51 @@
   ignore_errors: true
   ignore_unreachable: true
   when:
-    - heal_local_ping is not succeeded
-    - heal_admin_ping is defined and heal_admin_ping is not succeeded
+    - (heal_local_ping.unreachable | default(false)) or (heal_local_ping.failed | default(false))
+    - heal_admin_ping.skipped | default(false)
+      or (heal_admin_ping.unreachable | default(false))
+      or (heal_admin_ping.failed | default(false))
+
+# 2026-08-10: fops-dc01 reached a state the original three probes cannot
+# reach -- promoted far enough to LOSE the local SAM (MACHINE\simspace
+# rejected) and serve LDAP on 389, but with ADWS down and NO CrossRef in the
+# parent forest. Local credentials are gone; the only accounts that exist are
+# in the child domain's own directory.
+- name: Fallback — reach via CHILD-domain Administrator
+  vars:
+    ansible_user: "{{ (domain_name | regex_replace('\\..*$','')) | upper }}\\Administrator"
+    ansible_password: "{{ domain_admin_password }}"
+  ansible.windows.win_ping:
+  register: heal_child_ping
+  ignore_errors: true
+  ignore_unreachable: true
+  when:
+    - (heal_local_ping.unreachable | default(false)) or (heal_local_ping.failed | default(false))
+    - heal_admin_ping.skipped | default(false)
+      or (heal_admin_ping.unreachable | default(false))
+      or (heal_admin_ping.failed | default(false))
+    - heal_default_ping.skipped | default(false)
+      or (heal_default_ping.unreachable | default(false))
+      or (heal_default_ping.failed | default(false))
 
 - name: Pick which credential succeeded
+  vars:
+    ok_local:   "{{ not (heal_local_ping.unreachable   | default(true)) and not (heal_local_ping.failed   | default(true)) }}"
+    ok_admin:   "{{ not (heal_admin_ping.unreachable   | default(true)) and not (heal_admin_ping.failed   | default(true)) }}"
+    ok_default: "{{ not (heal_default_ping.unreachable | default(true)) and not (heal_default_ping.failed | default(true)) }}"
+    ok_child:   "{{ not (heal_child_ping.unreachable   | default(true)) and not (heal_child_ping.failed   | default(true)) }}"
   ansible.builtin.set_fact:
     heal_auth_user: >-
-      {{ heal_local_user if heal_local_ping is succeeded
-         else ((inventory_hostname | upper ~ '\\Administrator')
-               if (heal_admin_ping is defined and heal_admin_ping is succeeded)
-               else ansible_user) }}
+      {{ heal_local_user if ok_local | bool
+         else ((inventory_hostname | upper ~ '\\Administrator') if ok_admin | bool
+         else (ansible_user if ok_default | bool
+         else ((domain_name | regex_replace('\\..*$','')) | upper ~ '\\Administrator'))) }}
     heal_auth_password: >-
-      {{ heal_local_password if heal_local_ping is succeeded
-         else (domain_admin_password
-               if (heal_admin_ping is defined and heal_admin_ping is succeeded)
-               else ansible_password) }}
-    heal_reachable: >-
-      {{ (heal_local_ping is succeeded)
-         or (heal_admin_ping is defined and heal_admin_ping is succeeded)
-         or (heal_default_ping is defined and heal_default_ping is succeeded) }}
+      {{ heal_local_password if ok_local | bool
+         else (domain_admin_password if ok_admin | bool
+         else (ansible_password if ok_default | bool
+         else domain_admin_password)) }}
+    heal_reachable: "{{ (ok_local | bool) or (ok_admin | bool) or (ok_default | bool) or (ok_child | bool) }}"
 
 - name: End host — unreachable via any credential (platform issue)
   ansible.builtin.meta: end_host

@@ -16,6 +16,63 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-08-10 (later) · bug · `is succeeded` does not mean reachable — my own fallback gate skipped every fallback
+
+**Symptom.** After fixing the probe ORDER, attempt 3 still ran only three tasks:
+
+```
+MACHINE\simspace  -> UNREACHABLE ...ignoring
+Pick which credential succeeded -> ok
+Detect half-join state -> UNREACHABLE (fatal)
+fops-dc01 : ok=2 unreachable=1 skipped=2 ignored=1
+```
+
+`skipped=2` is the tell: both credential fallbacks were skipped.
+
+**Cause — mine.** The gate was `when: heal_local_ping is not succeeded`. In
+Ansible an unreachable-but-ignored result has **`failed: false`**, so
+`is succeeded` PASSES. The `succeeded` / `failed` tests describe task failure
+and say nothing about reachability. The condition therefore evaluated false and
+the role walked past both fallbacks into a task using credentials that could
+not work.
+
+I had just written the entry above about a repair routine whose first action
+requires the thing being repaired, then gated its alternatives on a test that
+cannot detect the failure mode in question.
+
+**Fix.** Test reachability explicitly —
+`heal_x.unreachable | default(false)` and `heal_x.failed | default(false)` —
+and default to `true` when computing success so an undefined (skipped) probe
+never counts as reachable.
+
+**A NEW state, worse than half-joined.** The diagnostic snapshot from bs-dc01
+shows fops-dc01 is no longer merely half-joined:
+
+```
+(Get-ADForest).Domains  -> blackstone.mil ONLY   (no child domain)
+CrossRefs               -> no FOPS entry
+DNS                     -> `fops NS` delegation DOES exist
+fops-dc01 LDAP :389     -> UP
+DsBindWithCred          -> failed with status 5 (access denied)
+Get-ADUser -Server fops.blackstone.mil -> ADWS not running
+```
+
+It promoted far enough to LOSE its local SAM — `MACHINE\simspace` is now
+rejected, which was not true before — and to serve LDAP, but never registered
+the domain in the forest, and ADWS is down. The role's three probes are all
+local-SAM or parent-domain; none can reach a machine whose only accounts live
+in a child directory that is not yet in the forest. A fourth probe
+(`FOPS\Administrator`) is added, though whether that directory will
+authenticate at all with ADWS down is unproven.
+
+**Recommendation recorded: do not keep healing this host.** Each attempt has
+moved it into a state further from both "clean" and "promoted", and the
+recovery surface grows each time. A fresh range costs ~5 minutes; the fixes
+here make the NEXT promotion recoverable, which is the durable win.
+
+**Status: PROPOSED** — the reachability fix is a clear correction; the
+child-domain probe is untested and may not help in this particular state.
+
 ## 2026-08-10 · bug · `dcpromo_child_heal` could only ever run its first task — and that task uses the credentials it exists to repair
 
 **Symptom.** A clean airfield deployment failed all three attempts:
