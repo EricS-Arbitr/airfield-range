@@ -16,6 +16,68 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-08-10 (later 2) · bug · ROOT CAUSE — `Install-ADDSDomain` used `-NoRebootOnCompletion` and a handler that cannot authenticate
+
+**This is the defect. Everything else in today's log was treating its symptom.**
+
+Attempt 1 on a CLEAN range:
+
+```
+TASK [dcpromo : Create child domain (this host becomes first DC of fops.blackstone.mil)]
+changed: [fops-dc01]
+
+RUNNING HANDLER [handlers : Reboot Windows]
+fatal: [fops-dc01]: UNREACHABLE! => {"msg": "ntlm: the specified credentials
+  were rejected by the server", "rebooted": false, "unreachable": true}
+```
+
+`Install-ADDSDomain` **succeeded**. The reboot that finalizes it never
+happened — `"rebooted": false`.
+
+**Why.** The task passes `-NoRebootOnCompletion` and delegates the reboot to
+`notify: Reboot Windows`. But `Install-ADDSDomain` sets the machine's Primary
+DNS Suffix and domain hint as part of its work, so from that moment unqualified
+NTLM is rejected. The handler runs after the task's WinRM session closes,
+cannot authenticate, and gives up. The promotion is written to disk and never
+finalized — which is precisely the half-joined state
+`dcpromo_child_heal` exists to clean up.
+
+**So the range half-joins on EVERY deploy, by construction.** Three ranges on
+2026-08-10, each losing 1.5+ hours, each "recovered" by healing a machine that
+was going to break again on the next run. The heal role is a bandage over a
+reboot that never fires.
+
+**Fix.** Reboot from inside the session that is still authenticated:
+
+```powershell
+& shutdown.exe /r /t 15 /f /c "dcpromo: finalizing child-domain promotion"
+```
+
+fired immediately after `Status -eq 'Success'`, and `notify: Reboot Windows`
+removed. `shutdown.exe` schedules a detached system process decoupled from
+WinRM — the same technique `dcpromo_child_heal` already uses, documented there
+because `Start-Job` children die with the parent shell.
+
+Added afterwards: a `wait_for_connection` and an AD-services check using
+`FOPS\Administrator` (the former local Administrator, now the child domain's).
+Both fatal. If that credential is wrong we want to know at the promotion, not
+three plays later when the bootstrap play reports "ADWS not running" — which
+reads as a service problem rather than an auth one.
+
+**The shape, for the third time today.** A step that invalidates the
+credentials the NEXT step needs:
+- `Install-ADDSDomain` -> reboot handler  (this entry)
+- half-joined host -> heal role's default-creds probe  (entry above)
+- unreachable probe -> `is succeeded` gate  (entry above)
+
+Each one was written as though the environment after an action is the same as
+before it. When an action changes authentication, everything downstream of it
+in the same play needs credentials chosen for the AFTER state.
+
+**Status: PROPOSED** — the reboot fix is high confidence; the
+`FOPS\Administrator` credential for the post-reboot wait is reasoned, not
+observed, and will fail loudly if wrong.
+
 ## 2026-08-10 (later) · bug · `is succeeded` does not mean reachable — my own fallback gate skipped every fallback
 
 **Symptom.** After fixing the probe ORDER, attempt 3 still ran only three tasks:

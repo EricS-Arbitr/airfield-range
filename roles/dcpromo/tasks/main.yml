@@ -203,7 +203,24 @@
         if ($result.Status -eq 'Success') {
           "$(Get-Date -Format o) DCPROMO_OK" | Add-Content $log
           $Ansible.Changed = $true
-          Write-Output "PROMOTION_OK"
+          # REBOOT FROM INSIDE THIS SESSION. Install-ADDSDomain sets the
+          # machine's domain hint as part of its work, so from this moment on
+          # the credentials that opened this WinRM session are the only ones
+          # that still work -- and only until the session closes.
+          #
+          # This task used to pass -NoRebootOnCompletion and `notify: Reboot
+          # Windows`. The handler ran AFTER the session closed, could not
+          # authenticate, and returned "rebooted": false. The promotion was
+          # written to disk and never finalized, leaving the machine
+          # half-joined on every single deploy (2026-08-10, three ranges).
+          #
+          # shutdown.exe launches a detached system process scheduled 15s out,
+          # fully decoupled from WinRM -- the same technique dcpromo_child_heal
+          # uses, and for the same reason (Start-Job children die with the
+          # parent shell, so the reboot never fires).
+          "$(Get-Date -Format o) SCHEDULING REBOOT (detached, 15s)" | Add-Content $log
+          & shutdown.exe /r /t 15 /f /c "dcpromo: finalizing child-domain promotion"
+          Write-Output "PROMOTION_OK REBOOT_SCHEDULED"
         } else {
           "$(Get-Date -Format o) DCPROMO_FAILED status=$($result.Status)" | Add-Content $log
           $Ansible.Failed = $true
@@ -217,7 +234,47 @@
         Write-Output "STACK: $($_.ScriptStackTrace)"
       }
   register: dcpromo_child
-  notify: Reboot Windows
+  # NO `notify: Reboot Windows`. The handler cannot authenticate after this
+  # task -- that is the defect, not a timing quirk. The reboot is fired
+  # in-session above.
   when:
     - parent_domain_name is defined
     - "'NEEDS_PROMOTION' in child_dc_state.stdout"
+
+# The machine comes back as a DC of the child domain, where the former local
+# Administrator is now the domain Administrator. Unqualified `simspace` will
+# NOT work here and neither will MACHINE\Administrator -- the local SAM is
+# gone once promotion finalizes.
+#
+# Fatal on purpose. If this credential is wrong, everything downstream fails
+# in confusing ways (the bootstrap play reports "ADWS not running", which
+# looks like a service problem rather than an auth one). Better to say so here.
+- name: Wait for the child DC to finish promoting and come back
+  vars:
+    ansible_user: "{{ (domain_name | regex_replace('\\..*$','')) | upper }}\\Administrator"
+    ansible_password: "{{ domain_admin_password }}"
+  ansible.builtin.wait_for_connection:
+    delay: 60
+    sleep: 15
+    timeout: 900
+  when:
+    - parent_domain_name is defined
+    - dcpromo_child is defined
+    - dcpromo_child is changed
+
+- name: Confirm AD services are actually running on the new child DC
+  vars:
+    ansible_user: "{{ (domain_name | regex_replace('\\..*$','')) | upper }}\\Administrator"
+    ansible_password: "{{ domain_admin_password }}"
+  ansible.windows.win_powershell:
+    script: |
+      $Ansible.Changed = $false
+      $svc = Get-Service ADWS, NTDS, Netlogon -ErrorAction SilentlyContinue
+      Write-Output ([string](($svc | Where-Object Status -ne 'Running').Count))
+  register: child_dc_services
+  changed_when: false
+  failed_when: (child_dc_services.output[0] | default('9') | int) != 0
+  when:
+    - parent_domain_name is defined
+    - dcpromo_child is defined
+    - dcpromo_child is changed
