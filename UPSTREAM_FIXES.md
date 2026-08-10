@@ -84,8 +84,17 @@ already present and simply out of reach.
 second time that has cost a run — PowerPlant's `so-firewall` play died the same
 way (ss-pp-ab UPSTREAM_FIXES 2026-08-04 later 11).
 
-**Status: PROPOSED** — verify by re-running; the heal play should now reach
-`Announce detected state` with `HALF_JOINED` and complete the repair.
+**Status: VERIFIED** — 2026-08-10, run against the stuck range:
+
+```
+fops-dc01 : ok=13  changed=3  failed=0
+```
+
+Thirteen tasks instead of one. `changed=3` is the repair itself — parent-forest
+metadata cleanup on bs-dc01, local domain-hint reset, reboot. The role's final
+task is a `win_ping` on DEFAULT unqualified credentials with no
+`ignore_errors`, so `failed=0` proves the host now authenticates the way `init`
+requires; it is a real assertion, not a report.
 
 ## 2026-08-10 · bug · build_tarball shipped ~50% AppleDouble junk (same defect as ss-pp-ab and so-ansible)
 
