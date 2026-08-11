@@ -16,6 +16,59 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-08-11 · bug · `group_vars/vault.yml` mapped to a group that does not exist — all 7 vault vars were never loaded
+
+**Symptom.** None. That is the entire problem. Every deploy of this range has
+succeeded without ever loading a single `vault_*` variable.
+
+**Detection.** Found while auditing `group_vars/` against inventory groups
+before adding `group_vars/all/security_onion.yml` — not by anything failing.
+A `group_vars/<name>.yml` file applies to hosts in the group `<name>`. There
+is no `[vault]` group in `hosts`, and there never was:
+
+```
+$ grep -c '^\[vault\]' hosts
+0
+```
+
+So `group_vars/vault.yml` was scoped to the empty set. `group_vars/power.yml`
+has the same defect (no `[power]` group) but is currently harmless — no power
+hosts are in the blueprint yet.
+
+**Why it stayed invisible.** `group_vars/fuel.yml` references the vault vars
+through `| default(...)` fallbacks:
+
+```yaml
+fuxa_admin_password: "{{ vault_fuxa_admin_password | default('...') }}"
+```
+
+Those defaults are what has actually been deploying the fuel farm this whole
+time. The vault was decorative. Had any consumer referenced a vault var
+*without* a default, this would have surfaced on day one as an undefined-
+variable error — the defaults converted a hard failure into a silent
+substitution.
+
+Note the interaction with the 2026-08-10 (later 3) entry below: the file was
+simultaneously shipping in plaintext *and* not being read. Fixing only the
+encryption would have left the second half of the bug in place, and fixing
+only the scope would have started loading credentials that were in the clear.
+
+**Fix.** `git mv group_vars/vault.yml group_vars/all/vault.yml` (and
+`group_vars/all.yml` -> `group_vars/all/main.yml`, since `all.yml` and `all/`
+cannot coexist). Under `group_vars/all/` the file loads for every host.
+`deploy.sh`'s vault guard follows to the new path.
+
+**Verify after any group_vars move** that every file maps to a real group:
+
+```
+$ for f in group_vars/*.yml; do n=$(basename $f .yml); \
+    grep -q "^\[$n\]\|^\[$n:" hosts || echo "ORPHAN: $f"; done
+```
+
+`all.yml` is the one legitimate exception. Anything else this prints is dead.
+
+---
+
 ## 2026-08-10 (later 3) · bug · `group_vars/vault.yml` was shipping PLAINTEXT inside the tarball
 
 **Found while answering a question about boot delays**, not by looking for it.
