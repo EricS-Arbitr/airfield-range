@@ -57,3 +57,27 @@ so_monitor_interface: "tun0"
 # independent values agreed by coincidence and the bug stayed invisible until
 # PowerPlant (ss-pp-ab UPSTREAM_FIXES 2026-08-04 later 3).
 so_gre_remote_underlay: "172.31.1.9"   # bs-core-rtr, VERIFY
+
+# --- 60-verify traffic targets -------------------------------------------
+# Addresses the MANAGER pings so this sensor's mirror can be proven end to
+# end. Which addresses force a router to forward out a MIRRORED interface is
+# a per-router fact, so it lives here rather than in a shared default.
+#
+# NEVER a router's own .1 address. Those are locally delivered on the
+# interface they arrive on and never egress a mirrored interface, where the
+# `tc ... action mirred egress mirror` rules live -- so the tcpdump reports
+# "0 packets captured" against a perfectly working mirror. That masked a real
+# GRE firewall bug for several deploy cycles (PORTING_GUIDE 9.10).
+#
+# Unresponsive targets are fine: the router still ARPs out that interface and
+# ARP frames are mirrored too.
+#
+# Coverage is deliberately partial -- these exercise some of this router's
+# mirrored interfaces, enough to prove the whole chain (tc mirred -> GRE
+# encap -> route to sensor -> firewall -> kernel decap -> tun0). A pass is
+# NOT proof that every mirrored interface works.
+so_verify_mirror_targets:
+  - "172.31.2.7"       # bs-dc01      via bs-core-rtr eth1 (Services)
+  - "172.31.14.11"     # bs-hq01      via bs-core-rtr eth2 (Headquarters)
+  - "172.31.15.11"     # bs-it01      via bs-core-rtr eth3 (IT)
+  - "172.31.16.11"     # bs-supply01  via bs-core-rtr eth4 (Supply)

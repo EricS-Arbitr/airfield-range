@@ -16,6 +16,47 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-08-11 (later 1) · enhancement · `so_subnet_security` is a range-specific name in a range-agnostic role
+
+**Symptom.** Copying the SO roles into a range whose grid does not live on a
+subnet called "security" gives `'so_subnet_security' is undefined` in three
+places, all of which fail late:
+
+```
+roles/so_base/tasks/main.yml:232          NO_PROXY for salt's HTTP probes
+roles/so_base/tasks/main.yml:277          scope-link netplan route on the prod NIC
+roles/so_manager/templates/manager.env.j2:83   ALLOW_CIDR in the answer file
+```
+
+The name is inherited from so-ansible's dev range and PowerPlant, where the SO
+grid genuinely sits on a subnet named `security`. Here it sits on SOC.
+
+**Why it is worth a note rather than a rename.** The variable is doing three
+different jobs that happen to take the same value in both ranges so far:
+
+| use | what it actually means |
+|---|---|
+| `ALLOW_CIDR` | who may reach the SOC WebUI |
+| scope-link route | the subnet the grid's peers are on |
+| `NO_PROXY` | node-to-node traffic that must not be proxied |
+
+Those are the same CIDR only because the whole grid is on one subnet. Split a
+grid across two subnets — a sensor in a DMZ, say — and one variable cannot
+express all three, and the failure would be a silent proxy hairpin rather than
+an error.
+
+**Workaround (overlay).** `group_vars/all/security_onion.yml` defines
+`so_subnet_security: "{{ so_subnet_soc }}"` with the three uses documented
+inline. The roles stay BYTE-IDENTICAL to `ss-pp-ab`, so the next re-copy is a
+plain `cp -R` with no merge to reconcile.
+
+**Fix (upstream).** Rename to `so_grid_subnet` in the roles and split
+`ALLOW_CIDR` out into its own variable, since "who may log in" is a policy
+question and the other two are topology. Do it in so-ansible first, then
+re-copy to both ranges together.
+
+---
+
 ## 2026-08-11 · bug · `group_vars/vault.yml` mapped to a group that does not exist — all 7 vault vars were never loaded
 
 **Symptom.** None. That is the entire problem. Every deploy of this range has

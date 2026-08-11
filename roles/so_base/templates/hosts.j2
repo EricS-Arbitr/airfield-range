@@ -1,0 +1,27 @@
+127.0.0.1       localhost
+127.0.1.1       {{ so_hostname }}
+
+# --- SO peer nodes (added by so_base role) -------------------------------
+# Short hostnames used by the answer file's MSRV variable so search + sensor
+# can resolve the manager for the salt-key join step.
+{% for h in groups['so_all'] %}
+{{ hostvars[h]['so_prod_ip'] }}   {{ hostvars[h]['so_hostname'] }}
+{% endfor %}
+
+# The following lines are desirable for IPv6 capable hosts
+#
+# {{ so_hostname }} is on the ::1 line DELIBERATELY. Salt's ip_fqdn() grain
+# calls getaddrinfo(<own fqdn>, AF_INET6) on EVERY grains render, on both the
+# master and the minion. With no IPv6 entry here the lookup falls through to
+# DNS, and in a range whose resolver never answers AAAA that costs 10 seconds
+# per render. The salt-master's workers then spend all their time in DNS
+# timeouts, pillar compilation exceeds its 180s budget, and minions cannot
+# even authenticate. See UPSTREAM_FIXES 2026-08-04.
+#
+# ONLY the node's own hostname belongs here. Do NOT add peer SO nodes to the
+# ::1 line -- grid traffic addressed by hostname would resolve to loopback.
+::1     ip6-localhost ip6-loopback {{ so_hostname }}
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters

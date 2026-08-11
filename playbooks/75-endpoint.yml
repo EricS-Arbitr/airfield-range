@@ -1,0 +1,382 @@
+---
+# =========================================================================
+# 75-endpoint.yml — endpoint telemetry into Security Onion
+# =========================================================================
+# Phases 10-60 give SO wire visibility through the GRE mirror: Zeek and
+# Suricata parsing mirrored packets. That stops at the host boundary -- you
+# see a workstation talk to a DC, not what ran on it. This phase adds the
+# other half: Sysmon + Windows eventlogs + Linux telemetry, shipped by
+# Elastic Agent into SO's own Fleet.
+#
+# PREREQUISITE: playbooks/05-time.yml. Endpoint events from a clock hours
+# fast land in Elasticsearch ahead of the sensor data and make correlation
+# meaningless. site.yml orders it that way.
+#
+# NOTE ON SPLUNK: these hosts already run the Splunk universal forwarder to
+# soc-splunk. Elastic Agent is ADDITIVE, not a replacement -- this branch
+# keeps endpoint telemetry in both stacks. The SO grid itself is excluded
+# from the Splunk rollout (site.yml, `linux:!splunk:!so_all`), not the other
+# way round.
+#
+# NO SYSMON INSTALL PLAY HERE, unlike PowerPlant's version of this file.
+# site.yml already ends with "Sysmon — Windows endpoint telemetry" scoped to
+# `hosts: windows`, so every Windows host in the range has it before this
+# phase runs. PowerPlant needed the play because its baseline installed
+# Sysmon only on the [aue] workstations, leaving the DCs and servers -- where
+# process ancestry matters most -- without it. The verification below stays,
+# because "the baseline covers it" is a claim worth checking rather than
+# assuming.
+# =========================================================================
+
+# --- Verify Sysmon is actually running ------------------------------------
+- name: Verify the Sysmon service is running on every Windows host
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: Query the Sysmon64 service
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          $svc = Get-Service -Name Sysmon64 -ErrorAction SilentlyContinue
+          # [string] cast is required: $svc.Status is a ServiceControllerStatus
+          # ENUM, which win_powershell serializes as
+          # {"String":"Running","Type":...,"Value":4} -- a dict, never equal to
+          # the string 'Running'. On PowerPlant every host failed a check it
+          # had actually passed.
+          if ($svc) { Write-Output ([string]$svc.Status) } else { Write-Output "ABSENT" }
+      register: sysmon_svc
+      changed_when: false
+      failed_when: sysmon_svc.output[0] | default('ABSENT') != 'Running'
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Sysmon64 {{ sysmon_svc.output[0] }}"
+  tags: [so, endpoint, sysmon]
+
+# --- Stage SO's agent installers onto the controller's mirror -------------
+# SO builds per-grid installers with the Fleet URL and enrollment token
+# already embedded, so there is no secret to carry and nothing to fetch from
+# the internet. They are ~213 MB each.
+#
+# WHY THE CONTROLLER AND NOT THE MANAGER: SO serves these at
+# https://<manager>/packages/, but that path returned 503 on PowerPlant's
+# grid, and pointing 69 hosts at the manager would have it serving ~14 GB
+# while it is also ingesting from four sensors. The controller already runs
+# nginx for so_apt_mirror, and endpoints already fetch Chrome, Sysmon and the
+# Splunk forwarder over the mgmt plane -- this is the delivery path they
+# already use.
+- name: Stage the Elastic Agent installers on the controller mirror
+  hosts: ansible_controller
+  # NO play-level become. Nothing here needs root: so_apt_mirror creates the
+  # agents dir owned by the ansible user, `fetch` writes as that user
+  # regardless, and chmod on a file you own needs no privilege. PowerPlant's
+  # first version carried become: true and died on "sudo: a password is
+  # required" at the chmod -- asking for privilege it never needed.
+  gather_facts: false
+  tasks:
+    # so_apt_mirror (phase 10) owns creating this, with the ownership that
+    # lets an unprivileged fetch write into it. Fail clearly rather than
+    # trying to create it here without privilege.
+    - name: The agents mirror directory must exist
+      ansible.builtin.stat:
+        path: "{{ so_mirror_root }}/agents"
+      register: agents_dir
+
+    - name: Fail if phase 10 has not run
+      ansible.builtin.fail:
+        msg: >-
+          {{ so_mirror_root }}/agents does not exist. so_apt_mirror creates it,
+          owned by the ansible user so `fetch` can write into it — run
+          playbooks/10-mirror.yml first.
+      when: not agents_dir.stat.exists
+
+    - name: Which installers are already staged?
+      ansible.builtin.stat:
+        path: "{{ so_mirror_root }}/agents/{{ item }}"
+      register: staged
+      loop:
+        - "{{ so_agent_installer_windows }}"
+        - "{{ so_agent_installer_linux }}"
+
+    # fetch pulls manager -> controller over SSH. ~530 MB combined, once.
+    # Guarded on the stat so a re-run does not move it again.
+    #
+    # become is required HERE and nowhere else in this play. The installers
+    # are root-owned on the manager, so the REMOTE read needs privilege --
+    # while the LOCAL write still happens as the ansible user regardless,
+    # which is why the agents dir is ansible-user-owned.
+    #
+    # Getting this wrong in BOTH directions cost PowerPlant two runs on
+    # 2026-08-04: play-level become broke the unprivileged chmod, and then
+    # removing become entirely broke this remote read. Per-task is the only
+    # correct answer.
+    - name: Pull the installers from the manager
+      become: true
+      ansible.builtin.fetch:
+        src: "/nsm/elastic-fleet/so_agent-installers/{{ item.item }}"
+        dest: "{{ so_mirror_root }}/agents/{{ item.item }}"
+        flat: true
+      delegate_to: "{{ groups['so_manager'][0] }}"
+      loop: "{{ staged.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not item.stat.exists
+
+    # Mode only, unprivileged -- the ansible user owns these files. NOT
+    # chown'ing to www-data: that needs root, and it would break the next
+    # fetch after deleting one to force a refresh. Readable is all nginx needs.
+    - name: Readable by nginx
+      ansible.builtin.file:
+        path: "{{ so_mirror_root }}/agents/{{ item }}"
+        mode: '0644'
+      loop:
+        - "{{ so_agent_installer_windows }}"
+        - "{{ so_agent_installer_linux }}"
+
+    # Positive proof: HTTP-reachable, not merely present on disk. A file the
+    # endpoints cannot actually GET is the failure this catches.
+    - name: Smoke test — installers are served over HTTP
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/agents/{{ item }}"
+        method: HEAD
+        status_code: 200
+      loop:
+        - "{{ so_agent_installer_windows }}"
+        - "{{ so_agent_installer_linux }}"
+      changed_when: false
+  tags: [so, endpoint, agent]
+
+# --- Open Fleet's ports to the endpoint subnets ---------------------------
+# so-firewall writes to the firewall PILLAR, which is a salt input, so this
+# survives the 15-minute highstate. Editing rendered iptables would not --
+# the same lesson as soc.json and the GRE rule.
+- name: Permit the endpoint subnets to reach Fleet
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  vars:
+    # Every host that will run an agent: windows + linux, minus any device we
+    # cannot manage and minus the SO grid, which enrolls itself.
+    # [unmanaged] does not exist in this inventory today; `| default([])`
+    # keeps the expression portable if it ever does.
+    agent_targets: >-
+      {{ ((groups['windows'] | default([])) + (groups['linux'] | default([])))
+         | difference(groups['unmanaged'] | default([]))
+         | difference(groups['so_all'] | default([]))
+         | unique | sort | list }}
+  tasks:
+    # Guard first: a host on a subnet nobody listed would install an agent
+    # that can never enroll, and the only symptom would be a timeout 200 lines
+    # into a 69-host run.
+    #
+    # REAL CIDR CONTAINMENT, not PowerPlant's first-three-octets string
+    # comparison. That shortcut is exact only when every declared subnet is a
+    # /24, and its own comment says so. This range breaks the assumption twice
+    # over: 172.16.45.0/29 and 172.16.45.8/29 share a third octet, so the
+    # string form would treat control-room-hmi and ff-plc-1 as one subnet and
+    # would accept a host that sits in neither.
+    #
+    # `ipaddr` is already a hard dependency of roles/common (it computes every
+    # host's netplan prefix), so it runs on every host in every deploy and is
+    # proven present on the controller. Also listed in requirements.yml.
+    - name: Collect each agent target's in-scenario address
+      ansible.builtin.set_fact:
+        target_addrs: >-
+          {{ target_addrs | default({}) | combine({ item: addr }) }}
+      vars:
+        addr: >-
+          {{ (hostvars[item].network_interfaces | default([]))
+             | map(attribute='ipv4.address') | select('defined')
+             | reject('match', '^10\.255\.')
+             | first | default('NO-IN-SCENARIO-IP') }}
+      loop: "{{ agent_targets }}"
+      loop_control:
+        label: "{{ item }}"
+      run_once: true
+
+    # `addr | ipaddr(cidr)` returns the address when it falls inside cidr and
+    # False otherwise. A host is covered if ANY declared subnet matches, which
+    # is a nested loop -- expressed here as an explicit Jinja loop rather than
+    # a chain of filters, because the filter-chain version of this is
+    # unreadable and unreviewable.
+    #
+    # 'NO-IN-SCENARIO-IP' matches nothing, so a host with only a mgmt NIC
+    # falls out as uncovered and gets named, rather than being silently skipped.
+    - name: Determine which agent targets no declared subnet covers
+      ansible.builtin.set_fact:
+        # No to_json/from_json round-trip. Ansible converts a template whose
+        # output is a Python/JSON literal into the real type BEFORE any filter
+        # you append sees it, so `| from_json` gets a list and raises
+        # "the JSON object must be str, bytes or bytearray, not list".
+        # Rendering the bare list is the idiom that works.
+        unlisted: >-
+          {%- set out = [] -%}
+          {%- for host, addr in target_addrs | dictsort -%}
+            {%- set hits = [] -%}
+            {%- for cidr in so_agent_endpoint_subnets -%}
+              {%- if addr | ipaddr(cidr) -%}{{- hits.append(cidr) or '' -}}{%- endif -%}
+            {%- endfor -%}
+            {%- if hits | length == 0 -%}
+              {{- out.append(host ~ ' (' ~ addr ~ ')') or '' -}}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+      run_once: true
+
+    - name: Every agent target must sit in a declared endpoint subnet
+      ansible.builtin.assert:
+        that:
+          - unlisted | length == 0
+        fail_msg: |
+          These agent targets are not covered by so_agent_endpoint_subnets:
+            {{ unlisted | join(', ') }}
+          Add their subnet to group_vars/all/security_onion.yml. Without it
+          Fleet's ports stay closed and enrollment times out with no useful
+          error on the endpoint itself.
+
+          A host shown as NO-IN-SCENARIO-IP has no non-management address in
+          host_vars — it should not be an agent target at all.
+        success_msg: >-
+          all {{ agent_targets | length }} agent targets fall inside the
+          {{ so_agent_endpoint_subnets | length }} declared subnets
+      run_once: true
+
+    # so-firewall is NOT idempotent: re-adding an existing entry exits rc=3
+    # with "WARNING - IP x already exists in hostgroup y" on stderr. That is a
+    # success for our purposes -- the subnet is permitted either way. Treating
+    # it as failure aborted PowerPlant's whole run before the Linux hosts
+    # enrolled, because every host in the play failed together.
+    - name: Include each endpoint subnet in the {{ so_agent_firewall_hostgroup }} hostgroup
+      ansible.builtin.command: >-
+        so-firewall includehost {{ so_agent_firewall_hostgroup }} {{ item }}
+      loop: "{{ so_agent_endpoint_subnets }}"
+      register: fw_include
+      changed_when: fw_include.rc == 0
+      failed_when:
+        - fw_include.rc != 0
+        - "'already exists' not in fw_include.stderr"
+      run_once: true
+
+    - name: Apply the firewall state
+      ansible.builtin.command: "so-firewall apply"
+      run_once: true
+      register: fw_apply
+      changed_when: fw_apply.rc == 0
+      until: fw_apply.rc == 0
+      retries: 40
+      delay: 30
+
+    # Proof the rules are in the RUNNING ruleset, not just the pillar. Scoped
+    # to DOCKER-USER specifically: Fleet server runs in a container, so its
+    # traffic is filtered there, not in INPUT -- grepping the whole ruleset
+    # would accept an INPUT rule that has no bearing on whether an agent can
+    # reach 8220. Verified against PowerPlant's live ruleset 2026-08-05.
+    - name: Verify every endpoint subnet is permitted to 8220 in DOCKER-USER
+      ansible.builtin.shell: |
+        set -o pipefail
+        iptables -S DOCKER-USER \
+          | grep -E -- "-s {{ item | regex_escape }}( |/32 )" \
+          | grep -c -- "--dport 8220" || true
+      args:
+        executable: /bin/bash
+      loop: "{{ so_agent_endpoint_subnets }}"
+      register: fw_proof
+      changed_when: false
+      failed_when: (fw_proof.stdout | trim | int) < 1
+      run_once: true
+  tags: [so, endpoint, agent, firewall]
+
+# --- Enroll every endpoint ------------------------------------------------
+# serial: 8 deliberately. 69 hosts pulling ~213 MB simultaneously would move
+# ~14 GB through one nginx while the manager is also ingesting from four
+# sensors. Batches of 8 keep that bounded; the run is slower but does not
+# starve the grid it is feeding.
+- name: Enroll endpoints into Security Onion's Fleet
+  hosts: windows:linux:!so_all
+  gather_facts: false
+  serial: 8
+  roles:
+    - elastic_agent
+  tags: [so, endpoint, agent]
+
+# --- Prove it from Fleet's side, not the endpoints' -----------------------
+# Every endpoint reporting "service running" is not the same as Fleet having
+# them enrolled. Ask the authority.
+- name: Verify enrollment from Fleet
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  vars:
+    agent_targets: >-
+      {{ ((groups['windows'] | default([])) + (groups['linux'] | default([])))
+         | difference(groups['unmanaged'] | default([]))
+         | difference(groups['so_all'] | default([]))
+         | unique | sort | list }}
+  tasks:
+    # A raw COUNT cannot tell you WHICH hosts enrolled. On PowerPlant
+    # 2026-08-05 it reported the expected 49 while two hosts had visibly
+    # failed their preflight and installed nothing -- the SO grid contributes
+    # more agent documents than the node count suggests, and the numbers
+    # happened to cancel out. A check whose pass condition can be met by
+    # unrelated documents is not measuring enrollment.
+    - name: List the hostnames Fleet has enrolled
+      ansible.builtin.shell: |
+        set -o pipefail
+        so-elasticsearch-query ".fleet-agents/_search?size=500" | python3 -c '
+        import json,sys
+        d = json.load(sys.stdin)
+        names = set()
+        for h in d.get("hits", {}).get("hits", []):
+            src = h.get("_source", {}) or {}
+            host = ((src.get("local_metadata") or {}).get("host") or {})
+            n = host.get("hostname")
+            if n:
+                names.add(n.lower())
+        print("\n".join(sorted(names)))
+        '
+      args:
+        executable: /bin/bash
+      register: fleet_hosts
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if Fleet could not be queried at all
+      ansible.builtin.fail:
+        msg: |
+          Could not list enrolled agents from Elasticsearch.
+          rc={{ fleet_hosts.rc }}
+          stdout: {{ fleet_hosts.stdout | default('') }}
+          stderr: {{ fleet_hosts.stderr | default('') }}
+
+          Enrollment is therefore UNVERIFIED. Do not read a clean run as proof.
+      when: fleet_hosts.rc != 0
+
+    - name: Report enrollment
+      ansible.builtin.debug:
+        msg: >-
+          Fleet knows {{ fleet_hosts.stdout_lines | length }} hostnames.
+          Expected {{ agent_targets | length }} endpoints
+          + {{ groups['so_all'] | default([]) | length }} SO grid nodes.
+          Missing: {{ missing | join(', ') if missing else 'none' }}
+      vars:
+        missing: >-
+          {{ agent_targets | map('lower') | list
+             | difference(fleet_hosts.stdout_lines | map('trim') | list) }}
+
+    - name: Fail if any agent target is absent from Fleet
+      ansible.builtin.fail:
+        msg: |
+          These hosts are NOT enrolled in Fleet:
+            {{ missing | join(', ') }}
+
+          The agent installed but never registered, or never installed at all.
+          Check /opt/Elastic/Agent/elastic-agent.log (Linux) or
+          C:\Program Files\Elastic\Agent\elastic-agent.log (Windows) on one of
+          them, and confirm the {{ so_agent_firewall_hostgroup }} hostgroup
+          covers its subnet.
+      vars:
+        missing: >-
+          {{ agent_targets | map('lower') | list
+             | difference(fleet_hosts.stdout_lines | map('trim') | list) }}
+      when: missing | length > 0
+  tags: [so, endpoint, agent]

@@ -1,0 +1,122 @@
+---
+so_sensor_answer_name: "so-ansible-sensor"
+# 90 min, matching so_manager and so_search. See the so_search note: the
+# original "similar to search" 20-minute value was a guess inherited from
+# another guess. A timeout that is too short does not just fail the task, it
+# kills so-setup partway through.
+so_sensor_install_timeout: 5400
+so_sensor_poll_interval: 30
+so_sensor_setup_log: "/root/so-setup.log"
+so_sensor_installed_marker: "/opt/so/state/installed"
+
+# Separate marker for so-setup completion (see so_search defaults for
+# rationale). Retries don't re-invoke 30-45 min of so-setup on a failed
+# grid-join or so-status verify.
+so_sensor_setup_marker: "/opt/so/state/setup-completed"
+
+# Netplan drop-in path for our GRE tunnel.
+so_sensor_netplan_tun: "/etc/netplan/60-so-mirror-tun.yaml"
+
+# --- GRE firewall override ------------------------------------------------
+# Anchor line in SO's firewall/iptables.jinja that our GRE ACCEPT is
+# inserted BEFORE. Must be the catch-all that ends the INPUT chain — our
+# rule has to precede it or the LOGGING chain drops the packet first.
+# Appears exactly once in the stock template (the DOCKER-USER LOGGING jump
+# is a different string, so this is unambiguous).
+so_gre_anchor: "-A INPUT -j LOGGING"
+
+# The block injected immediately ahead of that anchor.
+#
+# Deliberately a PLAIN iptables line with NO Jinja in it. The first
+# attempt wrapped it in a `{%- if GLOBALS.role == 'so-sensor' %}` guard,
+# {% raw %}-fenced so salt would see it literally. That produced
+# concatenated rules and a silently-skipped restore, because TWO
+# whitespace rules compounded (2026-07-29):
+#   1. Ansible templates with trim_blocks=True, which ate the newline
+#      right after `{% endraw %}` — putting the guard and the rule on one
+#      line.
+#   2. Salt's `{%-` then stripped the newline BEFORE it, gluing the rule
+#      onto the preceding `-A INPUT -p icmp -j ACCEPT`.
+# Result: `...-j ACCEPT-A INPUT -s ... -j ACCEPT`, which fails
+# `iptables-restore --test`, so init.sls's `onlyif` skipped the restore
+# and salt still reported success.
+#
+# The anchor already sits at the start of its own line, so prefixing this
+# block directly (with one trailing newline) is correct and needs no
+# whitespace control at all.
+#
+# TRADEOFF: without the role guard, manager and search nodes also get this
+# ACCEPT, since they render the same template. That is a deliberate choice
+# — it is a no-op there (no GRE tunnel exists, so the kernel drops proto
+# 47 at demux anyway) and it buys immunity from the Jinja-in-Jinja
+# fragility above. The rule is source-restricted to the router's mirror
+# endpoint, not 0.0.0.0/0.
+# Which source address the sensor's SO firewall permits GRE from.
+#
+# Defaults to so_prod_gateway, which is correct ONLY where the mirroring
+# router is also the sensor's gateway — true in this dev range, where
+# router-0 is both. It is NOT true in general: PowerPlant's sensors sit on
+# pp-security behind pp-internal-router (172.16.9.1) while the mirroring
+# routers are remote (172.16.0.42, 192.168.200.202, 75.21.1.2), so the rule
+# would drop every mirrored packet. Override per sensor in host_vars.
+# Same address as the tunnel remote -- one fact, stated once, per sensor.
+so_gre_allowed_source: "{{ so_gre_remote_underlay }}"
+
+# The derived override lives at ONE path on the manager
+# (local/salt/firewall/iptables.jinja) and is re-derived from the STOCK
+# template on every write, so it does not accumulate. With a per-host rule,
+# three sensors each rewrote it in turn and only the LAST sensor's ACCEPT
+# survived -- grid-wide. PowerPlant 2026-08-04: so-sensor-corp ran with
+# edge's 75.21.1.2 and dropped every mirrored packet.
+#
+# The block therefore has to be identical no matter which sensor renders it:
+# emit one ACCEPT per sensor, deduplicated and sorted.
+so_gre_sources: >-
+  {{ groups['so_sensor'] | default([])
+     | map('extract', hostvars, 'so_gre_remote_underlay')
+     | select('defined') | reject('equalto', '') | unique | sort | list }}
+so_gre_rule_block: "{% for s in so_gre_sources %}-A INPUT -s {{ s }} -p gre -j ACCEPT\n{% endfor %}"
+
+
+
+# Create /etc/SOCLOUD so so-setup takes its "cloud" interface path, which
+# is the only path that honors BNICS as the monitor interface instead of
+# hardcoding INTERFACE=bond0. See the long comment in tasks/main.yml.
+# Set false to get stock (bond0) behavior back.
+so_sensor_force_cloud_mode: true
+
+# --- Stop the sensor injecting ICMP into the range -------------------------
+# Mirrored packets arrive on tun0 carrying FOREIGN destinations (Splunk, a DC,
+# 8.8.4.4). The kernel treats them as routable, they fall through to
+# `-A FORWARD -j REJECT --reject-with icmp-host-prohibited`, and the sensor
+# emits an ICMP unreachable TO THE ORIGINAL SENDER from its own prod IP.
+#
+# Observed on all three sensors 2026-08-05:
+#   IP 172.16.9.40 > 172.16.3.5: ICMP host 172.16.9.20 unreachable - admin prohibited
+#
+# A workstation mid-conversation with Splunk receives "that host is
+# unreachable" from a machine it never contacted. A passive sensor must not
+# generate traffic. It also feeds back: those ICMPs egress the prod NIC, get
+# mirrored, and return -- which is how they became visible in the pcap check.
+#
+# DROP rather than REJECT, and matched on the INPUT INTERFACE so it cannot
+# affect anything but mirrored traffic.
+so_tun_forward_rule: "-A FORWARD -i {{ so_monitor_interface }} -j DROP\n"
+
+# Anchor: the FORWARD reject itself. Confirmed from the RENDERED ruleset on
+# so-sensor-corp 2026-08-05 (/etc/iptables/rules.v4 line 50, and live in
+# `iptables -S FORWARD`):
+#
+#   -A FORWARD -m conntrack --ctstate INVALID -j DROP
+#   -A FORWARD -j REJECT --reject-with icmp-host-prohibited
+#
+# There is NO `-A FORWARD -j LOGGING` -- an earlier guess by analogy with the
+# INPUT anchor, which would have failed the guard on all three sensors.
+# Mirrored traffic is new and unrelated, so it passes both conntrack rules and
+# lands on the reject; inserting immediately before it is sufficient and is the
+# smallest possible change to the chain.
+#
+# Same guarded-anchor pattern as so_gre_anchor: if SO's template stops
+# containing this line, the role FAILS rather than writing a rule that lands
+# somewhere harmless.
+so_tun_forward_anchor: "-A FORWARD -j REJECT --reject-with icmp-host-prohibited"

@@ -8,10 +8,11 @@
 # base or PowerPlant overlay at copy-time, not referenced at build-time.
 #
 # This script:
-#   1. Discovers role names referenced by site.yml + walks their meta deps
+#   1. Discovers role names referenced by site.yml, every playbooks/*.yml it
+#      imports, and their meta deps
 #   2. Validates each one is physically present under ./roles/
-#   3. Stages:  roles/ host_vars/ group_vars/ hosts site.yml deploy.sh
-#               requirements.yml (if present) files/ (if present)
+#   3. Stages:  roles/ playbooks/ host_vars/ group_vars/ hosts site.yml
+#               deploy.sh requirements.yml (if present) files/ (if present)
 #   4. Runs verify_vars.py against the staged bundle
 #
 # UPSTREAM_FIXES.md and PROJECT_LOG.md are intentionally excluded.
@@ -26,6 +27,17 @@ AIRFIELD_RANGE="$(cd "$(dirname "$0")" && pwd)"
 # direction 2026-07-08) whose roles must also ship in the tarball.
 PLAYBOOKS=("$AIRFIELD_RANGE/site.yml")
 [ -f "$AIRFIELD_RANGE/fuel_farm_playbook.yml" ] && PLAYBOOKS+=("$AIRFIELD_RANGE/fuel_farm_playbook.yml")
+# Everything site.yml pulls in with `import_playbook`. WITHOUT THIS the SO
+# roles are invisible to discovery and ship in no tarball at all -- the
+# archive builds clean, reports "41 roles bundled", and the deploy dies on
+# the controller with "the role 'so_base' was not found". Caught 2026-08-11
+# by asserting the tarball CONTAINS the new files instead of trusting the
+# build's own success message; same lesson as the `|| true` regression that
+# silently froze the archive for eight commits.
+if [ -d "$AIRFIELD_RANGE/playbooks" ]; then
+  while IFS= read -r pb; do PLAYBOOKS+=("$pb"); done \
+    < <(find "$AIRFIELD_RANGE/playbooks" -maxdepth 1 -name '*.yml' | sort)
+fi
 ARCHIVE="$AIRFIELD_RANGE/ab_mb.tgz"
 STAGE_PARENT="$(mktemp -d)"
 STAGE="$STAGE_PARENT/abmb_build"
@@ -46,6 +58,26 @@ extract_playbook_roles() {
       sub(/[ \t#].*$/, "")
       if (length($0) > 0) print
     }
+  ' "$1"
+}
+
+# Extract role names from `import_role:` / `include_role:` blocks, which the
+# `roles:` scanner above cannot see. playbooks/20-vyos.yml reaches vyos_mirror
+# ONLY this way (twice, via tasks_from), so without this the role is missing
+# from the bundle while every other SO role is present -- the most confusing
+# possible failure mode.
+extract_included_roles() {
+  awk '
+    /(import_role|include_role):/ { inrole=1; next }
+    inrole && /^[[:space:]]*name:[[:space:]]*/ {
+      sub(/^[[:space:]]*name:[[:space:]]*/, "")
+      sub(/[ \t#].*$/, "")
+      gsub(/["'"'"']/, "")
+      if (length($0) > 0) print
+      inrole=0
+      next
+    }
+    inrole && /^[[:space:]]*[a-z_]+:/ && !/tasks_from|vars|apply|public|defaults_from/ { inrole=0 }
   ' "$1"
 }
 
@@ -82,6 +114,7 @@ seen=()
 queue=()
 for pb in "${PLAYBOOKS[@]}"; do
   while IFS= read -r r; do queue+=("$r"); done < <(extract_playbook_roles "$pb")
+  while IFS= read -r r; do queue+=("$r"); done < <(extract_included_roles "$pb")
 done
 
 missing=()
@@ -135,6 +168,11 @@ chmod +x "$STAGE/deploy.sh"
 if [ -f "$AIRFIELD_RANGE/fuel_farm_playbook.yml" ]; then
   cp "$AIRFIELD_RANGE/fuel_farm_playbook.yml" "$STAGE/"
 fi
+# site.yml's `import_playbook` paths are relative to site.yml, so this
+# directory has to land beside it at the same depth.
+if [ -d "$AIRFIELD_RANGE/playbooks" ]; then
+  cp -R "$AIRFIELD_RANGE/playbooks" "$STAGE/"
+fi
 if [ -f "$AIRFIELD_RANGE/verify_deployment.sh" ]; then
   cp "$AIRFIELD_RANGE/verify_deployment.sh" "$STAGE/"
   chmod +x "$STAGE/verify_deployment.sh"
@@ -173,6 +211,7 @@ fi
 
 cd "$STAGE"
 TAR_PATHS=(roles host_vars group_vars hosts site.yml deploy.sh)
+[ -d "playbooks" ] && TAR_PATHS+=(playbooks)
 [ -f "fuel_farm_playbook.yml" ] && TAR_PATHS+=(fuel_farm_playbook.yml)
 [ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
 [ -f "verify_fuel_farm.sh" ] && TAR_PATHS+=(verify_fuel_farm.sh)
@@ -182,6 +221,26 @@ TAR_PATHS=(roles host_vars group_vars hosts site.yml deploy.sh)
 [ -d "files" ] && TAR_PATHS+=(files)
 # macOS junk, stripped from the whole stage before packing.
 find "$STAGE" \( -name '.DS_Store' -o -name '._*' \) -delete 2>/dev/null || true
+
+# THIS SCRIPT HAS TWO ALLOWLISTS. The Stage section above decides what gets
+# copied into $STAGE; TAR_PATHS decides what actually gets packed. Adding to
+# one and not the other produces an archive that builds clean, reports the
+# right role count, and is missing the files -- which is exactly what happened
+# to playbooks/ on 2026-08-11: staged correctly, absent from TAR_PATHS,
+# invisible in the build output.
+#
+# Rather than merge them (TAR_PATHS gives deliberate control over ordering and
+# over staged-but-unshipped artifacts), assert they agree. Anything staged and
+# not packed is a mistake; say so and stop.
+for entry in *; do
+  packed=0
+  for p in "${TAR_PATHS[@]}"; do [ "$p" = "$entry" ] && packed=1 && break; done
+  if [ "$packed" -eq 0 ]; then
+    echo "ERROR: '$entry' was staged but is not in TAR_PATHS -- it would be" >&2
+    echo "       silently missing from ab_mb.tgz. Add it to TAR_PATHS." >&2
+    exit 1
+  fi
+done
 
 # COPYFILE_DISABLE=1 is the load-bearing setting. Apple's tar emits an
 # AppleDouble "._name" companion for every file carrying an extended

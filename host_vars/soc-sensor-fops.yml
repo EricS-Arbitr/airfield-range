@@ -57,3 +57,11 @@ so_monitor_interface: "tun0"
 # independent values agreed by coincidence and the bug stayed invisible until
 # PowerPlant (ss-pp-ab UPSTREAM_FIXES 2026-08-04 later 3).
 so_gre_remote_underlay: "172.31.1.13"   # bs-ops-rtr, VERIFY
+
+# --- 60-verify traffic targets -------------------------------------------
+# See host_vars/soc-sensor-corp.yml for why these are host addresses and
+# never a router's own .1.
+so_verify_mirror_targets:
+  - "172.31.3.11"      # fops-dc01    via bs-ops-rtr eth1 (Flight-Ops-Services)
+  - "172.31.5.10"      # atc-radar    via bs-ops-rtr eth2 (Flight-Control-Center)
+  - "172.31.6.11"      # fops-ops01   via bs-ops-rtr eth3 (Flight-Ops-Users)

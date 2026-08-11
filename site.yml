@@ -1211,3 +1211,55 @@
   tags:
     - sysmon
     - endpoint
+
+# =========================================================================
+# SECURITY ONION  (branch `security-onion`)
+# =========================================================================
+# Everything above is the range baseline and is what `main` deploys. These
+# phases are the only difference between the two branches, which is why they
+# are appended rather than interleaved -- a diff against main shows the SO
+# work and nothing else.
+#
+# ORDERING IS LOAD-BEARING
+# ------------------------
+#   05  Windows clocks, before anything compares a Windows clock to a Linux
+#       one. DC-first, so Kerberos never sees a member outside tolerance.
+#   10  the mirror must exist before any SO node fetches the pinned source
+#   20  the GRE tunnel + tc rules must exist before a sensor can receive
+#   30  so_base stages the SO source on every grid node
+#   40  the MANAGER must fully complete before 50 -- search and sensor join
+#       it, and grid-join fails against a manager that is not yet green
+#   50  search + sensors, in parallel
+#   60  verification of the grid itself
+#   70  analyst access (Windows workstations, not the grid)
+#   75  endpoint telemetry (Sysmon check + Elastic Agent into Fleet)
+#
+# WHY 05-time IS HERE AND NOT EARLIER
+# -----------------------------------
+# Every Windows host in the range runs hours fast: the platform sets the RTC
+# to UTC and Windows reads it as local time. They are all wrong by the SAME
+# amount, so AD and Kerberos stay internally consistent and the baseline
+# above deploys green without it -- which is exactly why it went unnoticed.
+# It only breaks when a Windows clock meets a Linux one, and the two things
+# that do that are both below: the SOC WebUI login flow (kratos compares
+# `expires_at` against the BROWSER's clock and every fresh flow looks
+# expired) and Elastic Agent events landing ahead of the sensor data.
+#
+# ITERATING
+# ---------
+# Re-running the ~49 baseline plays to test an SO change is slow. During
+# development run one phase directly:
+#     ansible-playbook playbooks/40-manager.yml
+# or scope by tag:  ansible-playbook site.yml --tags so
+# deploy.sh runs this file end to end.
+# =========================================================================
+
+- import_playbook: playbooks/05-time.yml
+- import_playbook: playbooks/10-mirror.yml
+- import_playbook: playbooks/20-vyos.yml
+- import_playbook: playbooks/30-prereqs.yml
+- import_playbook: playbooks/40-manager.yml
+- import_playbook: playbooks/50-nodes.yml
+- import_playbook: playbooks/60-verify.yml
+- import_playbook: playbooks/70-analyst.yml
+- import_playbook: playbooks/75-endpoint.yml

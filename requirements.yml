@@ -5,3 +5,10 @@
 collections:
   - name: pfsensible.core
     version: ">=0.7.1"
+  # `ipaddr` — already a hard dependency of roles/common, which computes every
+  # host's netplan prefix with it, and now of playbooks/75-endpoint.yml, which
+  # uses it for real CIDR containment against the two OT /29s. It was working
+  # only because the RC_NG_Ansible controller image happens to ship it; stated
+  # here so a controller that does not fails at install time instead of 900
+  # lines into a deploy.
+  - name: ansible.utils

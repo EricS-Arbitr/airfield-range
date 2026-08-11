@@ -57,3 +57,16 @@ so_monitor_interface: "tun0"
 # independent values agreed by coincidence and the bug stayed invisible until
 # PowerPlant (ss-pp-ab UPSTREAM_FIXES 2026-08-04 later 3).
 so_gre_remote_underlay: "172.31.1.18"   # bs-modbus-gateway, VERIFY
+
+# --- 60-verify traffic targets -------------------------------------------
+# See host_vars/soc-sensor-corp.yml for why these are host addresses and
+# never a router's own .1 / .9 / .16.
+#
+# These cross bs-ops-fw. It is lab permit-any today, so ICMP from the manager
+# reaches them; if the L3.5 ACLs land and drop it, this check fails for a
+# reason that has nothing to do with the mirror. Read a failure here together
+# with the firewall state, not as a GRE fault.
+so_verify_mirror_targets:
+  - "172.16.45.3"      # control-room-hmi via bs-modbus-gateway eth2 (MTU /29)
+  - "172.16.45.10"     # ff-plc-1         via bs-modbus-gateway eth1 (Fuel PLC /29)
+  - "172.16.46.17"     # fuel-farm-sim    via bs-modbus-gateway eth3 (Fuel Sim /24)

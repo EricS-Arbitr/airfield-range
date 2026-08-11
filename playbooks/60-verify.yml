@@ -1,0 +1,115 @@
+---
+# =========================================================================
+# 60-verify.yml — end-to-end verification of the SO deploy
+# =========================================================================
+# so-status on the manager, /_cluster/health from the manager (whole-cluster
+# metric, and so-elasticsearch-query is manager-only), then a real packet
+# count on every sensor's tun0.
+#
+# so-ansible has a standalone verify_so.sh that this header used to point at.
+# It is deliberately NOT ported -- it duplicates these checks against a
+# hardcoded dev-range host list, and PowerPlant dropped it for the same
+# reason. The checks that matter are the ones that run in the deploy.
+# =========================================================================
+
+- name: SO manager status
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  tasks:
+    - name: so-status
+      ansible.builtin.command: sudo so-status
+      changed_when: false
+      register: so_status_out
+    - name: report
+      ansible.builtin.debug:
+        msg: "{{ so_status_out.stdout_lines[-20:] }}"
+  tags:
+    - so
+    - so_verify
+
+- name: Elastic cluster health (query from manager; so-elasticsearch-query is manager-only, and cluster health is a whole-cluster metric anyway)
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  tasks:
+    - name: elastic cluster health
+      ansible.builtin.command: sudo so-elasticsearch-query _cluster/health?pretty
+      changed_when: false
+      register: es_health_out
+    - name: report
+      ansible.builtin.debug:
+        msg: "{{ es_health_out.stdout }}"
+  tags:
+    - so
+    - so_verify
+
+# Every sensor gets its own end-to-end proof. Traffic targets live in each
+# sensor's host_vars as `so_verify_mirror_targets`, because which addresses
+# force a router to forward out a MIRRORED interface is a per-router fact.
+#
+# Coverage is deliberately partial and that is fine: each sensor's targets
+# exercise one or two of its router's mirrored interfaces, which is enough to
+# prove the whole chain (tc mirred -> GRE encap -> route to sensor -> firewall
+# -> kernel decap -> tun0). It does NOT prove every mirrored interface on
+# every router. Do not read a pass as full coverage.
+- name: SO sensor pcap flow rate — all four sensors
+  hosts: so_sensor
+  become: true
+  gather_facts: false
+  tasks:
+    # On an idle range a passive tcpdump reports 0 packets even though the
+    # GRE mirror is fully functional -- which is exactly what so_sensor's
+    # inline check reports at install time. Generate a burst of ICMP first.
+    #
+    # BUG FIXED 2026-07-29: this previously pinged the .1 GATEWAY IPs, which
+    # generates NO mirrorable traffic at all. Those are the router's own
+    # addresses, so packets are locally delivered on the interface they
+    # arrive on and never egress a mirrored interface, where the
+    # `tc ... action mirred egress mirror` rules live. The check reported
+    # "0 packets captured" against a perfectly working mirror and masked a
+    # real GRE firewall bug for several deploy cycles. See PORTING_GUIDE 9.10.
+    #
+    # Targets must be addresses ON a mirrored subnet. Unresponsive targets are
+    # fine -- the router still ARPs out that interface and ARP frames are
+    # mirrored too (confirmed: gre-proto-0x806 seen encapsulated on the wire).
+    - name: Fail early if this sensor has no mirror targets defined
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }} has no so_verify_mirror_targets in host_vars.
+          Without targets the tcpdump below would report 0 packets and fail for
+          the wrong reason. Add addresses that sit ON one of this sensor's
+          mirrored subnets -- never a router's own .1 address.
+      when: so_verify_mirror_targets | default([]) | length == 0
+
+    - name: Generate mirror-able traffic toward this sensor's subnets (background)
+      ansible.builtin.shell: |
+        for tgt in {{ so_verify_mirror_targets | join(' ') }}; do
+          ping -c 10 -i 0.5 -W 1 -q -n "$tgt" &
+        done
+        wait
+      delegate_to: "{{ groups['so_manager'][0] }}"
+      async: 30
+      poll: 0
+      changed_when: false
+      register: traffic_gen
+
+    - name: 15-sec tcpdump on monitor interface — packet count > 0 means GRE mirror is delivering
+      ansible.builtin.shell: |
+        timeout 15 tcpdump -i {{ so_monitor_interface }} -c 100 -nn 2>&1 | tail -5
+      changed_when: false
+      register: pcap_out
+      # EXACT LINE match, never a substring. tcpdump prints "100 packets
+      # captured", and `'0 packets captured' in stdout` is TRUE for that
+      # string -- so the substring form failed precisely when the mirror was
+      # WORKING (PowerPlant 2026-08-04, all three sensors at 100 packets).
+      # stdout_lines membership is an equality test per line and cannot do
+      # that. See UPSTREAM_FIXES 2026-08-04 (later 4).
+      failed_when: "'0 packets captured' in pcap_out.stdout_lines"
+
+    - name: report
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} via {{ so_verify_mirror_targets | join(', ') }}: {{ pcap_out.stdout }}"
+  tags:
+    - so
+    - so_verify

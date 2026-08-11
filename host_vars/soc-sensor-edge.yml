@@ -57,3 +57,14 @@ so_monitor_interface: "tun0"
 # independent values agreed by coincidence and the bug stayed invisible until
 # PowerPlant (ss-pp-ab UPSTREAM_FIXES 2026-08-04 later 3).
 so_gre_remote_underlay: "199.252.163.2"   # bs-edge-rtr, VERIFY
+
+# --- 60-verify traffic targets -------------------------------------------
+# See host_vars/soc-sensor-corp.yml for why these are host addresses and
+# never bs-edge-rtr's own 200.200.200.1.
+#
+# Only ONE mirrored interface on this router (eth0, the simulated internet),
+# so both targets exercise the same tc rule. That is the whole of the edge
+# mirror -- the transit /30 is deliberately not mirrored.
+so_verify_mirror_targets:
+  - "200.200.200.2"    # is-inet  via bs-edge-rtr eth0
+  - "200.200.200.205"  # elgg     via bs-edge-rtr eth0
