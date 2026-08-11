@@ -73,7 +73,12 @@ fi
 ANSIBLE_OWNER="${ANSIBLE_OWNER:-simspace}"
 VAULT_PASS_FILE="${VAULT_PASS_FILE:-/home/simspace/.vault_pass}"
 RETRY_DIR="${RETRY_DIR:-/etc/ansible/retry}"
-VAULT_FILE="group_vars/vault.yml"
+# group_vars/all/vault.yml, NOT group_vars/vault.yml. The latter maps to a
+# GROUP named "vault", which does not exist in this inventory -- so the seven
+# vault_* variables were never loaded by anything. fuel.yml's
+# `vault_openplc_admin_password | default(...)` had silently been using the
+# default all along. Moved under all/ 2026-08-11 so they actually apply.
+VAULT_FILE="group_vars/all/vault.yml"
 
 as_root() {
 	if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi

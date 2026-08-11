@@ -131,16 +131,19 @@ ntp_server_hostname: "bs-ntp.blackstone.mil"
 # soc-syslog runs rsyslog (UDP+TCP 514) and forwards to the SIEM.
 syslog_server_ip: "172.31.7.13"    # soc-syslog (SOC /24)
 
-# --- SIEM stack (Splunk active; Elastic reserved for later) -----------------
+# --- SIEM stack (Splunk + Security Onion, both active on this branch) -------
 # Splunk Enterprise Core runs on soc-splunk (new host as of blueprint
 # ARBITR_MB_012). Universal forwarders on every Linux/Windows managed host
-# point at splunk_server_ip:splunk_forwarder_port. `elastic_server_ip` is
-# reserved for the future Elastic / Security Onion stack on soc-elastic;
-# soc-elastic intentionally gets NO splunk-forwarder so it stays a clean
-# canvas for that work.
+# point at splunk_server_ip:splunk_forwarder_port. The Security Onion grid
+# (`so_all`) is excluded from that rollout — see site.yml.
+#
+# `elastic_server_ip` was the reserved placeholder for soc-elastic. That host
+# is now soc-so-manager and its address is derived from inventory as
+# so_manager_ip in group_vars/all/security_onion.yml. Kept only because it is
+# referenced by name in the SOC build notes; nothing reads it.
 splunk_server_ip: "172.31.7.19"         # soc-splunk (SOC /24)
 splunk_forwarder_port: "9997"
-elastic_server_ip: "172.31.7.15"        # soc-elastic — reserved; no role yet
+elastic_server_ip: "172.31.7.15"        # = soc-so-manager; prefer so_manager_ip
 
 # Splunk admin credentials. Matches PowerPlant convention (`simspace1`).
 # Used by base splunk role for initial admin seed + REST API auth, and by

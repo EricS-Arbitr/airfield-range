@@ -66,8 +66,8 @@ bs-proxy
 
 # Windows Engineering + SOC workstations joining blackstone.mil (per CLAUDE.md §4
 # best-judgment, confirmed 2026-06-25). Linux engineering (bs-eng05/06) +
-# Linux SOC servers (soc-elastic/soc-syslog/soc-tools) intentionally NOT
-# in these groups — they don't AD-join.
+# Linux SOC servers (the Security Onion grid/soc-syslog/soc-tools)
+# intentionally NOT in these groups — they don't AD-join.
 [blackstone_engineering]
 bs-eng01
 bs-eng02
@@ -198,7 +198,12 @@ soc-sift
 soc-openvas
 
 [soc_servers]
-soc-elastic
+soc-so-manager
+soc-so-search
+soc-sensor-corp
+soc-sensor-fops
+soc-sensor-ot
+soc-sensor-edge
 soc-splunk
 soc-syslog
 
@@ -208,11 +213,56 @@ soc-syslog
 [splunk]
 soc-splunk
 
-# Reserved for future Elastic / Security Onion stack on soc-elastic.
-# Empty role-wise today -- the host gets baseline OS roles + GNOME wizard
-# suppression but NO splunk-forwarder (per the "leave bare" decision).
-[elastic]
-soc-elastic
+# ------------------------------------------------------------
+# Security Onion 2.4 distributed grid  (branch `security-onion`)
+# ------------------------------------------------------------
+# Group NAMES are load-bearing: the so_* roles are copied verbatim from
+# PowerPlant/ss-pp-ab and address these groups by name
+# (groups['so_manager'], groups['so_all'], groups['so_sensor']). Do not
+# rename them here without renaming them there.
+#
+# soc-so-manager is the former `soc-elastic` placeholder — same VM, same
+# addresses (172.31.7.15 / 10.255.240.131), renamed with blueprint additions
+# 2026-08-11. Its IMAGE changes from Ubuntu Server 24.04 to Ubuntu Desktop
+# 22.04.5; hence it moves from [ubuntu24] to [ubuntu22] below.
+[so_manager]
+soc-so-manager
+
+[so_search]
+soc-so-search
+
+# One sensor per mirrored router — see docs/security-onion/.
+#   corp → bs-core-rtr        Services, HQ, IT, Supply
+#   fops → bs-ops-rtr         Flight-Ops-Services, Flight-Control, Flight-Ops-Users
+#   ot   → bs-modbus-gateway  MTU /29, Fuel PLC /29, Fuel Sim /24
+#   edge → bs-edge-rtr        simulated internet, edge transit
+[so_sensor]
+soc-sensor-corp
+soc-sensor-fops
+soc-sensor-ot
+soc-sensor-edge
+
+[so_all:children]
+so_manager
+so_search
+so_sensor
+
+# Routers that mirror traffic into a sensor via GRE + tc mirred. NOT the same
+# set as [vyos]: membership here means "has vyos_mirror_* host_vars", and
+# bs-modbus-gateway earns its place as a mirror source independently of
+# whatever the vyos role does with it.
+[so_mirror_routers]
+bs-core-rtr
+bs-ops-rtr
+bs-modbus-gateway
+bs-edge-rtr
+
+# The controller itself. so_apt_mirror runs HERE, not on a grid node, and
+# group_vars/all/security_onion.yml derives so_mirror_host from this group's
+# first member — so the group must exist even though it holds one host that
+# is otherwise never a play target.
+[ansible_controller]
+ansible
 
 [soc:children]
 soc_analysts
@@ -475,12 +525,20 @@ fops-app02
 fops-app03
 soc-splunk
 bs-proxy
+# Security Onion grid — Ubuntu Desktop 22.04.5. SO 2.4 at our pinned SHA
+# refuses noble outright (so-setup exits before Ansible gets a say) and only
+# tolerates jammy because so_base fakes it as focal.
+soc-so-manager
+soc-so-search
+soc-sensor-corp
+soc-sensor-fops
+soc-sensor-ot
+soc-sensor-edge
 
 [ubuntu24]
 bs-ftp
 bs-ns1
 bs-ro-hist
-soc-elastic
 soc-openvas
 soc-syslog
 control-room-hmi
@@ -526,12 +584,15 @@ fops-wec01
 [syslog]
 soc-syslog
 
-# SIEM hosts have their own purpose-specific groups now: [splunk] for the
-# active SIEM (soc-splunk) and [elastic] for the future stack on soc-elastic.
-# A generic [siem] umbrella group is intentionally NOT defined because it
-# was previously used as a forwarder-exclusion ("hosts: linux:!siem") that
-# would silently start excluding soc-elastic once Elastic comes online.
-# Forwarder plays now use the explicit `linux:!splunk:!elastic` form.
+# SIEM hosts have their own purpose-specific groups: [splunk] for Splunk
+# (soc-splunk) and [so_all] for the Security Onion grid. A generic [siem]
+# umbrella group is intentionally NOT defined -- it was previously used as a
+# forwarder exclusion ("hosts: linux:!siem"), which silently changes meaning
+# every time a host joins it. Forwarder plays use `linux:!splunk:!so_all`.
+#
+# [so_all] is the right exclusion, not just the manager: SO owns /opt/so and
+# runs its own Elastic Agent on every grid node. A Splunk UF on a sensor
+# would double-ship the same logs and fight SO's log rotation.
 
 # Forensic / hunt tooling (do NOT receive baseline OS roles)
 [hunt]

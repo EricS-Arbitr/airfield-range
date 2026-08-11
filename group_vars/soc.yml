@@ -5,7 +5,7 @@
 # Domain membership TBD (CLAUDE.md §4 — best-judgment blackstone.mil).
 # Hosts split into:
 #   [soc_analysts]  — Win11 analyst workstations
-#   [soc_servers]   — soc-syslog, soc-splunk, soc-elastic
+#   [soc_servers]   — soc-syslog, soc-splunk, the Security Onion grid
 #   [soc_tools]     — soc-flare (FLARE-VM), soc-sift (SIFT), soc-openvas
 #                     — specialized images; NOT in [windows]/[linux] OS
 #                     baseline groups; do not run the common role on them.
@@ -16,9 +16,12 @@ soc_syslog_ip: "172.31.7.13"
 
 # --- SIEM hosts ---------------------------------------------
 # soc-splunk runs Splunk Enterprise Core (active SIEM as of blueprint 012).
-# soc-elastic reserved for future Elastic / Security Onion stack.
+# soc-so-manager (was soc-elastic) is the Security Onion manager. Its IP is
+# also available as so_manager_ip, derived from inventory in
+# group_vars/all/security_onion.yml -- prefer that in SO plays; this one
+# stays for the pre-SO SOC roles that already reference it.
 soc_splunk_ip:  "172.31.7.19"
-soc_elastic_ip: "172.31.7.15"
+soc_elastic_ip: "172.31.7.15"   # = soc-so-manager
 
 # --- Hunt/forensic tooling (informational) ------------------
 soc_flare_ip:   "172.31.7.18"     # FLARE-VM malware analysis

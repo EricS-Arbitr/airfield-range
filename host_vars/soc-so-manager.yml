@@ -1,0 +1,40 @@
+---
+# host_vars/soc-so-manager.yml — Security Onion MANAGER (Linux)
+# Image:   global/RDP_Ubuntu_Desktop_22.04.5:1.1.0  (CHANGED — see below)
+# Mgmt:    10.255.240.131/20 (position FIRST → eth0)
+ansible_host: "10.255.240.131"
+network_interfaces:
+  - name: "eth0"                     # mgmt (position FIRST)
+    ipv4:
+      type: "ethernet"
+      address: "10.255.240.131"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "eth1"                     # production — SOC
+    ipv4:
+      type: "ethernet"
+      address: "172.31.7.15"
+      netmask: "255.255.255.0"
+      gateway: "172.31.7.1"
+    dns:
+      - "172.31.2.7"
+      - "172.31.2.8"
+
+# --- Security Onion role contract ----------------------------------------
+# Was `soc-elastic`, the placeholder reserved in the inventory for "future
+# Elastic / Security Onion stack". Renamed to soc-so-manager with the blueprint
+# additions 2026-08-11; addresses unchanged.
+#
+# IMAGE CHANGE REQUIRED IN THE BLUEPRINT: this host must run
+# global/RDP_Ubuntu_Desktop_22.04.5:1.1.0, not RDP_Ubuntu_Server_24.04. SO 2.4
+# at our pinned SHA rejects noble outright -- so-setup exits before Ansible
+# gets a say, and the jammy-as-focal workaround in so_base does not stretch two
+# releases. See docs/security-onion/blueprint-additions.yml.
+so_role: "manager"
+so_hostname: "soc-so-manager"
+so_prod_ip: "172.31.7.15"
+so_prod_prefix: 24
+so_prod_gateway: "172.31.7.1"
+so_prod_dns:
+  - "172.31.2.7"
+  - "172.31.2.8"

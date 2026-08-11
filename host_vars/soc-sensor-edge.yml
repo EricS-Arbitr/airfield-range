@@ -1,0 +1,59 @@
+---
+# host_vars/soc-sensor-edge.yml — Security Onion SENSOR (Linux)
+# Image:   global/RDP_Ubuntu_Desktop_22.04.5:1.1.0
+# Prod:    SOC 172.31.7.24/24 → gw 172.31.7.1
+# Mgmt:    10.255.240.186/20 (position FIRST → eth0)
+# Mirrors: bs-edge-rtr — simulated internet 200.200.200.0/24, edge transit 199.252.163.0/30
+ansible_host: "10.255.240.186"
+network_interfaces:
+  - name: "eth0"                     # mgmt (position FIRST)
+    ipv4:
+      type: "ethernet"
+      address: "10.255.240.186"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "eth1"                     # production — SOC 172.31.7.0/24
+    ipv4:
+      type: "ethernet"
+      address: "172.31.7.24"
+      netmask: "255.255.255.0"
+      gateway: "172.31.7.1"
+    dns:
+      - "172.31.2.7"
+      - "172.31.2.8"
+
+# --- Security Onion role contract ----------------------------------------
+so_role: "sensor"
+so_hostname: "soc-sensor-edge"
+so_prod_ip: "172.31.7.24"
+so_prod_prefix: 24
+so_prod_gateway: "172.31.7.1"
+so_prod_dns:
+  - "172.31.2.7"
+  - "172.31.2.8"
+
+# --- GRE mirror endpoint (pairs with bs-edge-rtr) ---------------------------
+# The /30 is arbitrary but must be unused and must match the router's
+# vyos_gre_* values in host_vars/bs-edge-rtr.yml.
+so_gre_tunnel_local: "10.100.4.2"
+so_gre_tunnel_remote: "10.100.4.1"
+so_gre_tunnel_prefix: 30
+so_monitor_interface: "tun0"
+
+# The mirroring router's GRE endpoint -- the UNDERLAY remote, i.e. the source
+# address the encapsulated packets actually arrive from. Drives BOTH the
+# netplan tunnel's `remote:` and the sensor's SO firewall ACCEPT for proto 47.
+#
+# ** DRAFT — VERIFY ON bs-edge-rtr BEFORE DEPLOYING. **
+# It must be an address on that router with a route to 172.31.7.0/24. The
+# sensors sit behind bs-sec-rtr, which sits behind bs-ops-fw, so the path
+# differs per router and cannot be derived from host_vars. If this is wrong the
+# kernel silently declines to decapsulate and tun0 reads 0 packets forever
+# while showing UP -- so_sensor's "Verify the tunnel bound the CORRECT remote
+# endpoint" check catches it, but only after a full deploy.
+#
+# PORTING TRAP: do NOT default this to so_prod_gateway. In the so-ansible dev
+# range the mirroring router happened to BE the sensor's gateway, so three
+# independent values agreed by coincidence and the bug stayed invisible until
+# PowerPlant (ss-pp-ab UPSTREAM_FIXES 2026-08-04 later 3).
+so_gre_remote_underlay: "199.252.163.2"   # bs-edge-rtr, VERIFY

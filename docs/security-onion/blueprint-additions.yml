@@ -31,7 +31,7 @@
 # Also needs resizing -- it was specced as a placeholder, not as a manager
 # running 14 containers plus Elasticsearch.
 - type: "range.resource.primitive.VmInstance::1.0.0"
-  name: "soc-elastic"
+  name: "soc-so-manager"
   properties:
     image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"   # WAS RDP_Ubuntu_Server_24.04
     cpuCount: 16                                        # confirm current value
@@ -50,7 +50,7 @@
 # Storage-bound rather than CPU-bound; size for retention. In PowerPlant this
 # node carried roughly half the cluster's shards.
 - type: "range.resource.primitive.VmInstance::1.0.0"
-  name: "soc-elastic-search"
+  name: "soc-so-search"
   properties:
     image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
     cpuCount: 16

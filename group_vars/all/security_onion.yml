@@ -1,0 +1,106 @@
+---
+# =========================================================================
+# security_onion.yml — SO variable contract for airfield-range (Blackstone)
+# =========================================================================
+# Ported from PowerPlant/ss-pp-ab group_vars/all/security_onion.yml, which is
+# the version proven on a from-scratch deploy. Read that file's history in
+# ss-pp-ab/UPSTREAM_FIXES.md before changing anything here.
+#
+# IN group_vars/all/ ON PURPOSE. Role defaults are ROLE-scoped and a
+# group_vars file named after a group only applies to that group's hosts --
+# both of which have bitten this project. so_apt_mirror runs on the ANSIBLE
+# CONTROLLER, which is in none of the SO groups, so anything it reads must be
+# all-scoped. (ss-pp-ab UPSTREAM_FIXES 2026-07-29 fresh-range 3, 2026-08-04.)
+# =========================================================================
+
+# --- SO version pin ------------------------------------------------------
+# Pinned SHA, not a tag. The answer-file mechanism `so-setup <type> <file>`
+# exists only on master -- no tagged 2.4.x release ships setup/automation/.
+# so_base overlays snapshotted copies of so-setup + so-functions +
+# so-variables + so-whiptail from files/setup-automation-source/.
+so_git_repo: "https://github.com/Security-Onion-Solutions/securityonion"
+so_git_ref: "9d0e8f5c3a1b47d2e6f0a9c8b7d6e5f4a3b2c1d0"   # CONFIRM before first deploy
+so_setup_type: "network"
+
+# --- Mirror on the ansible controller ------------------------------------
+# so_apt_mirror serves the SO source tarball + bundled rulesets over nginx on
+# the controller's MANAGEMENT address. Derived from inventory rather than
+# restated: a hardcoded copy diverges the moment the controller moves, and
+# nothing points at the stale one (ss-pp-ab 2026-08-05, structural pass 5/5).
+so_mirror_host: "{{ hostvars[groups['ansible_controller'][0]]['ansible_host'] }}"
+so_mirror_port: 80
+so_mirror_root: /var/www/so-mirror
+so_mirror_url: "http://{{ so_mirror_host }}:{{ so_mirror_port }}"
+
+# MUST be all-scoped: 75-endpoint-style plays stage installers into the mirror
+# without including the roles that define these.
+so_agent_installer_windows: "so-elastic-agent_windows_amd64"
+so_agent_installer_linux: "so-elastic-agent_linux_amd64"
+
+# --- Manager identity ----------------------------------------------------
+# Derived, not restated -- see so_mirror_host above.
+so_manager_ip: "{{ hostvars[groups['so_manager'][0]]['so_prod_ip'] }}"
+so_msrv_ip: "{{ so_manager_ip }}"
+
+# --- Range topology ------------------------------------------------------
+# SOC subnet hosts the whole SO grid. Mirrored traffic arrives encapsulated,
+# so sensors need no interface in the segments they watch.
+so_subnet_soc: "172.31.7.0/24"
+
+# Segments the sensors monitor, by sensor. Used for documentation and for the
+# 60-verify traffic generator's targets; NOT for the tc mirror lists, which
+# live per-router in host_vars because interface numbering is device-specific.
+so_subnets_corp:
+  - "172.31.2.0/24"      # Services      (blackstone.mil DCs, file, mail, wec)
+  - "172.31.14.0/24"     # Headquarters
+  - "172.31.15.0/24"     # IT
+  - "172.31.16.0/24"     # Supply
+so_subnets_fops:
+  - "172.31.3.0/24"      # Flight-Ops-Services (fops.blackstone.mil DCs)
+  - "172.31.5.0/24"      # Flight-Control-Center (ATC, weather)
+  - "172.31.6.0/24"      # Flight-Ops-Users
+so_subnets_ot:
+  - "172.16.45.0/29"     # MTU / control-room-hmi
+  - "172.16.45.8/29"     # Fuel Farm PLC
+  - "172.16.46.0/24"     # Fuel Farm Sim
+so_subnets_edge:
+  - "200.200.200.0/24"   # simulated internet
+  - "199.252.163.0/30"   # edge-rtr <-> edge-fw transit
+
+# --- Airgap / detection content ------------------------------------------
+# The in-game plane has no real internet. SO's detection engines otherwise
+# fetch ETOPEN + sigma/yara/playbook repos every 5 minutes and fail forever
+# ("ElastAlert: Sync Failed", "Suricata: Rule Mismatch"). Airgap mode is SO's
+# own supported switch -- one pillar boolean plus locally staged content.
+# Do NOT patch soc.json; it is salt-rendered and reverts on every highstate.
+so_airgap_mode: true
+so_airgap_etopen_dest: "/nsm/rules/suricata/etopen"
+so_airgap_pillar_file: "/opt/so/saltstack/local/pillar/global/adv_global.sls"
+so_bundled_rules_filename: "emerging.rules.tar.gz"
+
+so_airgap_repos:
+  - name: securityonion-resources
+    dest: /nsm/rules/detect-sigma/repos/securityonion-resources
+  - name: securityonion-yara
+    dest: /nsm/rules/detect-yara/repos/securityonion-yara
+  - name: securityonion-resources-playbooks
+    dest: /nsm/airgap-resources/playbooks/securityonion-resources-playbooks
+
+# --- SOC WebUI -----------------------------------------------------------
+# IP, not hostname: the cert and redirects are built around whatever this is
+# set to, and a hostname that any client cannot resolve produces redirect
+# loops rather than an error.
+so_web_access_type: "IP"
+so_web_user: "admin@blackstone.mil"
+
+# --- Analyst access ------------------------------------------------------
+# so-setup seeds ALLOW_CIDR from this. It accepts a SINGLE CIDR -- so-common's
+# valid_cidr regex rejects comma-joined lists, and a list silently hangs the
+# setup TUI for an hour (ss-pp-ab UPSTREAM_FIXES 2026-07-22).
+so_allow_cidr: "{{ so_subnet_soc }}"
+
+# --- No-proxy names ------------------------------------------------------
+# Python's urllib does NOT parse CIDRs in no_proxy -- only literal names. Each
+# SO node plus localhost must be listed by name or salt's internal HTTP probes
+# go out through the corp proxy and time out.
+so_no_proxy_subnets: "{{ groups['so_all'] | map('extract', hostvars, 'so_prod_ip') | list + ['127.0.0.1', 'localhost'] }}"
