@@ -12,7 +12,8 @@
 #      imports, and their meta deps
 #   2. Validates each one is physically present under ./roles/
 #   3. Stages:  roles/ playbooks/ host_vars/ group_vars/ hosts site.yml
-#               deploy.sh requirements.yml (if present) files/ (if present)
+#               deploy.sh rules/ requirements.yml (if present) files/ (if present)
+#   3b. Asserts every bundled role's required data payloads are staged
 #   4. Runs verify_vars.py against the staged bundle
 #
 # UPSTREAM_FIXES.md and PROJECT_LOG.md are intentionally excluded.
@@ -193,11 +194,51 @@ if [ -f "$AIRFIELD_RANGE/requirements.yml" ]; then
   cp "$AIRFIELD_RANGE/requirements.yml" "$STAGE/"
 fi
 
+# Detection rulesets that MUST ship inside the tarball. These ranges target
+# platforms with NO external access -- not even a proxy -- so downloading the
+# ETOPEN ruleset at deploy time is not an option. so_apt_mirror reads it from
+# /etc/ansible/rules/ and fails by name if it is absent.
+if [ -d "$AIRFIELD_RANGE/rules" ]; then
+  cp -R "$AIRFIELD_RANGE/rules" "$STAGE/"
+fi
+
 if [ -d "$AIRFIELD_RANGE/files" ]; then
   cp -R "$AIRFIELD_RANGE/files" "$STAGE/"
   # Strip macOS .DS_Store noise so it doesn't ride along to /etc/ansible
   find "$STAGE/files" -name '.DS_Store' -delete 2>/dev/null || true
 fi
+
+# --- Required payloads -----------------------------------------------------
+# ROLES ARE NOT SELF-CONTAINED. Some read a data file from the controller that
+# lives OUTSIDE roles/, so copying the role in is only half the job -- and the
+# half that is missing costs a full deploy to discover, because nothing fails
+# until the role runs.
+#
+# so_apt_mirror was ported 2026-08-11 without rules/emerging.rules.tar.gz.
+# Everything downstream verified clean: the archive built, 48 roles bundled,
+# site.yml parsed from a clean extraction. The deploy then failed at phase 10
+# with "was not bundled at /etc/ansible/rules/emerging.rules.tar.gz" -- the
+# role's own error, working exactly as designed, ~40 minutes in.
+#
+# The TAR_PATHS assertion below cannot catch this class: it compares what was
+# STAGED against what gets PACKED, and this file was never staged at all.
+# Declare the dependency instead, keyed on the role actually being bundled.
+declare -a REQUIRED_PAYLOADS=(
+  "so_apt_mirror:rules/emerging.rules.tar.gz"
+)
+payload_missing=0
+for req in "${REQUIRED_PAYLOADS[@]}"; do
+  need_role="${req%%:*}"
+  need_file="${req#*:}"
+  in_array "$need_role" "${seen[@]:-}" || continue
+  if [ ! -f "$STAGE/$need_file" ]; then
+    echo "ERROR: role '$need_role' is bundled but requires '$need_file', which is not staged." >&2
+    echo "       It is read from /etc/ansible/$need_file at deploy time and cannot be" >&2
+    echo "       downloaded -- these ranges have no egress. Add it to the repo." >&2
+    payload_missing=1
+  fi
+done
+[ "$payload_missing" -eq 0 ] || exit 1
 
 # --- Verify ----------------------------------------------------------------
 
@@ -212,6 +253,7 @@ fi
 cd "$STAGE"
 TAR_PATHS=(roles host_vars group_vars hosts site.yml deploy.sh)
 [ -d "playbooks" ] && TAR_PATHS+=(playbooks)
+[ -d "rules" ] && TAR_PATHS+=(rules)
 [ -f "fuel_farm_playbook.yml" ] && TAR_PATHS+=(fuel_farm_playbook.yml)
 [ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
 [ -f "verify_fuel_farm.sh" ] && TAR_PATHS+=(verify_fuel_farm.sh)

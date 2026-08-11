@@ -16,6 +16,67 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-08-11 (later 2) · bug · Roles were ported without the data file one of them reads
+
+**Symptom.** Phase 10, ~40 minutes into a deploy, on the first run that ever
+got past the controller-connection bug:
+
+```
+TASK [so_apt_mirror : Fail if the ETOPEN ruleset was not bundled with the tarball]
+fatal: [ansible]: FAILED! => emerging.rules.tar.gz is missing from the mirror
+because it was not bundled at /etc/ansible/rules/emerging.rules.tar.gz.
+```
+
+The role behaved exactly as designed — it named the file, the path, and the
+reason downloading is not an option. Nothing was wrong with it.
+
+**Cause.** `so_apt_mirror` was copied from `ss-pp-ab` on 2026-08-11 along with
+six other roles. The 5.5 MB ETOPEN ruleset it reads was not, because it does
+not live under `roles/` — it is a top-level `rules/` directory that
+`ss-pp-ab/build_tarball.sh` stages and packs explicitly. Airfield's
+`build_tarball.sh` had no mention of `rules` at all.
+
+**Why every check passed anyway.** This is the uncomfortable part. The port
+was verified four ways and all four were clean:
+
+| check | result |
+|---|---|
+| 48 roles bundled, up from 41 | correct |
+| tarball members, zero AppleDouble junk | correct |
+| `site.yml` syntax-check from a CLEAN EXTRACTION | passed |
+| staged-vs-`TAR_PATHS` divergence assertion | passed |
+
+Every one of them asks about roles and playbooks. None asks whether a role's
+DATA came with it. The `TAR_PATHS` assertion added earlier the same day is
+specifically unable to catch this: it compares what was staged against what
+gets packed, and this file was never staged, so there was nothing to diverge.
+
+**Fix.**
+- `rules/emerging.rules.tar.gz` copied in (md5 `9db1fd3b90e37ed10a8ef2d11bcaef42`,
+  identical to PowerPlant's — it is the same upstream ET Open ruleset).
+- `build_tarball.sh` stages `rules/` and adds it to `TAR_PATHS`.
+- A `REQUIRED_PAYLOADS` declaration keyed on the bundled role:
+
+```bash
+declare -a REQUIRED_PAYLOADS=(
+  "so_apt_mirror:rules/emerging.rules.tar.gz"
+)
+```
+
+If the role is in the bundle and its payload is not staged, the BUILD fails in
+two seconds naming both. Verified by hiding the file and re-running: the build
+exits non-zero with the role name, the file, and why it cannot be downloaded.
+
+**The generalisable lesson.** ROLES ARE NOT SELF-CONTAINED. A role that reads
+from `/etc/ansible/<something>` outside its own directory has a dependency the
+role-discovery walker structurally cannot see, because that walker follows
+`roles:` blocks and `meta/main.yml` — neither of which mentions data. When
+copying a role across repos, grep its defaults for absolute controller paths
+and carry those too. Add each one to `REQUIRED_PAYLOADS` so the next person
+gets a build failure instead of a deploy failure.
+
+---
+
 ## 2026-08-11 (later 1) · enhancement · `so_subnet_security` is a range-specific name in a range-agnostic role
 
 **Symptom.** Copying the SO roles into a range whose grid does not live on a
