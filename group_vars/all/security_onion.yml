@@ -201,7 +201,8 @@ so_airgap_repos:
 # playbooks/75-endpoint.yml.
 #
 # Derived from the inventory 2026-08-11: every host in [windows] + [linux]
-# minus the SO grid, which enrolls itself — 69 hosts in 13 segments. Listed
+# minus the SO grid and minus [no_endpoint_agent] — 66 hosts across 10 full
+# subnets plus 2 individual OT hosts. Listed
 # explicitly rather than computed so the permitted set is reviewable, and
 # 75-endpoint.yml ASSERTS that every agent target's in-scenario address falls
 # inside one of these. Add a host on a new segment and the assert fails
@@ -224,19 +225,27 @@ so_agent_endpoint_subnets:
   - "172.31.14.0/24"      # Headquarters
   - "172.31.15.0/24"      # IT
   - "172.31.16.0/24"      # Supply
-  - "172.16.45.0/29"      # OT MTU — control-room-hmi
-  - "172.16.45.8/29"      # OT Fuel PLC — ff-plc-1
-  - "172.16.46.0/24"      # OT Fuel Sim — fuel-farm-sim, fuel-hist, fuel-db
-                          #   The three OT segments cross bs-ops-fw, which is
-                          #   currently lab permit-any per interface
-                          #   (host_vars/bs-ops-fw.yml: "NO blocking ACLs yet").
-                          #   Agents enroll today. WHEN THE L3.5 ACLs LAND, this
-                          #   path becomes an explicit decision: either a
-                          #   pfsense_rules entry permitting OT -> 172.31.7.15 on
-                          #   Fleet's ports, or drop OT from this list and accept
-                          #   wire-only visibility there via soc-sensor-ot.
-                          #   elastic_agent's preflight fails loudly either way;
-                          #   it does not open the path on its own.
+  # --- OT: TWO HOSTS, NOT THREE SEGMENTS ---------------------------------
+  # /32s on purpose. Everywhere else a whole subnet is the right granularity;
+  # crossing the Purdue L3.5 boundary it is not. Only the Level 3 historian
+  # and audit DB are agent targets (see [no_endpoint_agent] in `hosts` for the
+  # rule and the reasoning), and a 172.16.46.0/24 entry would additionally
+  # permit fuel-farm-sim — a host that will never enroll — to open a session
+  # to Fleet. Permitting what will actually be used, and nothing else, is the
+  # whole point of a boundary.
+  #
+  # The two suppressed segments are gone entirely, not narrowed:
+  #   172.16.45.0/29  MTU        — only control-room-hmi, excluded
+  #   172.16.45.8/29  Fuel PLC   — only ff-plc-1, excluded
+  #
+  # These cross bs-ops-fw, which is lab permit-any per interface today
+  # (host_vars/bs-ops-fw.yml: "NO blocking ACLs yet"), so they enroll now.
+  # WHEN THE L3.5 ACLs LAND this needs an explicit pfsense_rules entry
+  # permitting these two hosts to reach the SOC subnet on Fleet's ports --
+  # a deliberate change to the range's security posture. elastic_agent's
+  # preflight fails loudly if it is missing; it does not open the path itself.
+  - "172.16.46.18/32"     # fuel-hist — L3 historian (Telegraf/InfluxDB/Grafana)
+  - "172.16.46.19/32"     # fuel-db   — L3 audit DB (PostgreSQL/TimescaleDB)
 
 # The SO hostgroup that opens Fleet's ports. Confirmed present in
 # /opt/so/saltstack/default/salt/firewall/defaults.yaml on 2026-08-04,

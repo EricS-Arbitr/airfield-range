@@ -155,13 +155,12 @@
   become: true
   gather_facts: false
   vars:
-    # Every host that will run an agent: windows + linux, minus any device we
-    # cannot manage and minus the SO grid, which enrolls itself.
-    # [unmanaged] does not exist in this inventory today; `| default([])`
-    # keeps the expression portable if it ever does.
+    # Every host that will run an agent: windows + linux, minus the OT process
+    # devices that must not carry one, minus the SO grid, which enrolls itself.
+    # See [no_endpoint_agent] in `hosts` for which OT hosts and why.
     agent_targets: >-
       {{ ((groups['windows'] | default([])) + (groups['linux'] | default([])))
-         | difference(groups['unmanaged'] | default([]))
+         | difference(groups['no_endpoint_agent'] | default([]))
          | difference(groups['so_all'] | default([]))
          | unique | sort | list }}
   tasks:
@@ -292,7 +291,12 @@
 # sensors. Batches of 8 keep that bounded; the run is slower but does not
 # starve the grid it is feeding.
 - name: Enroll endpoints into Security Onion's Fleet
-  hosts: windows:linux:!so_all
+  # !no_endpoint_agent is load-bearing, not decoration. Without it the OT
+  # process devices are still play targets: elastic_agent's Fleet preflight
+  # would PASS (bs-ops-fw is permit-any today) and it would install an agent on
+  # the PLC and the field simulator. The assert above only checks that targets
+  # are reachable -- it cannot know they should not be targets at all.
+  hosts: windows:linux:!no_endpoint_agent:!so_all
   gather_facts: false
   serial: 8
   roles:
@@ -309,7 +313,7 @@
   vars:
     agent_targets: >-
       {{ ((groups['windows'] | default([])) + (groups['linux'] | default([])))
-         | difference(groups['unmanaged'] | default([]))
+         | difference(groups['no_endpoint_agent'] | default([]))
          | difference(groups['so_all'] | default([]))
          | unique | sort | list }}
   tasks:

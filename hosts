@@ -214,6 +214,45 @@ soc-syslog
 soc-splunk
 
 # ------------------------------------------------------------
+# Hosts that must NOT receive an endpoint agent
+# ------------------------------------------------------------
+# Elastic Agent placement in the OT chain follows the Purdue level, not the
+# subnet. The rule (Eric, 2026-08-11): an OT host gets an agent only if it is
+# used to MONITOR the process, not to run it.
+#
+#   ff-plc-1          L1   OpenPLC controller — runs the fuel process
+#   fuel-farm-sim     L0/1 pymodbus field simulation — it IS the plant
+#   control-room-hmi  L2   FUXA operator console — how the process is driven
+#
+# fuel-hist (L3 historian) and fuel-db (L3 audit DB) are NOT here: they record
+# and report, they are not in the control loop, and Level 3 is where endpoint
+# agents are routine. Neither are bs-eng01-06 / bs-ro-hist — the engineers'
+# own workstations sit on 172.31.8.0/24, IT-side of bs-ops-fw, and have always
+# been agent targets.
+#
+# control-room-hmi is the judgment call, and it is deliberate. Industry
+# practice increasingly DOES put EDR on Level 2 HMIs — Stuxnet, Industroyer
+# and TRITON all pivoted through operator or engineering consoles — but always
+# vendor-approved and detection-only. Excluding it here is the conservative
+# reading, and it is the better one for a TRAINING range: it leaves a real
+# endpoint-visibility gap in the OT enclave that trainees have to close with
+# network monitoring instead. soc-sensor-ot mirrors all three OT segments, so
+# the traffic is still fully visible on the wire. That is the compensating
+# control, and teaching it is the point.
+#
+# It is also a Purdue BRIDGE host (CLAUDE.md §8) forwarding between MTU and
+# Power-PLC, which is exactly the kind of box where an agent's failure mode is
+# worst.
+#
+# NAMED FOR WHAT IT MEANS. PowerPlant calls its equivalent [unmanaged], which
+# is wrong here: Ansible manages every one of these hosts and deploys their
+# software. The only thing they are excluded from is endpoint telemetry.
+[no_endpoint_agent]
+ff-plc-1
+fuel-farm-sim
+control-room-hmi
+
+# ------------------------------------------------------------
 # Security Onion 2.4 distributed grid  (branch `security-onion`)
 # ------------------------------------------------------------
 # Group NAMES are load-bearing: the so_* roles are copied verbatim from

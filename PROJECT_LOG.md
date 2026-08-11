@@ -70,6 +70,37 @@ vault; `ansible.utils` added to requirements.yml (it was already a hard
 dependency of `roles/common`, working only because the controller image
 happens to ship it).
 
+### Endpoint-agent placement in OT (Eric, 2026-08-11)
+
+An OT host gets an Elastic Agent only if it is used to MONITOR the process,
+not to run it. Applied by Purdue level rather than by subnet:
+
+| host | level | agent |
+|---|---|---|
+| ff-plc-1 | L1 OpenPLC controller | no |
+| fuel-farm-sim | L0/1 pymodbus field sim | no |
+| control-room-hmi | L2 FUXA operator console | no |
+| fuel-hist | L3 historian | yes |
+| fuel-db | L3 audit DB | yes |
+| bs-eng01-06, bs-ro-hist | engineering, 172.31.8.0/24 | yes (unchanged) |
+
+Enforced in three places that must agree: the `[no_endpoint_agent]` inventory
+group, the enroll play's host pattern, and `so_agent_endpoint_subnets` — where
+the three OT segments collapse to two /32s, so the firewall permits only what
+will actually enroll. 69 targets -> 66.
+
+control-room-hmi is the judgment call and is deliberate. Industry practice
+increasingly does put EDR on Level 2 HMIs (Stuxnet, Industroyer and TRITON all
+pivoted through operator or engineering consoles), always vendor-approved and
+detection-only. Excluding it is the conservative reading, and the better one
+for a training range: it leaves a real endpoint-visibility gap in OT that
+trainees have to close with network monitoring. soc-sensor-ot mirrors all three
+OT segments, so the traffic is still fully visible on the wire.
+
+UNVERIFIED ON A LIVE GRID: that `so-firewall includehost <group> <ip>/32` is
+accepted. Inferred from PowerPlant passing /24s to the same command. It fails
+loudly if not, in phase 75.
+
 ### Outstanding before this can deploy
 
 1. `vyos_gre_source_ip` / `so_gre_remote_underlay` per router — drafted and
