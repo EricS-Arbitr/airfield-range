@@ -1,0 +1,377 @@
+---
+# =========================================================================
+# 76-syslog.yml — central syslog into Security Onion
+# =========================================================================
+# soc-syslog collects syslog from the VyOS routers, both pfSense firewalls
+# and every Linux host, and writes /var/log/remote/<device>/syslog.log. A
+# Splunk UF on that host already tails those files. This phase points SO's
+# Elastic Agent at the SAME files, so both SIEMs read one source of truth and
+# neither depends on the other.
+#
+# RUNS AFTER 75-endpoint, and that ordering is a hard requirement: everything
+# below operates on an agent that phase 75 enrolled. Running this first fails
+# at the first task with "soc-syslog is not enrolled", which is the correct
+# and readable failure.
+#
+# EVERYTHING IS DISCOVERED AT RUNTIME. No package version, policy ID or agent
+# ID is hardcoded. That is deliberate: this is the first syslog-into-SO work
+# in any of these repos -- PowerPlant never did it -- so there is no observed
+# value to copy, and a guessed constant would fail late and confusingly rather
+# than early and clearly.
+#
+# TWO THINGS THIS RUN WILL TELL US, both flagged where they matter:
+#   1. Whether SO's airgapped package registry carries the `log` integration.
+#      It is a core Elastic package and should, but "should" is not "does",
+#      and this range has no egress to fall back on.
+#   2. Whether SO's `elasticfleet` salt state leaves a hand-created package
+#      policy alone. The Defend-filter precedent says SO's helpers only touch
+#      objects they created, but exception lists and Fleet policies are
+#      different object classes and that precedent does not automatically
+#      transfer. The last task re-reads the policy so a reconcile shows up as
+#      a failure here rather than as silently missing data a week later.
+#
+# Kibana on localhost:5601 with curl.config, exactly as
+# so_manager/tasks/defend_exclusions.yml does it -- same endpoint, same
+# credentials, same kbn-xsrf header.
+# =========================================================================
+
+- name: Central syslog into Security Onion
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  vars:
+    kb: >-
+      curl -s --config /opt/so/conf/elasticsearch/curl.config
+      -H 'kbn-xsrf: true' -H 'Content-Type: application/json'
+  tasks:
+
+    # --- 1. The agent must exist before anything can be assigned to it -----
+    - name: Find the Elastic Agent enrolled on {{ so_syslog_host }}
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ kb }} 'http://localhost:5601/api/fleet/agents?perPage=500' \
+          | python3 -c '
+        import json,sys
+        d = json.load(sys.stdin)
+        for a in d.get("list", d.get("items", [])):
+            h = ((a.get("local_metadata") or {}).get("host") or {})
+            if (h.get("hostname") or "").lower() == "{{ so_syslog_host }}":
+                print(json.dumps({"id": a["id"], "policy_id": a.get("policy_id")}))
+                break
+        '
+      args:
+        executable: /bin/bash
+      register: syslog_agent_raw
+      changed_when: false
+
+    - name: Fail if {{ so_syslog_host }} is not enrolled in Fleet
+      ansible.builtin.fail:
+        msg: |
+          {{ so_syslog_host }} has no Elastic Agent registered in Fleet, so
+          there is nothing to attach a syslog input to.
+
+          Run playbooks/75-endpoint.yml first. If that has already run, check
+          that {{ so_syslog_host }}'s subnet is in so_agent_endpoint_subnets
+          and that its agent service is running.
+      when: syslog_agent_raw.stdout | trim | length == 0
+
+    - name: Record the agent and its current policy
+      ansible.builtin.set_fact:
+        syslog_agent: "{{ syslog_agent_raw.stdout | from_json }}"
+
+    # --- 2. The integration package must be available OFFLINE --------------
+    # Version is read from the registry rather than pinned. SO ships its own
+    # airgapped package registry; whatever version it carries is the only one
+    # installable here, so asking is the only correct move.
+    - name: Which version of the `log` integration does SO's registry carry?
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ kb }} 'http://localhost:5601/api/fleet/epm/packages/log' \
+          | python3 -c '
+        import json,sys
+        d = json.load(sys.stdin)
+        it = d.get("item") or d.get("response") or {}
+        print(it.get("version") or "")
+        '
+      args:
+        executable: /bin/bash
+      register: log_pkg
+      changed_when: false
+      failed_when: false
+
+    - name: Fail clearly if the `log` integration is not in the airgapped registry
+      ansible.builtin.fail:
+        msg: |
+          Kibana returned no version for the `log` (Custom Logs) integration.
+
+          This range has NO EGRESS, so the package cannot be fetched on
+          demand — if SO's bundled registry does not carry it, this design
+          does not work here and the alternative is the rsyslog-forward path
+          described in group_vars/all/security_onion.yml.
+
+          Check what IS available:
+            curl -s --config /opt/so/conf/elasticsearch/curl.config \
+              'http://localhost:5601/api/fleet/epm/packages?prerelease=true' \
+              | python3 -c 'import json,sys;print("\\n".join(sorted(p["name"] for p in json.load(sys.stdin)["items"])))'
+      when: log_pkg.stdout | trim | length == 0
+
+    - name: Ensure the `log` integration is installed
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ kb }} -o /dev/null -w '%{http_code}' -X POST \
+          'http://localhost:5601/api/fleet/epm/packages/log/{{ log_pkg.stdout | trim }}' \
+          -d '{"force":true}'
+      args:
+        executable: /bin/bash
+      register: pkg_install
+      changed_when: pkg_install.stdout | trim == '200'
+      # 409 = already installed, which is the steady state on every re-run.
+      failed_when: pkg_install.stdout | trim not in ['200', '409']
+
+    # --- 3. A dedicated policy, COPIED so Defend survives ------------------
+    # Copying rather than creating: soc-syslog's current policy carries
+    # Elastic Defend and the system integration. Building a fresh policy and
+    # moving the agent to it would trade endpoint telemetry for syslog, which
+    # is not a trade anyone asked for.
+    - name: Does the {{ so_syslog_policy_name }} policy already exist?
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ kb }} 'http://localhost:5601/api/fleet/agent_policies?perPage=500' \
+          | python3 -c '
+        import json,sys
+        for p in json.load(sys.stdin).get("items", []):
+            if p.get("name") == "{{ so_syslog_policy_name }}":
+                print(p["id"]); break
+        '
+      args:
+        executable: /bin/bash
+      register: existing_policy
+      changed_when: false
+
+    - name: Copy {{ so_syslog_host }}'s current policy into {{ so_syslog_policy_name }}
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ kb }} -X POST \
+          'http://localhost:5601/api/fleet/agent_policies/{{ syslog_agent.policy_id }}/copy' \
+          -d @- <<'JSON' | python3 -c 'import json,sys; print(json.load(sys.stdin)["item"]["id"])'
+        {{ {
+             'name': so_syslog_policy_name,
+             'description': 'Central rsyslog collector. Same integrations as the endpoint policy, plus a filestream input over /var/log/remote. Managed by playbooks/76-syslog.yml.'
+           } | to_json }}
+        JSON
+      args:
+        executable: /bin/bash
+      register: policy_copy
+      when: existing_policy.stdout | trim | length == 0
+
+    - name: Settle on the policy ID
+      ansible.builtin.set_fact:
+        syslog_policy_id: >-
+          {{ (existing_policy.stdout | trim)
+             if (existing_policy.stdout | trim | length > 0)
+             else (policy_copy.stdout | trim) }}
+
+    # --- 4. The input itself ----------------------------------------------
+    # DELETE-then-POST, the same reasoning as defend_exclusions.yml: PUT's
+    # body schema for package policies differs from POST's, and on a static
+    # input a moment of churn is worth using only verbs whose behaviour we
+    # have observed.
+    - name: Remove any previous copy of the syslog package policy
+      ansible.builtin.shell: |
+        set -o pipefail
+        ids=$({{ kb }} 'http://localhost:5601/api/fleet/package_policies?perPage=500' \
+          | python3 -c '
+        import json,sys
+        print(" ".join(p["id"] for p in json.load(sys.stdin).get("items", [])
+                       if p.get("name") == "syslog-remote-files"))
+        ')
+        for i in $ids; do
+          {{ kb }} -o /dev/null -X POST \
+            'http://localhost:5601/api/fleet/package_policies/delete' \
+            -d "{\"packagePolicyIds\":[\"$i\"]}"
+        done
+        echo "${ids:-none}"
+      args:
+        executable: /bin/bash
+      register: pp_delete
+      changed_when: pp_delete.stdout | trim != 'none'
+
+    - name: Create the filestream input over /var/log/remote
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ kb }} -o /tmp/.syslog_pp -w '%{http_code}' -X POST \
+          'http://localhost:5601/api/fleet/package_policies' -d @- <<'JSON'
+        {{ pp_body_json }}
+        JSON
+      args:
+        executable: /bin/bash
+      vars:
+        # Built as a variable rather than inline in the task. The processors
+        # value is a YAML DOCUMENT carried inside a JSON string inside a
+        # heredoc inside a Jinja expression; written inline its newlines
+        # terminate the surrounding YAML and the playbook stops parsing.
+        syslog_processors: |
+          - dissect:
+              tokenizer: "{{ so_syslog_path_tokenizer }}"
+              field: "log.file.path"
+              target_prefix: ""
+        pp_body_json: >-
+          {{ {
+               'name': 'syslog-remote-files',
+               'namespace': 'default',
+               'policy_id': syslog_policy_id,
+               'package': {'name': 'log', 'version': log_pkg.stdout | trim},
+               'inputs': [{
+                 'type': 'logfile',
+                 'enabled': true,
+                 'streams': [{
+                   'enabled': true,
+                   'data_stream': {'type': 'logs', 'dataset': so_syslog_dataset},
+                   'vars': {
+                     'paths': {'value': so_syslog_paths, 'type': 'text'},
+                     'data_stream.dataset': {'value': so_syslog_dataset, 'type': 'text'},
+                     'processors': {'type': 'yaml', 'value': syslog_processors}
+                   }
+                 }]
+               }]
+             } | to_json }}
+      register: pp_create
+      changed_when: pp_create.stdout | trim in ['200', '201']
+      failed_when: pp_create.stdout | trim not in ['200', '201']
+
+    - name: Show Kibana's response if the input was rejected
+      ansible.builtin.command: cat /tmp/.syslog_pp
+      register: pp_body
+      changed_when: false
+      failed_when: false
+
+    # --- 5. Point the agent at the policy ----------------------------------
+    - name: Move {{ so_syslog_host }}'s agent onto {{ so_syslog_policy_name }}
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ kb }} -o /dev/null -w '%{http_code}' -X POST \
+          'http://localhost:5601/api/fleet/agents/{{ syslog_agent.id }}/reassign' \
+          -d '{"policy_id":"{{ syslog_policy_id }}"}'
+      args:
+        executable: /bin/bash
+      register: reassign
+      changed_when: reassign.stdout | trim == '200'
+      # 200 on a move, 4xx when it is already there on a re-run.
+      failed_when: reassign.stdout | trim not in ['200', '400', '409']
+
+    # --- 6. Proof, not presence -------------------------------------------
+    # Read the STORED policy back and assert the paths, for the same reason
+    # the Defend filters are read back: an object can be created perfectly and
+    # still be configured to do nothing. This also catches a Fleet reconcile,
+    # which is the open question this phase exists to answer.
+    - name: Read the stored package policy back
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ kb }} 'http://localhost:5601/api/fleet/package_policies?perPage=500' \
+          | python3 -c '
+        import json,sys
+        for p in json.load(sys.stdin).get("items", []):
+            if p.get("name") == "syslog-remote-files":
+                print(json.dumps(p)); break
+        '
+      args:
+        executable: /bin/bash
+      register: pp_readback
+      changed_when: false
+
+    - name: Assert the input survived and carries the paths we set
+      ansible.builtin.assert:
+        that:
+          - pp_readback.stdout | trim | length > 0
+          - stored.policy_id == syslog_policy_id
+          - (stored.inputs[0].streams[0].vars.paths.value | sort) == (so_syslog_paths | sort)
+        fail_msg: |
+          The syslog input is missing or does not carry the expected paths.
+
+          Stored: {{ pp_readback.stdout | default('<nothing>') }}
+          Kibana's create response: {{ pp_body.stdout | default('<none>') }}
+
+          If it was created and is now GONE, SO's elasticfleet salt state is
+          reconciling away policies it did not create. That invalidates this
+          design and the fallback is the rsyslog-forward path documented in
+          group_vars/all/security_onion.yml.
+        quiet: true
+      vars:
+        stored: "{{ pp_readback.stdout | from_json }}"
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ so_syslog_host }} is on policy {{ so_syslog_policy_name }} with a
+          filestream input over {{ so_syslog_paths | join(', ') }} into
+          dataset {{ so_syslog_dataset }}. Splunk still tails the same files
+          independently. DATA ARRIVAL IS A SEPARATE CLAIM — see the next play.
+  tags: [so, syslog]
+
+# --- Did anything actually arrive? ----------------------------------------
+# Configuration proven correct is not data proven flowing. Separate play so a
+# failure here is unambiguous: the policy is right and the pipeline is not.
+- name: Verify syslog is reaching Elasticsearch
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  tasks:
+    # The agent has to pick up the new policy, open the files and ship. A
+    # minute is generous for a checkin interval measured in seconds, but the
+    # collector is idle-ish on a fresh range and needs a device to say
+    # something first.
+    - name: Wait for documents in {{ so_syslog_dataset }}
+      ansible.builtin.shell: |
+        set -o pipefail
+        so-elasticsearch-query \
+          "logs-{{ so_syslog_dataset }}-*/_count?q=@timestamp:%3Enow-15m" \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin).get("count", 0))'
+      args:
+        executable: /bin/bash
+      register: syslog_count
+      changed_when: false
+      failed_when: false
+      until: (syslog_count.stdout | trim | int) > 0
+      retries: 12
+      delay: 30
+
+    - name: Report what arrived, and from which devices
+      ansible.builtin.shell: |
+        set -o pipefail
+        so-elasticsearch-query "logs-{{ so_syslog_dataset }}-*/_search" -d '
+        {"size":0,"query":{"range":{"@timestamp":{"gte":"now-15m"}}},
+         "aggs":{"by_device":{"terms":{"field":"observer.hostname","size":30}}}}' \
+          | python3 -c '
+        import json,sys
+        d = json.load(sys.stdin)
+        b = ((d.get("aggregations") or {}).get("by_device") or {}).get("buckets", [])
+        print("total=%d" % d["hits"]["total"]["value"])
+        for x in b: print("  %-24s %d" % (x["key"], x["doc_count"]))
+        '
+      args:
+        executable: /bin/bash
+      register: syslog_devices
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if nothing is arriving
+      ansible.builtin.fail:
+        msg: |
+          No documents in logs-{{ so_syslog_dataset }}-* in the last 15 minutes.
+
+          The package policy verified correct in the previous play, so this is
+          a pipeline problem rather than a configuration one. In order of
+          likelihood:
+            1. The agent has not applied the new policy yet. Check on
+               {{ so_syslog_host }}:  so-elastic-agent-status
+            2. It cannot read the files. They are 0640 syslog:adm; the agent
+               runs as root, so this would be unexpected — but check
+               /opt/Elastic/Agent/elastic-agent.log for permission errors.
+            3. Nothing has been logged yet. `logger -n 127.0.0.1 -P 514 test`
+               on a VyOS router forces traffic.
+      when: (syslog_count.stdout | trim | int) == 0
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ syslog_devices.stdout_lines | default(['no breakdown available']) }}"
+  tags: [so, syslog]

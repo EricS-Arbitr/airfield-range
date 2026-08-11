@@ -1233,6 +1233,7 @@
 #   60  verification of the grid itself
 #   70  analyst access (Windows workstations, not the grid)
 #   75  endpoint telemetry (Sysmon check + Elastic Agent into Fleet)
+#   76  central syslog into SO, via the agent 75 put on soc-syslog
 #
 # WHY 05-time IS HERE AND NOT EARLIER
 # -----------------------------------
@@ -1263,3 +1264,8 @@
 - import_playbook: playbooks/60-verify.yml
 - import_playbook: playbooks/70-analyst.yml
 - import_playbook: playbooks/75-endpoint.yml
+
+# Central syslog into SO. AFTER 75: it configures the Elastic Agent that 75
+# enrolls on soc-syslog, so it cannot run before it exists. Splunk keeps
+# tailing the same files -- two independent readers, one source of truth.
+- import_playbook: playbooks/76-syslog.yml

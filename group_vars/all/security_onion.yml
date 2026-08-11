@@ -310,3 +310,43 @@ so_defend_exclusions:
 so_defend_filters_src: "/opt/so/saltstack/local/salt/elasticfleet/files/soc/elastic-defend-custom-filters.yaml"
 so_defend_filters_raw: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters-raw"
 so_defend_filters_out: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters"
+
+# --- Central syslog into Security Onion -----------------------------------
+# soc-syslog is the range's rsyslog collector: VyOS routers, both pfSense
+# firewalls and every Linux host ship to UDP/TCP 514 there, and it writes
+# /var/log/remote/<device>/syslog.log (roles/syslog_server). A Splunk UF on
+# that same host tails those files into Splunk's netfw index.
+#
+# SO reads THE SAME FILES with the Elastic Agent that phase 75 already
+# enrolled on soc-syslog. Two independent readers of one source of truth --
+# Splunk is untouched, and neither can starve the other.
+#
+# WHY NOT rsyslog omfwd TO THE MANAGER. That is SO's more conventional path
+# and it preserves the original source IP, but it needs a Fleet listener
+# configured either way, PLUS a so-firewall change, PLUS an edit to a working
+# 30-remote.conf whose `stop` statements are load-bearing -- put an action
+# after one and it never runs; put it before and you have changed the Splunk
+# path too. Strictly more risk for the same data. Revisit only if Fleet turns
+# out to reconcile away the package policy (see playbooks/76-syslog.yml).
+so_syslog_host: "soc-syslog"
+so_syslog_paths:
+  - "/var/log/remote/*/syslog.log"
+
+# Its own agent policy, COPIED from whatever policy soc-syslog is already on
+# so it keeps Elastic Defend and the system integration. Adding the input to
+# the shared endpoint policy instead would push a filestream glob to all 66
+# endpoints -- harmless where the path does not exist, but it makes every
+# host's policy claim something that is only true of one of them.
+so_syslog_policy_name: "so-syslog-collector"
+so_syslog_dataset: "syslog.remote"
+
+# The device name is recovered from the FILE PATH, not the message. rsyslog
+# already demultiplexed by host into a directory per device, so the path is
+# the most reliable attribution available -- pfSense in particular emits
+# malformed RFC3164 with no HOSTNAME field at all (UPSTREAM_FIXES 2026-06-30),
+# which is why syslog_source_ip_map exists.
+#
+# host.name stays soc-syslog and that is correct: it IS the host the agent
+# runs on. The originating device lands in observer.hostname, which is the
+# ECS field for "the device that observed/emitted the event".
+so_syslog_path_tokenizer: "/var/log/remote/%{observer.hostname}/syslog.log"
