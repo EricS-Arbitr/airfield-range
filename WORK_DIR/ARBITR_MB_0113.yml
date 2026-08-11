@@ -366,7 +366,7 @@ resources:
     cwd: "/etc/ansible"
     user: "root"
     content: "wget --no-check-certificate --no-cache -e use_proxy=yes -e https_proxy=10.255.240.1:3128\
-      \ -O /etc/ansible/ab_mb.tgz  https://github.com/EricS-Arbitr/airfield-range/raw/08fede5a0fc20927013fd80de101c1fa4823e94a/ab_mb.tgz\
+      \ -O /etc/ansible/ab_mb.tgz  https://github.com/EricS-Arbitr/airfield-range/raw/9297c7c1e81fa8a695777f738178288c982689a8/ab_mb.tgz\
       \ && tar -xvzf ab_mb.tgz\n"
     scriptType: "BASH"
 - type: "range.resource.primitive.VmInstance::1.0.0"
