@@ -140,30 +140,48 @@
     #
     # Read rather than hardcoded, for the same reason as the version: this is
     # the `log` package's business, not ours, and it is one API call to ask.
-    - name: Which data stream does the `log` package declare for the logfile input?
+    - name: Which data stream does the `log` package declare?
+      # `?full=true` because the compact form of this response has been seen
+      # to omit data_streams entirely. Harmless where it is already included.
+      #
+      # PREFER the logfile stream, FALL BACK to the only one. The first
+      # version of this matched strictly on streams[].input == "logfile" and
+      # found nothing on 2026-08-12 -- the `log` package's shape is not what I
+      # assumed. A strict match that returns empty is a guess dressed up as
+      # discovery; taking the sole data stream when there is exactly one is a
+      # fact about the package, not a bet on its field names.
       ansible.builtin.shell: |
         set -o pipefail
-        {{ kb }} 'http://localhost:5601/api/fleet/epm/packages/log' \
+        {{ kb }} 'http://localhost:5601/api/fleet/epm/packages/log?full=true' \
           | python3 -c '
         import json,sys
         it = json.load(sys.stdin).get("item", {})
-        for ds in it.get("data_streams", []):
-            for st in ds.get("streams", []):
-                if st.get("input") == "logfile":
-                    print(json.dumps({"type": ds.get("type"), "dataset": ds.get("dataset")}))
-                    sys.exit(0)
+        ds = it.get("data_streams") or []
+        pick = None
+        for d in ds:
+            for st in (d.get("streams") or []):
+                if st.get("input") in ("logfile", "log", "filestream"):
+                    pick = d; break
+            if pick: break
+        if pick is None and len(ds) == 1:
+            pick = ds[0]
+        if pick:
+            print(json.dumps({"type": pick.get("type"), "dataset": pick.get("dataset")}))
         '
       args:
         executable: /bin/bash
       register: log_ds_raw
       changed_when: false
 
-    - name: Fail if the package declares no logfile stream
+    - name: Fail if the package declares no usable data stream
       ansible.builtin.fail:
         msg: |
-          The `log` package at version {{ log_pkg.stdout | trim }} declares no
-          data stream for the `logfile` input, so there is nothing to attach
-          a filestream to. Inspect what it does declare:
+          Could not identify a data stream in the `log` package at version
+          {{ log_pkg.stdout | trim }}. The stream's `data_stream` object must
+          name one the PACKAGE declares -- putting our own dataset there is
+          what produced 404 "Stream template not found" on 2026-08-12.
+
+          Dump what it actually declares and reconcile:
 
             curl -s --config /opt/so/conf/elasticsearch/curl.config \
               'http://localhost:5601/api/fleet/epm/packages/log' \
