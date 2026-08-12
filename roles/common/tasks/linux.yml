@@ -1,4 +1,42 @@
 ---
+# --- System hostname ------------------------------------------------------
+# AIRFIELD OVERLAY, added 2026-08-12. The base role writes an /etc/hosts entry
+# naming inventory_hostname but never sets the actual system hostname, so each
+# Linux host keeps whatever its image booted with. That is usually right --
+# the platform sets it from the blueprint VM name -- until it is not.
+#
+# soc-splunk booted as `localhost`. rsyslog stamps the system hostname into
+# every message's HOSTNAME field, so the central collector filed 100% of that
+# host's syslog under /var/log/remote/localhost/ and no soc-splunk directory
+# ever existed. ~169k events, and the Splunk INDEXER's own logs were labelled
+# `localhost` inside Splunk. Invisible for the life of the project until
+# Security Onion started reading the same directories and the bucket had a
+# name nobody recognised (2026-08-12).
+#
+# Set it explicitly. The /etc/hosts task below then agrees with reality rather
+# than asserting something the system does not believe.
+- name: System hostname matches inventory
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  register: common_hostname
+
+# rsyslog reads the hostname ONCE, at startup, and stamps it into every
+# message it forwards. Changing the hostname without restarting it leaves
+# every subsequent message labelled with the OLD name until the next reboot --
+# so the fix would appear to have worked while changing nothing observable.
+- name: Restart rsyslog so forwarded messages carry the new hostname
+  ansible.builtin.service:
+    name: rsyslog
+    state: restarted
+  when: common_hostname is changed
+  register: common_rsyslog
+  # Tolerate images with no rsyslog; fail on anything else. Same shape as the
+  # so-firewall 'already exists' tolerance -- name the acceptable failure
+  # rather than blanket-ignoring, or a real error rides through silently.
+  failed_when:
+    - common_rsyslog is failed
+    - "'Could not find the requested service' not in (common_rsyslog.msg | default(''))"
+
 - name: Configure hosts file
   ansible.builtin.lineinfile:
     path: /etc/hosts

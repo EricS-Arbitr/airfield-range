@@ -16,6 +16,88 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-08-12 · bug · `common` never sets the Linux system hostname, so soc-splunk logged as `localhost` for the life of the project
+
+**Symptom.** Found while attributing devices in Security Onion's new syslog
+input, not by looking for it. The central collector had a `localhost` device
+bucket with ~169k events and no `soc-splunk` directory at all:
+
+```
+$ ls /var/log/remote/
+172.31.1.14  atc-radar  ...  bs-www  ...  localhost  ...  www.blackstone.mil
+                                          ^^^^^^^^^  and no soc-splunk
+```
+
+A 45-second capture on the collector named a single ongoing sender:
+
+```
+$ tcpdump -i any -nn -A 'udp port 514' | awk '/ IP /{...} /localhost/{print src}' | sort | uniq -c
+     33 172.31.7.19        <- soc-splunk
+```
+
+**Cause.** `roles/common/tasks/linux.yml` writes an `/etc/hosts` line naming
+`inventory_hostname`:
+
+```yaml
+line: "127.0.0.1 localhost {{ inventory_hostname }}"
+```
+
+and nothing else. The **system hostname is never set** — each Linux host keeps
+whatever its image booted with. That is usually correct, because the platform
+sets it from the blueprint VM name, so the gap is invisible on every host
+where the platform did its job. soc-splunk's image booted as `localhost`.
+
+rsyslog stamps the system hostname into every message's HOSTNAME field, and
+`30-remote.conf` files by that field, so 100% of that host's syslog landed
+under `/var/log/remote/localhost/`.
+
+**Why it went unnoticed for the life of the project.** The data was never
+missing — it was in Splunk the whole time, under a host name nobody queried
+for. The Splunk INDEXER's own logs were labelled `localhost` *inside Splunk*.
+A second SIEM reading the same directories is what surfaced it, because the
+device list became something a human had to read rather than something a
+dashboard aggregated away.
+
+**Fix (overlay).** Two tasks at the top of `common/tasks/linux.yml`:
+
+```yaml
+- name: System hostname matches inventory
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  register: common_hostname
+
+- name: Restart rsyslog so forwarded messages carry the new hostname
+  ansible.builtin.service: { name: rsyslog, state: restarted }
+  when: common_hostname is changed
+  failed_when:
+    - common_rsyslog is failed
+    - "'Could not find the requested service' not in (common_rsyslog.msg | default(''))"
+```
+
+The restart is not optional. rsyslog reads the hostname ONCE at startup, so
+setting it without restarting leaves every subsequent message carrying the old
+name until the next reboot — the fix would look applied and change nothing
+observable.
+
+**Fix (upstream).** Same two tasks belong in
+`range-development-ansible/roles/common`. Every range built from that role has
+this gap; it only shows when an image boots with a wrong hostname.
+
+**Scope, stated honestly.**
+- This fixes the SYSLOG path. Splunk's own `serverName` lives in
+  `server.conf` and is set at install time, so soc-splunk's internal Splunk
+  data keeps its existing label until Splunk is separately reconfigured.
+- It MAY also resolve `bs-www` appearing as both `bs-www` and
+  `www.blackstone.mil`, if that host's system hostname is the FQDN. Not
+  verified — the split could equally come from a service setting its own
+  name.
+- It does NOT address `bs-ops-fw` arriving as `172.31.1.14`. pfSense picks a
+  source address per route and the collector routes it by `$fromhost-ip`;
+  that needs a `syslog_source_ip_map` entry, which is a separate change with
+  its own blast radius on the Splunk path.
+
+---
+
 ## 2026-08-11 (later 2) · bug · Roles were ported without the data file one of them reads
 
 **Symptom.** Phase 10, ~40 minutes into a deploy, on the first run that ever
