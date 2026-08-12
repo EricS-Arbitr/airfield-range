@@ -237,13 +237,45 @@
              } | to_json }}
       register: pp_create
       changed_when: pp_create.stdout | trim in ['200', '201']
-      failed_when: pp_create.stdout | trim not in ['200', '201']
+      # NOT failed here. The status code alone does not say what Kibana
+      # objected to, and the body that does is written to /tmp/.syslog_pp by
+      # the -o above. Failing on this task aborts the play before the task
+      # that reads it -- which is exactly what happened on 2026-08-12: three
+      # attempts, three identical "404", and no way to tell WHICH object
+      # Kibana could not find. Same lesson as elastic_agent's installer:
+      # assert AFTER you have the output, and put the output in the failure.
+      failed_when: false
 
-    - name: Show Kibana's response if the input was rejected
+    - name: Read Kibana's response body
       ansible.builtin.command: cat /tmp/.syslog_pp
       register: pp_body
       changed_when: false
       failed_when: false
+
+    - name: Fail with Kibana's own explanation if the input was rejected
+      ansible.builtin.fail:
+        msg: |
+          Kibana rejected the syslog package policy with HTTP {{ pp_create.stdout | trim }}.
+
+          Kibana said:
+            {{ pp_body.stdout | default('<empty>') | trim }}
+
+          Sent to POST /api/fleet/package_policies:
+            policy_id  {{ syslog_policy_id }}
+            package    log {{ log_pkg.stdout | trim }}
+            paths      {{ so_syslog_paths | join(', ') }}
+
+          A 404 here is Kibana failing to find something it was POINTED AT,
+          not a missing endpoint -- the GETs against /api/fleet/agent_policies
+          in this same play succeeded, so Fleet's API is reachable. The two
+          candidates are the agent policy above and the `log` package. Check
+          both directly:
+
+            curl -s --config /opt/so/conf/elasticsearch/curl.config \
+              'http://localhost:5601/api/fleet/agent_policies/{{ syslog_policy_id }}'
+            curl -s --config /opt/so/conf/elasticsearch/curl.config \
+              'http://localhost:5601/api/fleet/epm/packages/log'
+      when: pp_create.stdout | trim not in ['200', '201']
 
     # --- 5. Point the agent at the policy ----------------------------------
     - name: Move {{ so_syslog_host }}'s agent onto {{ so_syslog_policy_name }}
