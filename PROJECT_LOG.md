@@ -101,6 +101,59 @@ UNVERIFIED ON A LIVE GRID: that `so-firewall includehost <group> <ip>/32` is
 accepted. Inferred from PowerPlant passing /24s to the same command. It fails
 loudly if not, in phase 75.
 
+### Syslog into SO — CONFIRMED WORKING 2026-08-12
+
+Verified on the live grid, not inferred:
+
+```
+POST /api/fleet/package_policies  -> 201, id 2acf5ef2-06b2-40b5-9e41-473e2f214da9
+POST /api/fleet/agents/<id>/reassign -> 200
+logs-syslog.remote-so             -> 30+ devices attributed via observer.hostname
+```
+
+Confirmed shape, copied from SO's own `zeek-logs` policy:
+
+| field | value |
+|---|---|
+| package | `filestream` 1.2.0 — NOT `log` (deprecated, unused on this grid) |
+| namespace | `so` — NOT `default` |
+| input | `{type: filestream, policy_template: filestream}` |
+| stream data_stream | `{type: logs, dataset: filestream.generic}` — the package's GENERIC template |
+| destination | `data_stream.dataset` **var** = `syslog.remote` |
+
+Routers, firewalls, every Linux host and the SO grid nodes all land with the
+originating device in `observer.hostname`, recovered from the file path by the
+dissect processor. Splunk continues to tail the same files.
+
+Took four attempts. The three that failed all predicted the schema; the one
+that worked copied a policy SO had already built. Full reasoning in
+UPSTREAM_FIXES 2026-08-12.
+
+### Observations from the first ingest, not yet acted on
+
+1. **~1.8M docs in the first 15 minutes.** This is BACKFILL, not steady state:
+   `/var/log/remote/*/syslog.log` has been accumulating since the range was
+   built and `ignore_older` is unset, so filestream read all of it. Expected
+   to fall to the real syslog rate once caught up. Measure before deciding
+   whether to bound it — `ignore_older: 72h` is the lever, and SO's own zeek
+   policy leaves it empty too.
+2. **A `localhost` device bucket (~64k).** Something ships syslog without a
+   usable HOSTNAME, so rsyslog files it under /var/log/remote/localhost/.
+   Pre-existing — the Splunk path has always had this — but it means those
+   events are unattributed in BOTH SIEMs. Worth tracking down.
+3. **pfSense not visible in the top 30 buckets.** The terms agg was capped at
+   30 and returned exactly 30, so bs-edge-fw / bs-ops-fw may simply be below
+   the cut. Confirm with a larger `size` before concluding anything.
+4. **`total: 10000` is Elasticsearch's track_total_hits cap**, not a count.
+   The per-bucket doc_counts are the real numbers.
+
+### Still open
+
+Whether SO's `elasticfleet` salt state leaves the hand-created package policy
+alone across a highstate. The playbook's read-back catches a reconcile at
+deploy time; it cannot catch one 15 minutes later. Re-check the policy after a
+highstate cycle before calling this durable.
+
 ### Outstanding before this can deploy
 
 1. `vyos_gre_source_ip` / `so_gre_remote_underlay` per router — drafted and
