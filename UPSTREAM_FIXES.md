@@ -51,12 +51,38 @@ rsyslog stamps the system hostname into every message's HOSTNAME field, and
 `30-remote.conf` files by that field, so 100% of that host's syslog landed
 under `/var/log/remote/localhost/`.
 
+**Why only this host.** The project ALREADY had a mechanism for this.
+`roles/splunk-forwarder/templates/rsyslog-hostname.conf.j2` writes
+
+```
+$LocalHostName {{ inventory_hostname }}
+$PreserveFQDN on
+```
+
+which forces rsyslog to stamp `inventory_hostname` no matter what the OS
+hostname is. But the forwarder play targets `linux:!splunk:!so_all`, and
+soc-splunk is excluded because it IS the indexer. It is the only Linux host
+that both lacks that override and booted with a wrong hostname. The SO grid
+is excluded too, but its nodes booted with correct hostnames, so nothing
+showed.
+
+Two mechanisms, each covering the other's gap, and exactly one host in the
+blind spot of both.
+
 **Why it went unnoticed for the life of the project.** The data was never
-missing — it was in Splunk the whole time, under a host name nobody queried
-for. The Splunk INDEXER's own logs were labelled `localhost` *inside Splunk*.
-A second SIEM reading the same directories is what surfaced it, because the
+missing — it was in Splunk the whole time under a name nobody queried for. A
+second SIEM reading the same directories is what surfaced it, because the
 device list became something a human had to read rather than something a
 dashboard aggregated away.
+
+**What was NOT affected, contrary to a first reading.** Splunk's `host` field
+was always correct. `roles/splunk/templates/inputs.conf.j2` sets
+`[default] host = {{ inventory_hostname }}` explicitly, so events indexed on
+soc-splunk have always carried `host=soc-splunk`. Only `serverName` inherits
+the OS hostname, because `server.conf.j2` does not set it — that is instance
+identity (Settings UI, `splunk_server` field, distributed-search peer name),
+not event data. And on a fresh deploy even that is right: the `Common Role`
+play runs at site.yml:157, the Splunk indexer play at 1125.
 
 **Fix (overlay).** Two tasks at the top of `common/tasks/linux.yml`:
 
