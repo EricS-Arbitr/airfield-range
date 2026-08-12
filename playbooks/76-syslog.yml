@@ -79,119 +79,107 @@
       ansible.builtin.set_fact:
         syslog_agent: "{{ syslog_agent_raw.stdout | from_json }}"
 
-    # --- 2. The integration package must be available OFFLINE --------------
-    # Version is read from the registry rather than pinned. SO ships its own
-    # airgapped package registry; whatever version it carries is the only one
-    # installable here, so asking is the only correct move.
-    - name: Which version of the `log` integration does SO's registry carry?
+    # --- 2. The input package, and the SHAPE it wants ----------------------
+    # Everything here is read from the grid. Three earlier attempts at this
+    # phase each failed on a shape I predicted instead of observed, so the
+    # rule now is: if SO already does this, copy what SO does.
+    - name: Which version of the {{ so_syslog_package }} package does SO carry?
       ansible.builtin.shell: |
         set -o pipefail
-        {{ kb }} 'http://localhost:5601/api/fleet/epm/packages/log' \
+        {{ kb }} 'http://localhost:5601/api/fleet/epm/packages/{{ so_syslog_package }}' \
           | python3 -c '
         import json,sys
-        d = json.load(sys.stdin)
-        it = d.get("item") or d.get("response") or {}
+        it = json.load(sys.stdin).get("item") or {}
         print(it.get("version") or "")
         '
       args:
         executable: /bin/bash
-      register: log_pkg
+      register: pkg_ver
       changed_when: false
       failed_when: false
 
-    - name: Fail clearly if the `log` integration is not in the airgapped registry
+    - name: Fail clearly if the package is not in the airgapped registry
       ansible.builtin.fail:
         msg: |
-          Kibana returned no version for the `log` (Custom Logs) integration.
+          Kibana returned no version for the `{{ so_syslog_package }}` package.
 
-          This range has NO EGRESS, so the package cannot be fetched on
-          demand — if SO's bundled registry does not carry it, this design
-          does not work here and the alternative is the rsyslog-forward path
-          described in group_vars/all/security_onion.yml.
+          This range has NO EGRESS, so it cannot be fetched on demand. List
+          what IS available:
 
-          Check what IS available:
             curl -s --config /opt/so/conf/elasticsearch/curl.config \
               'http://localhost:5601/api/fleet/epm/packages?prerelease=true' \
-              | python3 -c 'import json,sys;print("\\n".join(sorted(p["name"] for p in json.load(sys.stdin)["items"])))'
-      when: log_pkg.stdout | trim | length == 0
+              | python3 -c 'import json,sys;print("\n".join(sorted(p["name"] for p in json.load(sys.stdin)["items"])))'
+      when: pkg_ver.stdout | trim | length == 0
 
-    - name: Ensure the `log` integration is installed
+    - name: Ensure the {{ so_syslog_package }} package is installed
       ansible.builtin.shell: |
         set -o pipefail
         {{ kb }} -o /dev/null -w '%{http_code}' -X POST \
-          'http://localhost:5601/api/fleet/epm/packages/log/{{ log_pkg.stdout | trim }}' \
+          'http://localhost:5601/api/fleet/epm/packages/{{ so_syslog_package }}/{{ pkg_ver.stdout | trim }}' \
           -d '{"force":true}'
       args:
         executable: /bin/bash
       register: pkg_install
       changed_when: pkg_install.stdout | trim == '200'
-      # 409 = already installed, which is the steady state on every re-run.
       failed_when: pkg_install.stdout | trim not in ['200', '409']
 
-    # The package's OWN declared data stream, which is not the same thing as
-    # the dataset we want the data to LAND in.
+    # THE SHAPE, TAKEN FROM A POLICY SO BUILT ITSELF.
     #
-    # THIS DISTINCTION IS THE WHOLE OF THE 2026-08-12 failure. The stream's
-    # `data_stream` object must name a stream template the package declares;
-    # the custom destination goes ONLY in the `data_stream.dataset` var. Put
-    # the custom name in both and Kibana answers:
+    # filestream is an INPUT package: it declares no data streams, so the
+    # dataset is ours to name. But the stream's `data_stream.dataset` is NOT
+    # where our name goes -- that field must be the package's GENERIC stream
+    # template, and the destination lives only in the `data_stream.dataset`
+    # VAR. SO's zeek-logs policy shows it exactly:
+    #
+    #   data_stream: {type: logs, dataset: filestream.generic}
+    #   vars: {data_stream.dataset: {value: zeek}}
+    #
+    # Putting our dataset in both is what produced, three times,
     #   404 "Stream template not found, unable to find dataset syslog.remote"
-    # -- it is looking inside the `log` package for a stream it never had.
+    # Fleet was looking for a stream template named after our dataset.
     #
-    # Read rather than hardcoded, for the same reason as the version: this is
-    # the `log` package's business, not ours, and it is one API call to ask.
-    - name: Which policy template does the `log` package advertise for file input?
-      # THE `log` PACKAGE IS AN *INPUT* PACKAGE, NOT AN INTEGRATION PACKAGE.
-      # Confirmed on the live grid 2026-08-12: it declares NO data streams at
-      # all -- `data_streams: null`, and [] even with ?full=true. The dataset
-      # is entirely ours to name, which is the whole point of Custom Logs.
-      #
-      # What it declares instead is a policy_template carrying the input type
-      # and the vars:
-      #   {"name":"logs","input":"logfile","type":"logs",
-      #    "template_path":"input.yml.hbs",
-      #    "vars":[paths, exclude_files, ignore_older, data_stream.dataset]}
-      #
-      # So the INPUT object must carry `policy_template`. Without it Fleet has
-      # no template to resolve the stream from, falls back to searching the
-      # package's (empty) data_streams for our dataset, and answers
-      #   404 "Stream template not found, unable to find dataset syslog.remote"
-      # -- which reads like a dataset problem and is not one. Corroborated by
-      # a policy SO built itself: the `system` package's logfile input carries
-      # "policy_template": "system" right beside "type": "logfile".
+    # Read from a live policy rather than assembled from the convention, with
+    # `<pkg>.generic` only as a fallback.
+    - name: What shape does SO's own {{ so_syslog_package }} policy use?
       ansible.builtin.shell: |
         set -o pipefail
-        {{ kb }} 'http://localhost:5601/api/fleet/epm/packages/log' \
+        {{ kb }} 'http://localhost:5601/api/fleet/package_policies?perPage=200' \
           | python3 -c '
         import json,sys
-        it = json.load(sys.stdin).get("item", {})
-        for pt in it.get("policy_templates", []):
-            if pt.get("input") in ("logfile", "filestream", "log"):
-                print(json.dumps({"name": pt.get("name"),
-                                  "input": pt.get("input"),
-                                  "type": pt.get("type") or "logs"}))
-                sys.exit(0)
+        its = json.load(sys.stdin).get("items", [])
+        for p in its:
+            if (p.get("package") or {}).get("name") != "{{ so_syslog_package }}":
+                continue
+            for i in p.get("inputs", []):
+                for st in i.get("streams", []):
+                    ds = st.get("data_stream") or {}
+                    if ds.get("dataset"):
+                        print(json.dumps({"input": i.get("type"),
+                                          "policy_template": i.get("policy_template"),
+                                          "type": ds.get("type") or "logs",
+                                          "generic": ds.get("dataset")}))
+                        sys.exit(0)
+        print(json.dumps({"input": "{{ so_syslog_package }}",
+                          "policy_template": "{{ so_syslog_package }}",
+                          "type": "logs",
+                          "generic": "{{ so_syslog_package }}.generic"}))
         '
       args:
         executable: /bin/bash
-      register: log_tmpl_raw
+      register: shape_raw
       changed_when: false
 
-    - name: Fail if the package advertises no file-input policy template
-      ansible.builtin.fail:
-        msg: |
-          The `log` package at version {{ log_pkg.stdout | trim }} advertises
-          no policy_template with a file input, so there is nothing to attach
-          a filestream to. Dump what it does advertise:
-
-            curl -s --config /opt/so/conf/elasticsearch/curl.config \
-              'http://localhost:5601/api/fleet/epm/packages/log' \
-              | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["item"]["policy_templates"], indent=2))'
-      when: log_tmpl_raw.stdout | trim | length == 0
-
-    - name: Record the package's policy template
+    - name: Record the shape
       ansible.builtin.set_fact:
-        log_tmpl: "{{ log_tmpl_raw.stdout | from_json }}"
+        shape: "{{ shape_raw.stdout | from_json }}"
+
+    - name: Report the shape being copied
+      ansible.builtin.debug:
+        msg: >-
+          {{ so_syslog_package }} {{ pkg_ver.stdout | trim }} —
+          input={{ shape.input }} policy_template={{ shape.policy_template }}
+          generic_stream={{ shape.generic }} → dataset {{ so_syslog_dataset }}
+          in namespace {{ so_syslog_namespace }}
 
     # --- 3. A dedicated policy, COPIED so Defend survives ------------------
     # Copying rather than creating: soc-syslog's current policy carries
@@ -283,16 +271,17 @@
         pp_body_json: >-
           {{ {
                'name': 'syslog-remote-files',
-               'namespace': 'default',
+               'namespace': so_syslog_namespace,
                'policy_id': syslog_policy_id,
-               'package': {'name': 'log', 'version': log_pkg.stdout | trim},
+               'policy_ids': [syslog_policy_id],
+               'package': {'name': so_syslog_package, 'version': pkg_ver.stdout | trim},
                'inputs': [{
-                 'type': log_tmpl.input,
-                 'policy_template': log_tmpl.name,
+                 'type': shape.input,
+                 'policy_template': shape.policy_template,
                  'enabled': true,
                  'streams': [{
                    'enabled': true,
-                   'data_stream': {'type': log_tmpl.type, 'dataset': so_syslog_dataset},
+                   'data_stream': {'type': shape.type, 'dataset': shape.generic},
                    'vars': {
                      'paths': {'value': so_syslog_paths, 'type': 'text'},
                      'data_stream.dataset': {'value': so_syslog_dataset, 'type': 'text'},
@@ -328,7 +317,7 @@
 
           Sent to POST /api/fleet/package_policies:
             policy_id  {{ syslog_policy_id }}
-            package    log {{ log_pkg.stdout | trim }}
+            package    {{ so_syslog_package }} {{ pkg_ver.stdout | trim }}
             paths      {{ so_syslog_paths | join(', ') }}
 
           A 404 here is Kibana failing to find something it was POINTED AT,

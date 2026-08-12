@@ -340,6 +340,21 @@ so_syslog_paths:
 so_syslog_policy_name: "so-syslog-collector"
 so_syslog_dataset: "syslog.remote"
 
+# The INPUT package to collect with, and the namespace to land in. Both are
+# copied from what SO does for Zeek on this grid rather than from Elastic's
+# docs, because the grid is the authority on what works here:
+#
+#   package   filestream 1.2.0 "Custom Logs (Filestream)"  -- NOT `log`.
+#             `log` is Elastic's deprecated input; filestream supersedes it,
+#             and filestream is what SO's own zeek-logs policy uses.
+#   namespace so  -- NOT "default". SO writes every dataset into the `so`
+#             namespace, so the index is logs-<dataset>-so. Using "default"
+#             creates logs-<dataset>-default, which is a real index that SO's
+#             queries and dashboards never look at: data arrives, nothing
+#             shows it, and the deploy reports success.
+so_syslog_package: "filestream"
+so_syslog_namespace: "so"
+
 # The device name is recovered from the FILE PATH, not the message. rsyslog
 # already demultiplexed by host into a directory per device, so the path is
 # the most reliable attribution available -- pfSense in particular emits
