@@ -355,6 +355,24 @@ so_syslog_dataset: "syslog.remote"
 so_syslog_package: "filestream"
 so_syslog_namespace: "so"
 
+# Do NOT re-ingest the SO grid's own syslog.
+#
+# Every Linux host ships to soc-syslog, and the grid nodes are in [linux], so
+# their daemon logs land in /var/log/remote/<node>/ like everyone else. SO
+# already collects its own component logs natively -- reading them back in
+# through this input is duplicate data about the thing doing the reading.
+#
+# Measured on the first ingest 2026-08-12: soc-so-manager alone was the single
+# largest source at 453k events, and the six grid nodes together were roughly a
+# third of all syslog volume.
+#
+# Derived from the inventory so it cannot drift when a sensor is added.
+# filestream matches these as regexes against the full path.
+# Splunk is UNAFFECTED -- it tails the same directories independently and
+# keeps the grid's logs, which is where they are actually useful.
+so_syslog_exclude_files:
+  - "/var/log/remote/({{ groups['so_all'] | sort | join('|') }})/"
+
 # The device name is recovered from the FILE PATH, not the message. rsyslog
 # already demultiplexed by host into a directory per device, so the path is
 # the most reliable attribution available -- pfSense in particular emits

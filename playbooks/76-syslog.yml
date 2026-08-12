@@ -284,6 +284,7 @@
                    'data_stream': {'type': shape.type, 'dataset': shape.generic},
                    'vars': {
                      'paths': {'value': so_syslog_paths, 'type': 'text'},
+                     'exclude_files': {'value': so_syslog_exclude_files, 'type': 'text'},
                      'data_stream.dataset': {'value': so_syslog_dataset, 'type': 'text'},
                      'processors': {'type': 'yaml', 'value': syslog_processors}
                    }
