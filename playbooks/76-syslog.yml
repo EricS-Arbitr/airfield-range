@@ -128,6 +128,52 @@
       # 409 = already installed, which is the steady state on every re-run.
       failed_when: pkg_install.stdout | trim not in ['200', '409']
 
+    # The package's OWN declared data stream, which is not the same thing as
+    # the dataset we want the data to LAND in.
+    #
+    # THIS DISTINCTION IS THE WHOLE OF THE 2026-08-12 failure. The stream's
+    # `data_stream` object must name a stream template the package declares;
+    # the custom destination goes ONLY in the `data_stream.dataset` var. Put
+    # the custom name in both and Kibana answers:
+    #   404 "Stream template not found, unable to find dataset syslog.remote"
+    # -- it is looking inside the `log` package for a stream it never had.
+    #
+    # Read rather than hardcoded, for the same reason as the version: this is
+    # the `log` package's business, not ours, and it is one API call to ask.
+    - name: Which data stream does the `log` package declare for the logfile input?
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ kb }} 'http://localhost:5601/api/fleet/epm/packages/log' \
+          | python3 -c '
+        import json,sys
+        it = json.load(sys.stdin).get("item", {})
+        for ds in it.get("data_streams", []):
+            for st in ds.get("streams", []):
+                if st.get("input") == "logfile":
+                    print(json.dumps({"type": ds.get("type"), "dataset": ds.get("dataset")}))
+                    sys.exit(0)
+        '
+      args:
+        executable: /bin/bash
+      register: log_ds_raw
+      changed_when: false
+
+    - name: Fail if the package declares no logfile stream
+      ansible.builtin.fail:
+        msg: |
+          The `log` package at version {{ log_pkg.stdout | trim }} declares no
+          data stream for the `logfile` input, so there is nothing to attach
+          a filestream to. Inspect what it does declare:
+
+            curl -s --config /opt/so/conf/elasticsearch/curl.config \
+              'http://localhost:5601/api/fleet/epm/packages/log' \
+              | python3 -m json.tool | grep -A6 data_streams
+      when: log_ds_raw.stdout | trim | length == 0
+
+    - name: Record the package's declared stream
+      ansible.builtin.set_fact:
+        log_ds: "{{ log_ds_raw.stdout | from_json }}"
+
     # --- 3. A dedicated policy, COPIED so Defend survives ------------------
     # Copying rather than creating: soc-syslog's current policy carries
     # Elastic Defend and the system integration. Building a fresh policy and
@@ -226,7 +272,7 @@
                  'enabled': true,
                  'streams': [{
                    'enabled': true,
-                   'data_stream': {'type': 'logs', 'dataset': so_syslog_dataset},
+                   'data_stream': {'type': log_ds.type, 'dataset': log_ds.dataset},
                    'vars': {
                      'paths': {'value': so_syslog_paths, 'type': 'text'},
                      'data_stream.dataset': {'value': so_syslog_dataset, 'type': 'text'},
