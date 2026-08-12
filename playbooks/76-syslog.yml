@@ -140,57 +140,58 @@
     #
     # Read rather than hardcoded, for the same reason as the version: this is
     # the `log` package's business, not ours, and it is one API call to ask.
-    - name: Which data stream does the `log` package declare?
-      # `?full=true` because the compact form of this response has been seen
-      # to omit data_streams entirely. Harmless where it is already included.
+    - name: Which policy template does the `log` package advertise for file input?
+      # THE `log` PACKAGE IS AN *INPUT* PACKAGE, NOT AN INTEGRATION PACKAGE.
+      # Confirmed on the live grid 2026-08-12: it declares NO data streams at
+      # all -- `data_streams: null`, and [] even with ?full=true. The dataset
+      # is entirely ours to name, which is the whole point of Custom Logs.
       #
-      # PREFER the logfile stream, FALL BACK to the only one. The first
-      # version of this matched strictly on streams[].input == "logfile" and
-      # found nothing on 2026-08-12 -- the `log` package's shape is not what I
-      # assumed. A strict match that returns empty is a guess dressed up as
-      # discovery; taking the sole data stream when there is exactly one is a
-      # fact about the package, not a bet on its field names.
+      # What it declares instead is a policy_template carrying the input type
+      # and the vars:
+      #   {"name":"logs","input":"logfile","type":"logs",
+      #    "template_path":"input.yml.hbs",
+      #    "vars":[paths, exclude_files, ignore_older, data_stream.dataset]}
+      #
+      # So the INPUT object must carry `policy_template`. Without it Fleet has
+      # no template to resolve the stream from, falls back to searching the
+      # package's (empty) data_streams for our dataset, and answers
+      #   404 "Stream template not found, unable to find dataset syslog.remote"
+      # -- which reads like a dataset problem and is not one. Corroborated by
+      # a policy SO built itself: the `system` package's logfile input carries
+      # "policy_template": "system" right beside "type": "logfile".
       ansible.builtin.shell: |
         set -o pipefail
-        {{ kb }} 'http://localhost:5601/api/fleet/epm/packages/log?full=true' \
+        {{ kb }} 'http://localhost:5601/api/fleet/epm/packages/log' \
           | python3 -c '
         import json,sys
         it = json.load(sys.stdin).get("item", {})
-        ds = it.get("data_streams") or []
-        pick = None
-        for d in ds:
-            for st in (d.get("streams") or []):
-                if st.get("input") in ("logfile", "log", "filestream"):
-                    pick = d; break
-            if pick: break
-        if pick is None and len(ds) == 1:
-            pick = ds[0]
-        if pick:
-            print(json.dumps({"type": pick.get("type"), "dataset": pick.get("dataset")}))
+        for pt in it.get("policy_templates", []):
+            if pt.get("input") in ("logfile", "filestream", "log"):
+                print(json.dumps({"name": pt.get("name"),
+                                  "input": pt.get("input"),
+                                  "type": pt.get("type") or "logs"}))
+                sys.exit(0)
         '
       args:
         executable: /bin/bash
-      register: log_ds_raw
+      register: log_tmpl_raw
       changed_when: false
 
-    - name: Fail if the package declares no usable data stream
+    - name: Fail if the package advertises no file-input policy template
       ansible.builtin.fail:
         msg: |
-          Could not identify a data stream in the `log` package at version
-          {{ log_pkg.stdout | trim }}. The stream's `data_stream` object must
-          name one the PACKAGE declares -- putting our own dataset there is
-          what produced 404 "Stream template not found" on 2026-08-12.
-
-          Dump what it actually declares and reconcile:
+          The `log` package at version {{ log_pkg.stdout | trim }} advertises
+          no policy_template with a file input, so there is nothing to attach
+          a filestream to. Dump what it does advertise:
 
             curl -s --config /opt/so/conf/elasticsearch/curl.config \
               'http://localhost:5601/api/fleet/epm/packages/log' \
-              | python3 -m json.tool | grep -A6 data_streams
-      when: log_ds_raw.stdout | trim | length == 0
+              | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["item"]["policy_templates"], indent=2))'
+      when: log_tmpl_raw.stdout | trim | length == 0
 
-    - name: Record the package's declared stream
+    - name: Record the package's policy template
       ansible.builtin.set_fact:
-        log_ds: "{{ log_ds_raw.stdout | from_json }}"
+        log_tmpl: "{{ log_tmpl_raw.stdout | from_json }}"
 
     # --- 3. A dedicated policy, COPIED so Defend survives ------------------
     # Copying rather than creating: soc-syslog's current policy carries
@@ -286,11 +287,12 @@
                'policy_id': syslog_policy_id,
                'package': {'name': 'log', 'version': log_pkg.stdout | trim},
                'inputs': [{
-                 'type': 'logfile',
+                 'type': log_tmpl.input,
+                 'policy_template': log_tmpl.name,
                  'enabled': true,
                  'streams': [{
                    'enabled': true,
-                   'data_stream': {'type': log_ds.type, 'dataset': log_ds.dataset},
+                   'data_stream': {'type': log_tmpl.type, 'dataset': so_syslog_dataset},
                    'vars': {
                      'paths': {'value': so_syslog_paths, 'type': 'text'},
                      'data_stream.dataset': {'value': so_syslog_dataset, 'type': 'text'},
