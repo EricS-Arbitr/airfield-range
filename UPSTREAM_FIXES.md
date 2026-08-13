@@ -16,6 +16,60 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-08-13 · bug · WPAD PAC never marked 172.31.* DIRECT, so analysts could not open the SOC WebUI
+
+**Symptom.** Analyst workstations cannot reach Security Onion at
+`https://172.31.7.15`, on a deploy where `playbooks/70-analyst.yml` passed.
+
+**Cause.** `roles/squid/templates/wpad.dat.j2` returned DIRECT for:
+
+```javascript
+isPlainHostName(host) || shExpMatch(host, "10.10.*") ||
+shExpMatch(host, "172.16.*") || dnsDomainIs(host, ".{{ domain_name }}")
+```
+
+`172.31.*` is absent. The PAC came from a range whose whole estate was in
+`172.16.x`; Blackstone's production estate is `172.31.0.0/16` and only the OT
+chain is `172.16.x`. The `dns` role publishes a `wpad` record and Windows
+auto-detects WPAD by default, so every analyst browser loaded this and sent
+`https://172.31.7.15` to squid.
+
+**Why it hid.** `dnsDomainIs(".blackstone.mil")` covers browsing BY NAME, so
+ordinary intranet use works and nothing looks wrong. Only IP-LITERAL access
+breaks — and the SOC WebUI is reached by IP deliberately, because
+`so_web_access_type: IP` and the SO nodes are not AD-joined so they have no
+DNS records.
+
+**Why the check passed.** `70-analyst.yml` asserted with
+`Test-NetConnection -Port 443`, a raw socket that does not consult proxy
+configuration at all. It answered "is there a network path", which was true,
+while the question that mattered — "what path does the browser take" — went
+unasked. A test that cannot fail for the reason the user is failing is not a
+test of that thing.
+
+**Fix.** `shExpMatch(host, "172.31.*")` added to the DIRECT list. The
+management plane (`10.255.240.0/20`) is deliberately NOT added: it must stay
+invisible to scenario traffic.
+
+`70-analyst.yml` now checks three layers instead of one:
+
+| layer | question |
+|---|---|
+| `Test-NetConnection` | is there a network path |
+| `[System.Net.WebRequest]::DefaultWebProxy.GetProxy()` | **what path would the browser take** |
+| `Invoke-WebRequest` | does the WebUI actually answer over that path |
+
+`DefaultWebProxy` reflects live WinINET/WPAD resolution, so layer 2 asks
+exactly what the browser asks. `GetProxy()` returns the original URI when no
+proxy applies, which is the DIRECT case.
+
+**Generalisable.** Any range on `172.31.x` built from this squid role has the
+same gap, and it only shows for IP-literal access. Worth fixing upstream so
+the PAC lists the range's actual production supernet rather than one
+inherited from whichever range the template came from.
+
+---
+
 ## 2026-08-12 · bug · `common` never sets the Linux system hostname, so soc-splunk logged as `localhost` for the life of the project
 
 **Symptom.** Found while attributing devices in Security Onion's new syslog

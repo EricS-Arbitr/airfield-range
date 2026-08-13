@@ -1,9 +1,29 @@
+// Managed by Ansible (squid role). Do not edit by hand.
+//
+// 172.31.* IS LOAD-BEARING and was missing until 2026-08-13.
+//
+// This PAC came from a range whose entire estate lived in 172.16.x, so that
+// was the only internal prefix listed. Blackstone's production estate is
+// 172.31.0.0/16 -- Services, SOC, DMZ, flight ops, engineering, all of it --
+// and only 172.16.x (the OT chain) was ever marked DIRECT.
+//
+// dnsDomainIs(".blackstone.mil") covers browsing BY NAME, which is why this
+// went unnoticed: normal intranet use works. It is IP-LITERAL access that
+// breaks, and the SOC WebUI is reached by IP on purpose --
+// so_web_access_type is IP because the SO nodes are not AD-joined and have no
+// DNS records, so https://172.31.7.15 matched nothing here and every analyst
+// browser sent it to squid.
+//
+// A TCP reachability test does NOT catch this. Test-NetConnection ignores
+// browser proxy settings, so playbooks/70-analyst.yml passed while the actual
+// user journey failed. That play now resolves the effective proxy instead.
 function FindProxyForURL(url, host)
 {
 	if (
 		isPlainHostName(host) ||
 		shExpMatch(host, "10.10.*") ||
 		    		shExpMatch(host, "172.16.*") ||
+		    		shExpMatch(host, "172.31.*") ||
 		    		dnsDomainIs(host, ".{{ domain_name }}")
 	){
 		return "DIRECT";
