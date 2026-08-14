@@ -173,3 +173,6 @@
           Suricata is NOT evidence here -- it reads cooked capture natively
           and keeps alerting while Zeek sees nothing.
       when: "'GROWING' not in (zeek_conn.stdout | default(''))"
+  tags:
+    - so
+    - so_verify
