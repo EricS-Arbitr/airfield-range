@@ -16,6 +16,88 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-08-14 · bug · L3 `gre` mirror tunnel makes Zeek discard 100% of frames — AFFECTS so-ansible AND PowerPlant
+
+**Symptom.** Security Onion's dashboard shows the four sensors contributing
+~20k events total against 4.2M overall. Zeek is "healthy", the container has
+43h uptime, packets are arriving, and there is no `conn.log`.
+
+**Measured on soc-sensor-corp, same interface, same traffic, minutes apart:**
+
+| capture | packets | not processed | conn records |
+|---|---|---|---|
+| `zeek -i tun0` (plain libpcap) | 5,390 | 0.37% | **583** |
+| `zeek -i af_packet::tun0` | 841 | **100.00%** | **0** |
+
+The running workers use `-i af_packet::tun0` (`lb_procs: 3`). Zeek had
+produced **66 connection records in its entire lifetime** while 23,590,318
+packets arrived on the tunnel.
+
+**Cause.** `tc ... action mirred egress mirror` copies complete ETHERNET
+FRAMES. The tunnel was plain `gre` — an L3 tunnel that carries IP only — so
+the kernel strips the L2 header and `tun0` presents cooked-mode frames
+(`DLT_LINUX_SLL`, confirmed by `file` on a capture). Zeek's AF_PACKET plugin
+expects Ethernet and cannot parse them, so it counts every frame received and
+processes none.
+
+**Why it hid for the life of three projects.**
+
+- **Suricata reads cooked capture natively.** `eve.json` kept rotating hourly
+  and alerts kept flowing, so the sensor looked alive from every angle.
+- **`60-verify` counted packets on `tun0`.** They were genuinely arriving.
+  The check measured the TRANSPORT and reported it as the OUTCOME.
+- **The container is `healthy`.** Zeek's own health check passes; parsing
+  nothing is not unhealthy.
+- **Cluster logs kept being written.** `broker.log`, `capture_loss.log` and
+  `notice.log` rotate normally — and all but `notice` are on SO's own shipper
+  exclude list, so the dashboard showed near-silence rather than absence.
+- `capture_loss.log` reports `rcvd` climbing and `dropped: 1715` flat, which
+  reads like a healthy capture. Zeek was receiving fine. It was parsing that
+  failed, and that counter does not measure parsing.
+
+**Fix.** `gretap` on both ends — L2 GRE, which carries the Ethernet frame end
+to end and gives `tun0` a normal `DLT_EN10MB` interface:
+
+```
+router:  set interfaces tunnel tunX encapsulation gretap
+sensor:  mode: gretap    mtu: 1462   # 1500 - 20 IP - 4 GRE - 14 Ethernet
+```
+
+Plus a task to delete a stale L3 `gre` device before `netplan apply` — the
+link kind is fixed at creation, so netplan will not convert one in place, and
+a leftover tunnel keeps working, keeps feeding Suricata, and keeps Zeek
+parsing nothing.
+
+Fixed at the tunnel rather than by overriding SO's salt-rendered `node.cfg`
+to force plain pcap: this keeps SO on its intended `af_packet` + `lb_procs`
+fanout path, and follows the same principle as not patching `soc.json` — make
+the environment match what SO expects.
+
+**New check in 60-verify.** Zeek's `conn.log` must be GROWING, with retries
+across the hourly rotation boundary. The failure message names the two
+commands that identify this class — the worker `stdout.log` "not processed"
+percentage, and `ip -d link show tun0` reporting `gretap` — and states
+explicitly that Suricata working is not evidence.
+
+**SCOPE: THIS IS NOT AIRFIELD-ONLY.** so-ansible and PowerPlant/ss-pp-ab both
+build the mirror with plain `gre` and both have the identical `60-verify`
+blind spot. PowerPlant was declared green with three working mirrors and is
+heading for customer sign-off; its Zeek connection data should be checked
+before that happens. The one-line test on any sensor:
+
+```
+grep -vc '^#' /nsm/zeek/logs/current/conn.log
+```
+
+**Method note.** Four wrong causes preceded this one: the mirror (fine — `tc`
+filters and `tcpdump` both proved it), Zeek being dead (healthy, 43h uptime),
+checksum offloading (0 of 40 packets bad on the wire), and a missing file
+read as a diagnosis. Each was a single signal promoted to a conclusion. What
+resolved it was one controlled comparison — same interface, same traffic, one
+variable — which is what should have been run first.
+
+---
+
 ## 2026-08-13 · bug · WPAD PAC never marked 172.31.* DIRECT, so analysts could not open the SOC WebUI
 
 **Symptom.** Analyst workstations cannot reach Security Onion at
