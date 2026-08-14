@@ -42,6 +42,27 @@ internal_dns_records:
   - { name: "www",      type: "A", value: "172.31.12.3", zone: "{{ domain_name }}" }
   - { name: "ftp",      type: "A", value: "172.31.12.2", zone: "{{ domain_name }}" }
   - { name: "ns1",      type: "A", value: "172.31.12.5", zone: "{{ domain_name }}" }
+  # --- Security Onion grid (branch `security-onion`) --------------------
+  # The SO nodes are NOT AD-joined, so nothing registers them and every
+  # lookup fails. Elastic Agent resolves the manager by SHORT NAME for its
+  # Fleet and Elasticsearch output, so without these every enrolled endpoint
+  # emits a steady stream of
+  #     DNS lookup failure "soc-so-manager": no such host
+  # into SO's own event list. Enrollment itself uses the IP, so data keeps
+  # flowing -- it is a DEGRADED path, not a broken one, which is exactly why
+  # it goes unnoticed. PowerPlant hit this with 44 endpoints
+  # (ss-pp-ab UPSTREAM_FIXES 2026-08-07 later 3); this range has 66.
+  #
+  # `bs-www` above is the precedent for a non-AD-joined host needing a record.
+  #
+  # A RECORDS ONLY, deliberately. Adding PTRs would target reverse zones this
+  # range does not define.
+  - { name: "soc-so-manager",  type: "A", value: "172.31.7.15", zone: "{{ domain_name }}" }
+  - { name: "soc-so-search",   type: "A", value: "172.31.7.20", zone: "{{ domain_name }}" }
+  - { name: "soc-sensor-corp", type: "A", value: "172.31.7.21", zone: "{{ domain_name }}" }
+  - { name: "soc-sensor-fops", type: "A", value: "172.31.7.22", zone: "{{ domain_name }}" }
+  - { name: "soc-sensor-ot",   type: "A", value: "172.31.7.23", zone: "{{ domain_name }}" }
+  - { name: "soc-sensor-edge", type: "A", value: "172.31.7.24", zone: "{{ domain_name }}" }
 
 # --- Domain users (one per workstation, matches PowerPlant pattern) ----
 # Each named user is the notional "primary occupant" of a single Windows
