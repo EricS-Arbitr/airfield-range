@@ -161,3 +161,45 @@ highstate cycle before calling this durable.
 2. Router interface numbering — `show interfaces` on all four.
 3. The blueprint's download `ScriptDefinition` still pins a `main` commit.
 
+---
+
+## 2026-08-17 — Both ranges validated cold from the blueprint
+
+airfield-range and PowerPlant/ss-pp-ab each deployed hands-off from their
+blueprint, from scratch, succeeding on attempt 2. Full SO stack in both:
+manager, search node, sensors (4 here, 3 in PowerPlant), endpoint telemetry,
+analyst access, and central syslog into SO on airfield.
+
+This is the first cold, blueprint-driven run with every fix from the
+2026-08-11..16 sequence in place. Prior deploys were manual pulls onto an
+existing controller, or predated fixes.
+
+### Fixed between the last attempt and this one
+
+| defect | why nothing caught it |
+|---|---|
+| L3 `gre` mirror — Zeek discarded 100% of frames | Suricata reads cooked capture natively; 60-verify counted packets on tun0, which were genuinely arriving |
+| Zeek re-attach race after `netplan apply` | netplan's renderer is NetworkManager; it re-activates the tunnel after the command returns |
+| WPAD PAC missing `172.31.*` | `dnsDomainIs(".blackstone.mil")` covers browsing by NAME; only IP-literal access broke, and SOC is reached by IP |
+| `common` never set the Linux hostname | soc-splunk booted as `localhost`; its syslog filed under the wrong device in BOTH SIEMs |
+| SO grid had no DNS records | Elastic Agent resolves the manager by short name; enrollment used the IP, so it degraded rather than broke |
+| additional-DC promotion left a zone-less DNS server SERVFAILing | a down server times out and clients fail over; a SERVFAIL is a *response*, so they do not |
+
+The through-line: every one of these passed a check that measured the
+transport rather than the outcome. All six checks now assert the end state.
+
+### Open
+
+1. `so-ansible` still carries the plain-`gre` defect and is the repo both
+   ranges were ported from. Fix before building any new range.
+2. Three egress dependencies (SO source, airgap content repos, so-setup
+   package fetches) pending Nexus access.
+3. DC management-plane A records — `bs-dc01`/`bs-dc02` resolve to both their
+   production and `10.255.240.x` addresses, so roughly half of Kerberos/LDAP
+   traffic crosses the management plane. Diagnosed 2026-08-13, not fixed.
+   Violates CLAUDE.md §8.
+4. `syslog_source_ip_map` entries for `bs-ops-fw` (172.31.1.14) and `bs-www`
+   (FQDN vs short name) — proposed, not applied; changes Splunk's `host=` too.
+5. Per-analyst accounts in both SIEMs; everyone shares one admin login.
+6. Distributed Splunk + Enterprise Security design, if that goes ahead.
+
