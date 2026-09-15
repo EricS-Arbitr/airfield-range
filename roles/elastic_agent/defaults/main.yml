@@ -3,8 +3,8 @@
 
 # Where the installers are served from. so_apt_mirror already runs nginx on
 # the controller; 75-endpoint.yml stages SO's installers into it. Endpoints
-# fetch over the mgmt plane, exactly as they already fetch Chrome, Sysmon and
-# the Splunk forwarder from the in-platform Nexus.
+# fetch over the mgmt plane, exactly as they already fetch Chrome and Sysmon
+# from the in-platform Nexus.
 # The manager, which is where Fleet listens.
 so_fleet_host: "{{ hostvars[groups['so_manager'][0]]['so_prod_ip'] }}"
 

@@ -12,6 +12,19 @@
 #
 # Deviates from CLAUDE.md §10's documented network-first order by design.
 
+# THE SO MIRROR RUNS FIRST, ahead of the range baseline, for two reasons.
+#   (a) FAIL FAST. The mirror is a hard prerequisite for phases 30/40/50.
+#       Discovering it is broken after a multi-hour baseline wastes the whole
+#       run; discovering it in minutes costs nothing.
+#   (b) OVERLAP. It kicks the container-image build off in the BACKGROUND and
+#       returns, so the baseline and phases 20/30 run while it downloads.
+#       40-manager blocks on the artifacts.
+# Safe to hoist: the controller (`ansible`) is in [ansible_controller],
+# [infrastructure] and [range] only -- never [linux] -- and no baseline play
+# targets any of those, so nothing the baseline does is a precondition here.
+# Must still precede 30: so_base fetches the pinned SO source from it.
+- import_playbook: playbooks/10-mirror.yml
+
 # Preflight -- runs BEFORE init because if a prior deploy attempt
 # half-joined fops-dc01 via Install-ADDSDomain, unqualified `simspace`
 # NTLM is rejected and init's win_ping times out for 30 min per attempt.
@@ -335,6 +348,62 @@
 # sessions/interfaces stay up until reboot. Reboot is required for a
 # fully-clean IPv4-only state. `wait_for` polls the mgmt SSH port from
 # the controller so the deploy resumes cleanly after the box comes back.
+# =============================================================================
+# VyOS — remove the phantom serial console
+# =============================================================================
+# Every VyOS node in this image ships:
+#
+#   set system console device ttyS0 speed '115200'
+#
+# but /dev/ttyS0 is not a working tty on these VMs. systemd starts
+# serial-getty@ttyS0, agetty exits with "/dev/ttyS0: not a tty", systemd
+# restarts it, forever. Measured on a PowerPlant router 2026-09-10:
+#
+#   serial-getty@ttyS0.service: Scheduled restart job, restart counter is at 5645
+#
+# One cycle per ~10s, about 16 hours of uptime. Five log lines per cycle
+# across the routers is roughly 200,000 junk messages a day landing in
+# the central syslog store -- which is why VyOS syslog looked worthless when we
+# sampled it for SIEM ingestion: the signal is real, it is just buried.
+#
+# Deleted in CONFIG, not masked in systemd. VyOS regenerates unit state from
+# its own configuration, so a `systemctl mask` would be undone by the next
+# commit or boot. Nothing is lost: this console has never worked on this
+# image, so there is no functioning access path to remove.
+#
+# Checked before deleting because VyOS errors on deleting an absent node,
+# which would make a re-run fail rather than no-op.
+- name: VyOS — remove the phantom serial console (systemd restart loop)
+  hosts: vyos
+  gather_facts: false
+  tasks:
+    - name: Check whether the ttyS0 console is configured
+      vyos.vyos.vyos_command:
+        commands:
+          - "show configuration commands | match \"console device ttyS0\""
+      register: vyos_console_cfg
+      changed_when: false
+      failed_when: false
+
+    - name: Delete the ttyS0 console device
+      vyos.vyos.vyos_config:
+        lines:
+          - "delete system console device ttyS0"
+        save: true
+      when: "'ttyS0' in (vyos_console_cfg.stdout | default([''], true) | join(' '))"
+      register: vyos_console_del
+
+    - name: Stop the flapping getty now, so the fix takes effect without a reboot
+      vyos.vyos.vyos_command:
+        commands:
+          - "run sudo systemctl stop serial-getty@ttyS0.service"
+      when: vyos_console_del.changed | default(false)
+      changed_when: true
+      failed_when: false
+  tags:
+    - vyos
+    - vyos_console
+
 - name: Disable IPv6 — VyOS
   hosts: vyos
   gather_facts: false
@@ -1105,90 +1174,11 @@
     - syslog
     - syslog_client
 
-# Splunk indexer + search head on soc-splunk (Ubuntu Desktop 22.04, SOC
-# subnet 172.31.7.19). Base `splunk` role from PowerPlant/range-development-
-# ansible/roles/splunk (copied per role-sourcing policy; see project memory
-# `siem-choice`). Downloads splunk.deb from the customer nexus, applies the
-# license, writes limits/inputs/server/web configs, creates the indices
-# declared in group_vars/all.yml (windows, sysmon, linux, netfw, ot, wec),
-# starts the splunkd service. Forwarders in subsequent plays will point at
-# `splunk_server_ip` (172.31.7.19) on TCP `splunk_forwarder_port` (9997).
-#
-# Splunk Enterprise Security (premium SIEM saved searches/dashboards) is
-# DEFERRED to a later slice — the splunk-es role needs splunk-es.spl plus
-# six template files at /etc/ansible/templates/splunkapps/ that don't ship
-# in either PowerPlant repo. Splunk Core alone is plenty for indexer + UF
-# ingest + basic search.
-#
-# gather_facts: true because templates/limits.conf.j2 references
-# `ansible_processor_vcpus` to size httpServer.maxThreads.
-- name: Splunk indexer + search head — soc-splunk
-  hosts: splunk
-  gather_facts: true
-  become: true
-  roles:
-    - splunk
-  tags:
-    - splunk
-    - splunk_indexer
-
-# Splunk universal forwarder rollout on every Linux host except (a) the
-# indexer itself (soc-splunk) and (b) the Security Onion grid (so_all).
-# The highest-value target is soc-syslog: it tails
-# /var/log/remote/<host>/syslog.log and is the ONLY source feeding the
-# netfw index (pfSense + VyOS events forwarded over UDP 514 to soc-syslog,
-# then UF tails the files and ships into Splunk). Other Linux hosts feed
-# their /var/log/{syslog,auth.log} into the linux index.
-#
-# The Security Onion grid is excluded (`:!so_all`). SO owns /opt/so and runs
-# its own Elastic Agent on every grid node; a Splunk UF alongside would
-# double-ship the same logs and fight SO's rotation. This branch runs both
-# SIEMs — Splunk for the rest of the estate, SO for the grid + NSM.
-# See project memory `siem-choice`.
-#
-# Run scoped for fast first-feedback:
-#   --tags splunk_forwarder_linux --limit soc-syslog   # syslog visible in UI
-#   --tags splunk_forwarder_linux                       # full Linux rollout
-- name: Splunk universal forwarder — Linux
-  hosts: linux:!splunk:!so_all
-  gather_facts: true
-  become: true
-  roles:
-    - splunk-forwarder
-  tags:
-    - splunk
-    - splunk_forwarder
-    - splunk_forwarder_linux
-
-# Splunk universal forwarder rollout on every Windows host. Pulls the
-# 8.2.6 MSI from the customer nexus (version skew vs Linux's 9.4.1 deb is
-# inherited from PowerPlant; flagged in group_vars/windows.yml). Each host
-# reboots after MSI install -- with 48 Windows hosts this is the longest
-# play in the tier. The forwarder role's templates/inputs.conf.j2 ships:
-#   - Windows / System / Application / Firewall / PowerShell-Operational
-#     event logs → index=windows (sourcetype = XmlWinEventLog:*)
-#   - Microsoft-Windows-Sysmon/Operational                 → index=sysmon
-# Sysmon doesn't have to be installed yet -- the stanza is a no-op until
-# the Sysmon service exists on the host. Sysmon rollout is a future slice.
-#
-# Run scoped for a one-host pilot before the full sweep:
-#   --tags splunk_forwarder_windows --limit bs-hq01      # ~5 min, validates
-#   --tags splunk_forwarder_windows                       # full Windows fleet
-- name: Splunk universal forwarder — Windows
-  hosts: windows
-  gather_facts: true
-  strategy: free                # each host MSI + reboot independently
-  roles:
-    - splunk-forwarder
-  tags:
-    - splunk
-    - splunk_forwarder
-    - splunk_forwarder_windows
 
 # Sysmon (Microsoft Sysinternals) — endpoint telemetry beyond what Windows
 # Event Log ships by default. Once installed, events land in
-# Microsoft-Windows-Sysmon/Operational which the Splunk UF's inputs.conf
-# already tails and ships into index=sysmon.
+# Microsoft-Windows-Sysmon/Operational, which the Elastic Agent enrolled by
+# playbooks/75-endpoint.yml ships into Security Onion.
 #
 # Role copied from PowerPlant/range-development-ansible/roles/sysmon.
 # Config: templates/sysmon-config.xml.j2 (1200-line rules file inherited
@@ -1198,8 +1188,8 @@
 # so re-runs against already-Sysmon'd hosts are no-ops. To force a config
 # refresh later, uninstall via `sysmon64.exe -u` then re-run this play.
 #
-# Runs AFTER the Splunk Windows UF play so events start flowing to the
-# sysmon index immediately once Sysmon starts writing them. Scoped runs:
+# Sysmon must be installed and writing before 75-endpoint enrols the agent
+# that reads the channel. Scoped runs:
 #   --tags sysmon --limit bs-hq01     # single-host pilot
 #   --tags sysmon                      # full Windows fleet
 - name: Sysmon — Windows endpoint telemetry
@@ -1349,7 +1339,6 @@
 # =========================================================================
 
 - import_playbook: playbooks/05-time.yml
-- import_playbook: playbooks/10-mirror.yml
 - import_playbook: playbooks/20-vyos.yml
 - import_playbook: playbooks/30-prereqs.yml
 - import_playbook: playbooks/40-manager.yml
@@ -1359,6 +1348,5 @@
 - import_playbook: playbooks/75-endpoint.yml
 
 # Central syslog into SO. AFTER 75: it configures the Elastic Agent that 75
-# enrolls on soc-syslog, so it cannot run before it exists. Splunk keeps
-# tailing the same files -- two independent readers, one source of truth.
+# enrolls on soc-syslog, so it cannot run before it exists.
 - import_playbook: playbooks/76-syslog.yml

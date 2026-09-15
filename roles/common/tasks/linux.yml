@@ -5,13 +5,12 @@
 # Linux host keeps whatever its image booted with. That is usually right --
 # the platform sets it from the blueprint VM name -- until it is not.
 #
-# soc-splunk booted as `localhost`. rsyslog stamps the system hostname into
-# every message's HOSTNAME field, so the central collector filed 100% of that
-# host's syslog under /var/log/remote/localhost/ and no soc-splunk directory
-# ever existed. ~169k events, and the Splunk INDEXER's own logs were labelled
-# `localhost` inside Splunk. Invisible for the life of the project until
-# Security Onion started reading the same directories and the bucket had a
-# name nobody recognised (2026-08-12).
+# A host that boots as `localhost` is invisible in the SIEM. rsyslog stamps
+# the system hostname into every message's HOSTNAME field, so the central
+# collector files 100% of that host's syslog under /var/log/remote/localhost/
+# and no directory under the host's real name ever exists. The failure is
+# silent -- the events arrive, they are simply attributed to a name nobody
+# recognises (~169k of them before this was caught, 2026-08-12).
 #
 # Set it explicitly. The /etc/hosts task below then agrees with reality rather
 # than asserting something the system does not believe.

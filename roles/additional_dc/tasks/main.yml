@@ -19,6 +19,45 @@
     password_never_expires: yes
     account_disabled: no
 
+# Promotion against an unreachable DC fails with "a domain controller could
+# not be contacted", and the failure is expensive: it happens AFTER the DNS
+# Server role is installed, leaving a zone-less DNS server behind (see the
+# block/rescue rationale below). Retrying promotion blind just repeats that.
+# Assert the precondition instead -- that a DC is actually locatable -- and
+# wait for it, because on a fresh range the path to it may simply not be up
+# yet when the play arrives.
+- name: Preflight — a domain controller is locatable from this host
+  ansible.windows.win_powershell:
+    script: |
+      $Ansible.Changed = $false
+      $r = Resolve-DnsName -Name "_ldap._tcp.dc._msdcs.{{ domain_name }}" -Type SRV -ErrorAction SilentlyContinue
+      if ($r) { Write-Output "DC_LOCATABLE" } else { Write-Output "DC_NOT_LOCATABLE" }
+  register: addc_dc_locate
+  until: "'DC_LOCATABLE' in (addc_dc_locate.output | default([]) | join(' '))"
+  retries: "{{ additional_dc_locate_retries }}"
+  delay: 15
+  changed_when: false
+  failed_when: false
+
+# Fail HERE rather than inside promotion. This runs before the DNS Server
+# role is installed, so a failure leaves no zone-less DNS server behind --
+# the exact harm the rescue exists to clean up never happens.
+- name: Fail if no domain controller became locatable
+  ansible.builtin.fail:
+    msg: |
+      {{ inventory_hostname }} could not locate a domain controller for
+      {{ domain_name }} after {{ (additional_dc_locate_retries | int) * 15 }}s.
+
+      Promotion would fail with "a domain controller could not be contacted",
+      so it has NOT been attempted -- no DNS Server role installed, nothing
+      for the rescue to clean up, and this host's DNS is untouched.
+
+      This host resolves via its configured DNS. Check, in order:
+        1. that DNS server answers _ldap._tcp.dc._msdcs.{{ domain_name }}
+        2. the routed path from this host to it is up
+        3. the PDC for {{ domain_name }} is promoted and serving its AD zone
+  when: "'DC_LOCATABLE' not in (addc_dc_locate.output | default([]) | join(' '))"
+
 # PROMOTION IS WRAPPED IN block/rescue, AND THE RESCUE IS THE POINT.
 #
 # When this fails partway, the DNS Server role is already installed and

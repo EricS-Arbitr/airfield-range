@@ -1,0 +1,128 @@
+---
+# =========================================================================
+# registry_seed.yml — stage SO's container images BEFORE so-setup runs
+# =========================================================================
+# so-setup checks for local content before it will touch the network:
+#
+#   docker_seed_registry()   -> if [ -f /nsm/docker-registry/docker/registry.tar ]
+#                                  tar xvf ... -C /nsm/docker-registry/docker
+#   import_registry_docker() -> if [ -f .../registry_image.tar ]
+#                                  docker load -i ...
+#
+# Put both files there and the ghcr.io path is never reached. That is how
+# the airgap ISO installs; we reproduce it from the controller's mirror.
+#
+# ORDERING IS THE WHOLE POINT — this MUST run before the so-setup call. It
+# cannot be asserted afterwards like airgap mode, because by then so-setup
+# has already made its download decision. See the incident writeup in
+# group_vars/all/security_onion.yml.
+#
+# so-setup DELETES registry.tar after extracting it, so a re-run finds the
+# tar gone and the store populated. Gate on the STORE, never on the tar.
+# =========================================================================
+
+- name: Registry seed — count repositories already in the local store
+  ansible.builtin.shell: |
+    d=/nsm/docker-registry/docker/registry/v2/repositories/security-onion-solutions
+    if [ -d "$d" ]; then ls "$d" | wc -l; else echo 0; fi
+  args:
+    executable: /bin/bash
+  register: so_registry_repo_count
+  changed_when: false
+
+- name: Registry seed — decide whether staging is needed
+  ansible.builtin.set_fact:
+    so_registry_already_seeded: >-
+      {{ (so_registry_repo_count.stdout | trim | int) >= (so_registry_min_repos | int) }}
+
+- name: Registry seed — report
+  ansible.builtin.debug:
+    msg: >-
+      Local registry store holds {{ so_registry_repo_count.stdout | trim }}
+      repositories (need {{ so_registry_min_repos }}) —
+      {{ 'already seeded, skipping staging' if so_registry_already_seeded
+         else 'staging from ' + so_mirror_url }}
+
+- name: Registry seed — ensure the seed directory exists
+  ansible.builtin.file:
+    path: /nsm/docker-registry/docker
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  when: not so_registry_already_seeded
+
+# The checksums are small, published last by the controller, and are what
+# make the big transfer verifiable. Fetch them first.
+- name: Registry seed — fetch the published checksums
+  ansible.builtin.get_url:
+    url: "{{ so_mirror_url }}/so-source/{{ item.remote }}.sha256"
+    dest: "/nsm/docker-registry/docker/{{ item.local }}.sha256"
+    mode: '0644'
+    use_proxy: no
+    force: yes
+    timeout: 60
+  loop:
+    - { remote: "{{ so_registry_tar_name }}",       local: registry.tar }
+    - { remote: "{{ so_registry_image_tar_name }}", local: registry_image.tar }
+  loop_control:
+    label: "{{ item.local }}.sha256"
+  when: not so_registry_already_seeded
+
+# WHY NOT get_url FOR THE PAYLOAD
+# ------------------------------
+# ss-pp-so 2026-09-08: three attempts pulled 2.1, 3.0 and 4.3 GB of this
+# 7.2 GB file. Every one was a clean ~30-minute cutoff (the get_url timeout);
+# the byte count grew only because the controller's page cache warmed. The
+# connection closed normally each time, so get_url saw EOF, wrote the short
+# file and reported SUCCESS. An unverified single-shot transfer of 7.2 GB
+# over a link doing 1-2 MB/s cannot be made reliable by raising a timeout.
+#
+# curl instead, for three properties get_url does not give us:
+#   -C -            resume from whatever the last pass managed
+#   Content-Length  curl exits 18 on a short read; get_url does not check
+#   loop            each pass starts where the previous one stopped, so the
+#                   cutoff becomes a speed bump rather than a wall
+# Then verify sha256 -- the only thing that distinguishes "finished" from
+# "stopped". --noproxy is the curl equivalent of use_proxy: no; routing an
+# in-range fetch through the mgmt proxy would be wrong and, in a zero-egress
+# range, fatal.
+- name: Registry seed — resumable, checksum-verified download of the artifacts
+  ansible.builtin.shell: |
+    set -u
+    url="{{ so_mirror_url }}/so-source/{{ item.remote }}"
+    dst="/nsm/docker-registry/docker/{{ item.local }}"
+    want=$(cat "${dst}.sha256")
+    for pass in $(seq 1 {{ so_registry_download_passes }}); do
+      if [ -f "$dst" ]; then
+        have=$(sha256sum "$dst" | awk '{print $1}')
+        if [ "$have" = "$want" ]; then
+          echo "SEED_OK {{ item.local }} after $((pass - 1)) pass(es)"; exit 0
+        fi
+      fi
+      echo "pass ${pass}: have $(stat -c %s "$dst" 2>/dev/null || echo 0) bytes, resuming"
+      curl -fsS --noproxy '*' --retry 5 --retry-delay 10 -C - -o "$dst" "$url" || true
+    done
+    have=$(sha256sum "$dst" 2>/dev/null | awk '{print $1}')
+    if [ "$have" = "$want" ]; then echo "SEED_OK {{ item.local }} on final pass"; exit 0; fi
+    echo "SEED_FAILED {{ item.local }} got $(stat -c %s "$dst" 2>/dev/null || echo 0) bytes"
+    echo "  expected sha256 $want"
+    echo "  actual   sha256 ${have:-none}"
+    exit 1
+  args:
+    executable: /bin/bash
+  register: so_registry_dl
+  changed_when: "'after 0 pass' not in so_registry_dl.stdout"
+  loop:
+    - { remote: "{{ so_registry_tar_name }}",       local: registry.tar }
+    - { remote: "{{ so_registry_image_tar_name }}", local: registry_image.tar }
+  loop_control:
+    label: "{{ item.local }}"
+  when: not so_registry_already_seeded
+
+- name: Registry seed — report
+  ansible.builtin.debug:
+    msg: >-
+      {{ so_registry_dl.results | map(attribute='stdout_lines') | map('last') | list }}
+      — so-setup will seed locally and never contact ghcr.io.
+  when: not so_registry_already_seeded

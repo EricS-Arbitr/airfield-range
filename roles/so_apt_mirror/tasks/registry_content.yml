@@ -1,0 +1,178 @@
+---
+# =========================================================================
+# registry_content.yml — publish SO's container images on the mirror
+# =========================================================================
+# Runs on the ANSIBLE CONTROLLER, the only host with mgmt-plane egress —
+# the same rule airgap_content.yml already follows for the sigma/yara/
+# playbook repos. After this, in-play systems fetch container images over
+# in-range HTTP and never touch the internet.
+#
+# See group_vars/all/security_onion.yml for the full incident writeup
+# (ss-pp-stacked 2026-09-05: so-setup deletes the docker proxy drop-in
+# mid-run, docker fell back to the in-range DC for DNS, registry stayed
+# empty, 7h22m of retries that skipped the broken step).
+#
+# Idempotent on the ARTIFACT, not on a marker: if both blobs are already on
+# the mirror we do nothing, so a re-run costs one stat. Delete them on the
+# controller to force a rebuild — the same deliberate act that refreshes
+# detection content.
+# =========================================================================
+
+- name: Registry content — inventory the mirror (tars AND checksums)
+  ansible.builtin.stat:
+    path: "{{ so_mirror_root }}/so-source/{{ item }}"
+  register: so_registry_present
+  loop:
+    - "{{ so_registry_tar_name }}"
+    - "{{ so_registry_image_tar_name }}"
+    - "{{ so_registry_tar_name }}.sha256"
+    - "{{ so_registry_image_tar_name }}.sha256"
+  loop_control:
+    label: "{{ item }}"
+
+# Three states, not two. A controller can hold complete tars with NO
+# checksums -- exactly what ss-pp-stacked did on 2026-09-08: the tars were
+# built by an earlier run that predated checksum publishing, so the next run
+# saw them, skipped the build, never wrote the .sha256 files, and the
+# 40-manager gate (which waits on the checksums) deadlocked 60 minutes per
+# attempt for three attempts. Checking only the tars cannot see that state.
+- name: Registry content — classify what is present
+  ansible.builtin.set_fact:
+    so_registry_tars_present: >-
+      {{ (so_registry_present.results[0].stat.exists | default(false))
+         and (so_registry_present.results[1].stat.exists | default(false)) }}
+    so_registry_sums_present: >-
+      {{ (so_registry_present.results[2].stat.exists | default(false))
+         and (so_registry_present.results[3].stat.exists | default(false)) }}
+
+- name: Registry content — decide what work is required
+  ansible.builtin.set_fact:
+    # A full build is only needed when the payload itself is missing.
+    so_registry_needs_build: "{{ not so_registry_tars_present }}"
+    # Tars but no checksums: compute them in place. ~1 min against a 7.2 GB
+    # file, versus a multi-hour rebuild of artifacts that are already correct.
+    so_registry_needs_sums: >-
+      {{ so_registry_tars_present and not so_registry_sums_present }}
+
+- name: Registry content — report
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Artifacts complete; nothing to do.' if (so_registry_tars_present and so_registry_sums_present)
+         else ('Tars present but checksums MISSING — generating in place, no rebuild.'
+               if so_registry_needs_sums
+               else 'Artifacts MISSING — will ' + ('download from ' + so_registry_artifact_url
+                    if so_registry_artifact_url | length > 0
+                    else 'build from ghcr.io via the proxy')) }}
+
+# --- Repair path: checksums for artifacts that already exist -------------
+# Deliberately NOT a rebuild. The tars are byte-identical across ranges
+# (7,664,527,360 on both ss-pp-so and ss-pp-stacked), so re-deriving the
+# checksum from what is on disk is correct and costs a minute.
+- name: Registry content — generate missing checksums for existing artifacts
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd "{{ so_mirror_root }}/so-source"
+    for f in "{{ so_registry_tar_name }}" "{{ so_registry_image_tar_name }}"; do
+      sha256sum "$f" | awk '{print $1}' > "${f}.sha256.part"
+      mv "${f}.sha256.part" "${f}.sha256"
+      chown www-data:www-data "${f}.sha256"
+      chmod 0644 "${f}.sha256"
+      echo "SUM_OK ${f}"
+    done
+  args:
+    executable: /bin/bash
+  register: so_registry_sumgen
+  changed_when: "'SUM_OK' in so_registry_sumgen.stdout"
+  when: so_registry_needs_sums
+
+# --- Path A: prebuilt artifacts (the Nexus end state) --------------------
+# When so_registry_artifact_url is set this is the whole story: two
+# downloads, no docker, no skopeo, no egress to ghcr.io. Switching to it is
+# a one-variable change once Eric has write access to Nexus.
+
+# All FOUR files, checksums included. Fetching only the tars would leave the
+# controller in the tars-without-checksums state that deadlocked
+# ss-pp-stacked on 2026-09-08 -- the repair path above would then have to
+# re-derive checksums Nexus already published.
+- name: Registry content — download prebuilt artifacts
+  ansible.builtin.get_url:
+    url: "{{ so_registry_artifact_url }}/{{ item }}"
+    dest: "{{ so_mirror_root }}/so-source/{{ item }}"
+    owner: www-data
+    group: www-data
+    mode: '0644'
+    timeout: 120
+  loop:
+    - "{{ so_registry_tar_name }}"
+    - "{{ so_registry_image_tar_name }}"
+    - "{{ so_registry_tar_name }}.sha256"
+    - "{{ so_registry_image_tar_name }}.sha256"
+  loop_control:
+    label: "{{ item }}"
+  when:
+    - so_registry_needs_build
+    - so_registry_artifact_url | length > 0
+
+# --- Path B: build from ghcr.io (today) ----------------------------------
+
+- name: Registry content — install skopeo + docker (build path only)
+  ansible.builtin.apt:
+    name:
+      - skopeo
+      - docker.io
+    state: present
+    # update_cache: NO. RC_NG_Ansible ships stale apt.puppet.com +
+    # apt.puppetlabs.com sources with expired signing keys; apt-get update
+    # returns non-zero on those and the apt module turns that into
+    # "Failed to update apt cache: unknown reason". main.yml already
+    # refreshed the cache via the shell task that tolerates it -- this is
+    # the same reason `Install nginx + git` sets update_cache: no.
+    # Regression 2026-09-07: this task shipped with `yes` and failed every
+    # ss-pp-so attempt on the controller.
+    update_cache: no
+  when:
+    - so_registry_needs_build
+    - so_registry_artifact_url | length == 0
+
+- name: Registry content — render the build script
+  ansible.builtin.template:
+    src: build_so_registry.sh.j2
+    dest: /usr/local/sbin/build_so_registry.sh
+    mode: '0750'
+    owner: root
+    group: root
+  when:
+    - so_registry_needs_build
+    - so_registry_artifact_url | length == 0
+
+# Async because this moves 7.2 GB through the proxy. Backgrounded with a log
+# rather than a blocking shell so the run is inspectable while it works and
+# an SSH hiccup does not orphan it.
+- name: Registry content — build (7.2 GB via proxy; 20-60 min on first run)
+  ansible.builtin.shell: /usr/local/sbin/build_so_registry.sh > {{ so_registry_build_log }} 2>&1
+  args:
+    executable: /bin/bash
+  async: "{{ so_registry_build_timeout }}"
+  poll: 0
+  register: so_registry_build_async
+  when:
+    - so_registry_needs_build
+    - so_registry_artifact_url | length == 0
+
+- name: Registry content — report (build continues in the background)
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Container images downloaded from ' + so_registry_artifact_url
+         if so_registry_artifact_url | length > 0
+         else 'Container-image build RUNNING IN BACKGROUND on the controller
+               (log: ' + so_registry_build_log + '). It is deliberately NOT
+               awaited here so the range baseline can proceed while 7.2 GB
+               downloads. playbooks/40-manager.yml blocks on it before
+               so_manager needs it.' }}
+  when: so_registry_needs_build
+
+# NOTE: no HTTP smoke test here on the build path — the artifacts do not
+# exist yet. Proof that they landed AND are served lives in the wait play at
+# the top of playbooks/40-manager.yml, which is the last moment before
+# anything consumes them. Running 10-mirror.yml standalone therefore starts
+# the build and returns; that is intended.

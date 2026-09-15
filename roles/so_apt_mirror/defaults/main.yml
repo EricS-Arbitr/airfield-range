@@ -20,3 +20,16 @@ so_bundled_rules_src: "/etc/ansible/rules/emerging.rules.tar.gz"
 # so_manager needs it too (to patch soc.json) and role defaults are
 # role-scoped, so it was undefined there. Left as a comment rather than a
 # duplicate definition so there is one source of truth.
+
+# --- SO container registry artifacts (built on the controller) -----------
+# Build scratch space. Peak usage is the registry store (~7.2 GB) plus the
+# tar (~7.2 GB) = ~14.4 GB; the controller has 25 GB free. Removed by the
+# build script on success, so nothing lingers between deploys.
+so_registry_build_dir: /var/tmp/so-registry-build
+# so_registry_build_log lives in group_vars, NOT here: the wait play in
+# playbooks/40-manager.yml reads it without including this role, and role
+# defaults are role-scoped.
+# 7.2 GB through the mgmt proxy. Measured first-run cost is 20-60 min; the
+# ceiling is deliberately generous because exhausting it means a failed
+# deploy, while overshooting it costs only a longer wait on a broken link.
+so_registry_build_timeout: 7200

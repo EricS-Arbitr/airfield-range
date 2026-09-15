@@ -57,6 +57,86 @@
 # module reports "Failed to update apt cache: unknown reason"). Success
 # on the ubuntu.archive fetches is enough for the nginx + git install
 # that follows.
+# --- Stop unattended-upgrades coming back --------------------------------
+# ORDER MATTERS AND THE RUNNING JOB IS LEFT ALONE. Killing
+# unattended-upgrades mid-transaction can leave dpkg half-configured, which
+# is a worse failure than the lock contention it would fix. So: mask the
+# TIMERS (they are only triggers, safe to stop at any moment), disable and
+# mask the service so it cannot be re-triggered, but never `state: stopped`
+# on the service itself -- the in-flight run finishes on its own and the
+# lock wait below covers it.
+#
+# After this the FIRST deploy on a fresh range still waits once for the
+# boot-time run; every subsequent apt call, in this deploy and all later
+# ones, finds no competitor.
+- name: Mask the apt-daily timers so unattended-upgrades cannot recur
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+  failed_when: false
+  when: so_disable_unattended_upgrades | bool
+
+- name: Disable and mask unattended-upgrades (NOT stopped — see above)
+  ansible.builtin.systemd:
+    name: unattended-upgrades.service
+    enabled: false
+    masked: true
+  failed_when: false
+  when: so_disable_unattended_upgrades | bool
+
+# Belt and braces: even unmasked, apt's own periodic config would re-arm it.
+- name: Turn off apt periodic upgrades in config as well
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: '0644'
+    content: |
+      // Managed by so_apt_mirror. Range hosts are automation-managed; an
+      // unattended upgrader competing for the dpkg lock only ever costs a
+      // deploy. See UPSTREAM_FIXES 2026-09-10.
+      APT::Periodic::Update-Package-Lists "0";
+      APT::Periodic::Unattended-Upgrade "0";
+  when: so_disable_unattended_upgrades | bool
+
+# Ubuntu runs unattended-upgrades on first boot and holds the dpkg lock for
+# minutes; any apt call before it finishes fails outright. deploy.sh retries
+# seconds apart, so all three attempts lose the same race. See
+# group_vars/all/main.yml for the incident.
+#
+# fuser is in psmisc and standard on these images, but fall back to pgrep
+# rather than assume -- a missing binary must not look like a free lock.
+- name: Wait for boot-time apt/dpkg locks to clear
+  ansible.builtin.shell: |
+    check_busy() {
+      if command -v fuser > /dev/null 2>&1; then
+        for f in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock \
+                 /var/lib/apt/lists/lock /var/cache/apt/archives/lock; do
+          if fuser "$f" > /dev/null 2>&1; then return 0; fi
+        done
+        return 1
+      fi
+      pgrep -f "unattended-upgr|apt-get|aptitude|dpkg" > /dev/null 2>&1
+    }
+    for i in $(seq 1 {{ so_apt_lock_tries }}); do
+      if ! check_busy; then
+        echo "APT_LOCK_FREE after $((i - 1)) check(s)"
+        exit 0
+      fi
+      sleep {{ so_apt_lock_delay }}
+    done
+    echo "APT_LOCK_HELD after {{ so_apt_lock_tries }} checks"
+    ps -eo pid,etime,cmd | grep -E "unattended-upgr|apt-get|dpkg" | grep -v grep | head -5
+    exit 1
+  args:
+    executable: /bin/bash
+  register: apt_lock_wait
+  changed_when: false
+  failed_when: "'APT_LOCK_FREE' not in apt_lock_wait.stdout"
+
 - name: apt-get update (tolerating third-party signature warnings)
   ansible.builtin.shell: apt-get update 2>&1 | tail -3
   register: apt_update
@@ -273,6 +353,14 @@
 - name: Stage SO airgap detection content on the mirror
   ansible.builtin.include_tasks: airgap_content.yml
   when: so_airgap_mode | bool
+
+# Container images — the fifth and largest artifact class, and the only one
+# the SO nodes would otherwise fetch from the internet themselves.
+# Unconditional: this is the mechanism that makes in-play systems
+# internet-free, so it must not hide behind a feature flag.
+- name: Stage SO container registry content on the mirror
+  ansible.builtin.include_tasks: registry_content.yml
+
 
 - name: Report mirror status
   ansible.builtin.debug:

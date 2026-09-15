@@ -219,7 +219,7 @@ so_agent_endpoint_subnets:
   - "172.31.3.0/24"       # Flight-Ops-Services — fops-dc01/02, fops-file, fops-wec, fops-app01-03
   - "172.31.5.0/24"       # Flight-Control-Center — atc-radar/weather/station, fops-flight01-05
   - "172.31.6.0/24"       # Flight-Ops-Users — fops-ops01-08
-  - "172.31.7.0/24"       # SOC — soc-analyst01-06, soc-splunk, soc-syslog
+  - "172.31.7.0/24"       # SOC — soc-analyst01-06, soc-syslog
   - "172.31.8.0/24"       # Engineering-Control-Center — bs-eng01-06, bs-ro-hist
   - "172.31.12.0/24"      # DMZ — bs-www, bs-ftp, bs-ns1
   - "172.31.14.0/24"      # Headquarters
@@ -266,12 +266,16 @@ so_agent_installer_windows: "so-elastic-agent_windows_amd64"
 so_agent_installer_linux: "so-elastic-agent_linux_amd64"
 
 # --- Elastic Defend event-filter exclusions -------------------------------
+# EMPTY: nothing on this range currently generates enough low-value endpoint
+# telemetry to be worth excluding. The mechanism stays documented because the
+# constraints are non-obvious and were expensive to establish.
+#
 # Managed DIRECTLY against the Kibana API, not through SO's custom-filters
 # helper. The helper hardcodes `"os_types": ["windows"]` (line 87 of
 # so-elastic-defend-manage-filters.py) and never reads the `operating_system`
-# key, so it structurally cannot express a Linux filter — PowerPlant's first
-# attempt was correct in every respect and stamped Windows-only, so Defend on
-# the Splunk host never evaluated it.
+# key, so it structurally cannot express a Linux filter — a filter correct in
+# every other respect still gets stamped Windows-only, and Defend on a Linux
+# host never evaluates it.
 #
 # Safe to self-manage: the helper only ever deletes a GUID listed in
 # disabled-filters.yaml and only iterates its own input directories. It never
@@ -282,51 +286,125 @@ so_agent_installer_linux: "so-elastic-agent_linux_amd64"
 # produce byte-identical entries, which is why a second one reports "up to
 # date" while doing nothing.
 #
-# CARRIED OVER ON THE EXPECTATION, NOT A MEASUREMENT. On PowerPlant the Splunk
-# indexer produced ~11.1M file events/24h, 96% of that host's telemetry, purely
-# from bucket and dispatch churn. soc-splunk runs the same Splunk Enterprise
-# Core role, so the same churn is expected — but this range has not been
-# measured yet. Confirm in Hunt (group by host, event.dataset) after the first
-# 24h before treating this as tuned, and delete it if soc-splunk turns out not
-# to dominate.
-#
-# Path scope: /opt/splunk/var/ covers var/lib (index buckets, tsidx, .merge)
-# and var/run (dispatch artifacts, splunkd.pid). /opt/splunk/bin and
-# /opt/splunk/etc stay VISIBLE — app code and configuration are what an
-# attacker would modify, and excluding them to save events would trade away
-# the detection this host most needs.
-so_defend_exclusions:
-  - id: "3F9E401E-9FAF-47C7-96B1-D59697973A20"
-    name: "Arbitr - Splunk variable data (soc-splunk)"
-    description: >-
-      Splunk bucket and dispatch churn under /opt/splunk/var on soc-splunk.
-      No detection value and it dominates ES retention. bin/ and etc/ remain
-      monitored.
-    os_type: "linux"
-    dataset: "endpoint.events.file"
-    field: "file.path"
-    value: "/opt/splunk/var/*"
+# To add one: fresh GUID, then os_type / dataset / field / value. Confirm in
+# Hunt (group by host, event.dataset) that the host really does dominate
+# before excluding anything. so_manager gates on `length > 0`, so an empty
+# list is a clean no-op.
+so_defend_exclusions: []
 
 so_defend_filters_src: "/opt/so/saltstack/local/salt/elasticfleet/files/soc/elastic-defend-custom-filters.yaml"
 so_defend_filters_raw: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters-raw"
 so_defend_filters_out: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters"
 
+# =========================================================================
+# Container image registry content — the 5th artifact class
+# =========================================================================
+# Until 2026-09-07 this was the ONLY install artifact the SO nodes fetched
+# from the internet THEMSELVES. so-setup's docker_seed_registry() pulled 22
+# images straight from ghcr.io on the manager, retagged them
+# so-manager:5000/... and pushed them into its own registry. Every other
+# class (SO source, ETOPEN, sigma/yara/playbook repos) already came from the
+# controller's nginx mirror, per the rule in so_apt_mirror/airgap_content.yml:
+# the controller is the only host with mgmt-plane egress.
+#
+# WHAT THAT COST US — ss-pp-stacked, 2026-09-05
+# ---------------------------------------------
+# so-setup DELETES /etc/systemd/system/docker.service.d/ on its reinstall
+# path. The docker proxy drop-in so_base writes was therefore GONE by the
+# time the seeding ran (proved by mtime: drop-in 05:31:40, so-setup.log
+# 04:22:45 — the drop-in was recreated by the NEXT attempt, 69 min later).
+# Docker fell back to direct DNS, hit the in-range DC at 172.16.2.7 which
+# cannot resolve ghcr.io, and all four pull attempts 404'd. The registry
+# stayed empty (8.0K, 0 repositories), 12 of 13 containers were never
+# created, and because setup-completed had already been written at 04:23 the
+# next two attempts SKIPPED so-setup entirely — 7h22m, never retrying the one
+# step that was broken.
+#
+# THE SUPPORTED MECHANISM
+# -----------------------
+# so-setup checks local files before any network call:
+#   docker_seed_registry()   -> tar xvf /nsm/docker-registry/docker/registry.tar
+#   import_registry_docker() -> docker load -i .../registry_image.tar
+# That is how the airgap ISO installs. We reproduce it from the mirror, so
+# in-play systems now have ZERO internet dependency for images. The
+# controller is the only host that reaches ghcr.io, and only to BUILD these.
+#
+# END STATE (Eric, 2026-09-07): both artifacts hosted on the in-platform
+# Nexus. Set so_registry_artifact_url to that base URL and the controller
+# DOWNLOADS them instead of building. No other change required.
+so_registry_artifact_url: ""
+
+# Tags carried by the SO container set. MUST track so_git_ref — the salt
+# states reference these literally, so a mismatch means the highstate asks
+# the local registry for a tag it does not have and every container stays
+# `missing`: the exact failure this mechanism exists to prevent.
+so_registry_image_version: "2.4.211"
+so_registry_registry_version: "3.0.0"
+so_registry_elasticsearch_version: "9.0.8"
+
+# Versioned on the mirror so a stale blob cannot masquerade as a current one.
+# Renamed to registry.tar / registry_image.tar on the node, because those are
+# the names so-setup looks for.
+so_registry_tar_name: "so-registry-{{ so_registry_image_version }}.tar"
+so_registry_image_tar_name: "so-registry-image-{{ so_registry_registry_version }}.tar"
+
+# Verified against a healthy 2.4.211 manager (ss-pp-so, 2026-09-07): the
+# registry held exactly 22 repositories totalling 7.2 GB. so-elasticsearch
+# carries Elastic's own version, NOT the SO tag.
+so_registry_images:
+  - "so-elastalert:{{ so_registry_image_version }}"
+  - "so-elastic-agent:{{ so_registry_image_version }}"
+  - "so-elastic-agent-builder:{{ so_registry_image_version }}"
+  - "so-elastic-fleet-package-registry:{{ so_registry_image_version }}"
+  - "so-elasticsearch:{{ so_registry_elasticsearch_version }}"
+  - "so-hydra:{{ so_registry_image_version }}"
+  - "so-idh:{{ so_registry_image_version }}"
+  - "so-influxdb:{{ so_registry_image_version }}"
+  - "so-kafka:{{ so_registry_image_version }}"
+  - "so-kibana:{{ so_registry_image_version }}"
+  - "so-kratos:{{ so_registry_image_version }}"
+  - "so-logstash:{{ so_registry_image_version }}"
+  - "so-nginx:{{ so_registry_image_version }}"
+  - "so-pcaptools:{{ so_registry_image_version }}"
+  - "so-redis:{{ so_registry_image_version }}"
+  - "so-soc:{{ so_registry_image_version }}"
+  - "so-steno:{{ so_registry_image_version }}"
+  - "so-strelka-backend:{{ so_registry_image_version }}"
+  - "so-strelka-manager:{{ so_registry_image_version }}"
+  - "so-suricata:{{ so_registry_image_version }}"
+  - "so-telegraf:{{ so_registry_image_version }}"
+  - "so-zeek:{{ so_registry_image_version }}"
+
+# Hard gate on the node. A registry with fewer repositories than this did not
+# seed correctly; failing here costs a re-run, failing downstream costs the
+# 30-minute so-status timeout and a misleading error.
+so_registry_min_repos: 22
+
+# How many resume passes the node gets on the 7.2 GB artifact. Replaced the
+# old size-floor heuristic, which could only DETECT a truncated transfer --
+# it could not finish one. Each pass resumes where the last stopped, so the
+# worst observed cutoff (~2 GB per pass on a cold cache) completes in four.
+# Eight leaves margin without letting a genuinely dead link spin forever.
+so_registry_download_passes: 8
+
+# Build log for the controller-side container-image build. In group_vars
+# rather than so_apt_mirror/defaults because the wait play at the top of
+# playbooks/40-manager.yml reads it and does not include that role.
+so_registry_build_log: /var/log/so_registry_build.log
+
 # --- Central syslog into Security Onion -----------------------------------
 # soc-syslog is the range's rsyslog collector: VyOS routers, both pfSense
 # firewalls and every Linux host ship to UDP/TCP 514 there, and it writes
-# /var/log/remote/<device>/syslog.log (roles/syslog_server). A Splunk UF on
-# that same host tails those files into Splunk's netfw index.
+# /var/log/remote/<device>/syslog.log (roles/syslog_server).
 #
-# SO reads THE SAME FILES with the Elastic Agent that phase 75 already
-# enrolled on soc-syslog. Two independent readers of one source of truth --
-# Splunk is untouched, and neither can starve the other.
+# SO reads THOSE FILES with the Elastic Agent that phase 75 already enrolled
+# on soc-syslog.
 #
 # WHY NOT rsyslog omfwd TO THE MANAGER. That is SO's more conventional path
 # and it preserves the original source IP, but it needs a Fleet listener
 # configured either way, PLUS a so-firewall change, PLUS an edit to a working
 # 30-remote.conf whose `stop` statements are load-bearing -- put an action
-# after one and it never runs; put it before and you have changed the Splunk
-# path too. Strictly more risk for the same data. Revisit only if Fleet turns
+# after one and it never runs. Strictly more risk for the same data. Revisit only if Fleet turns
 # out to reconcile away the package policy (see playbooks/76-syslog.yml).
 so_syslog_host: "soc-syslog"
 so_syslog_paths:
@@ -368,8 +446,6 @@ so_syslog_namespace: "so"
 #
 # Derived from the inventory so it cannot drift when a sensor is added.
 # filestream matches these as regexes against the full path.
-# Splunk is UNAFFECTED -- it tails the same directories independently and
-# keeps the grid's logs, which is where they are actually useful.
 so_syslog_exclude_files:
   - "/var/log/remote/({{ groups['so_all'] | sort | join('|') }})/"
 

@@ -2,9 +2,9 @@
 # syslog_server — configure rsyslog on pp-syslog as the central collector.
 #
 # Listens on UDP/514 + TCP/514, writes incoming events to per-host files at
-# /var/log/remote/<hostname>/syslog.log so the Splunk Universal Forwarder
-# (installed by the customer's splunk-forwarder role on this same host) can
-# tail them with correct host attribution.
+# /var/log/remote/<hostname>/syslog.log so the Elastic Agent enrolled on this
+# same host (playbooks/75-endpoint.yml) can tail them with correct host
+# attribution.
 #
 # Driven by group_vars/all.yml: syslog_server_ip is informational here; the
 # server binds to all interfaces.

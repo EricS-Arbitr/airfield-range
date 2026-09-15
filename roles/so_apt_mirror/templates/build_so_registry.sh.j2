@@ -1,0 +1,115 @@
+#!/bin/bash
+# =========================================================================
+# build_so_registry.sh — assemble SO's container registry content on the
+# CONTROLLER and publish it on the in-range nginx mirror.
+# Rendered by so_apt_mirror/tasks/registry_content.yml. Do not edit on host.
+# =========================================================================
+# WHY skopeo AND NOT `docker pull`
+# --------------------------------
+# `docker pull` UNPACKS every layer into the daemon's image store. Summing
+# the DISK USAGE column on a healthy 2.4.211 manager gives ~28 GB for these
+# 22 images, against 7.2 GB of compressed content. The controller has 25 GB
+# free (Eric, 2026-09-07), so the naive route does not fit. skopeo copies
+# compressed blobs registry-to-registry and never unpacks, so peak usage is
+# the registry store (7.2 GB) plus the tar (7.2 GB) = ~14.4 GB.
+#
+# WHY THE DAEMON NEVER NEEDS A PROXY
+# ----------------------------------
+# The registry image is fetched by skopeo into a docker-archive and then
+# `docker load`ed. The controller's docker daemon therefore makes no outbound
+# request at all — only skopeo does, and skopeo honours the env proxy. This
+# sidesteps the whole class of bug that broke ss-pp-stacked, where a daemon
+# without a proxy silently fell back to DNS.
+set -euo pipefail
+
+BUILD="{{ so_registry_build_dir }}"
+MIRROR="{{ so_mirror_root }}/so-source"
+REG_VER="{{ so_registry_registry_version }}"
+
+export HTTP_PROXY="{{ so_upstream_proxy }}"  HTTPS_PROXY="{{ so_upstream_proxy }}"
+export http_proxy="{{ so_upstream_proxy }}"  https_proxy="{{ so_upstream_proxy }}"
+# The temp registry is local. Proxying it would send 7.2 GB through the
+# corporate proxy and fail on CONNECT to a loopback address.
+export NO_PROXY="localhost,127.0.0.1"  no_proxy="localhost,127.0.0.1"
+
+echo "=== build starting: $(date -Is) ==="
+rm -rf "$BUILD"
+mkdir -p "$BUILD/store"
+
+# --- 1. the registry image itself, as a docker-archive -------------------
+echo "=== 1/4 fetching registry:${REG_VER} ==="
+skopeo copy --retry-times 3 \
+  "docker://ghcr.io/security-onion-solutions/registry:${REG_VER}" \
+  "docker-archive:${BUILD}/registry_image.tar:ghcr.io/security-onion-solutions/registry:${REG_VER}"
+
+# --- 2. stand up a throwaway registry to receive the image set -----------
+echo "=== 2/4 starting build registry ==="
+docker rm -f so-registry-build >/dev/null 2>&1 || true
+docker load -i "${BUILD}/registry_image.tar"
+# Bind-mount .../store as the registry root, so the on-disk layout becomes
+# $BUILD/store/docker/registry/v2/... . The directory we must ship is the
+# inner `registry`, because so-setup runs
+#   tar xvf registry.tar -C /nsm/docker-registry/docker
+# and the manager's live path is /nsm/docker-registry/docker/registry/v2/...
+docker run -d --name so-registry-build -p 127.0.0.1:5000:5000 \
+  -v "${BUILD}/store":/var/lib/registry \
+  "ghcr.io/security-onion-solutions/registry:${REG_VER}" >/dev/null
+
+for _ in $(seq 1 30); do
+  curl -sf http://127.0.0.1:5000/v2/ >/dev/null 2>&1 && break
+  sleep 2
+done
+curl -sf http://127.0.0.1:5000/v2/ >/dev/null 2>&1 || { echo "BUILD_FAIL: build registry never came up"; exit 1; }
+
+# --- 3. stream every image in -------------------------------------------
+echo "=== 3/4 copying {{ so_registry_images | length }} images ==="
+n=0
+{% for img in so_registry_images %}
+echo "--- COPY {{ img }}"
+skopeo copy --retry-times 3 --dest-tls-verify=false \
+  "docker://ghcr.io/security-onion-solutions/{{ img }}" \
+  "docker://127.0.0.1:5000/security-onion-solutions/{{ img }}"
+n=$((n+1))
+{% endfor %}
+echo "copied $n images"
+
+docker rm -f so-registry-build >/dev/null 2>&1 || true
+
+# --- 4. positive proof, THEN publish -------------------------------------
+# Count repositories before writing anything to the mirror. Publishing an
+# incomplete blob is worse than publishing none: the node-side `creates:`
+# guard would treat it as done and the grid would fail 12 containers deep.
+REPO_DIR="${BUILD}/store/docker/registry/v2/repositories/security-onion-solutions"
+repos=$(ls "$REPO_DIR" 2>/dev/null | wc -l)
+echo "=== 4/4 registry holds ${repos} repositories (expect {{ so_registry_min_repos }}) ==="
+if [ "$repos" -lt "{{ so_registry_min_repos }}" ]; then
+  echo "BUILD_FAIL: only ${repos} repositories, expected {{ so_registry_min_repos }}"
+  exit 1
+fi
+
+# .part then mv: a partial tar must never satisfy the idempotency check.
+tar cf "${MIRROR}/{{ so_registry_tar_name }}.part" -C "${BUILD}/store/docker" registry
+mv "${MIRROR}/{{ so_registry_tar_name }}.part" "${MIRROR}/{{ so_registry_tar_name }}"
+cp "${BUILD}/registry_image.tar" "${MIRROR}/{{ so_registry_image_tar_name }}.part"
+mv "${MIRROR}/{{ so_registry_image_tar_name }}.part" "${MIRROR}/{{ so_registry_image_tar_name }}"
+chown www-data:www-data "${MIRROR}/{{ so_registry_tar_name }}" "${MIRROR}/{{ so_registry_image_tar_name }}"
+chmod 0644 "${MIRROR}/{{ so_registry_tar_name }}" "${MIRROR}/{{ so_registry_image_tar_name }}"
+
+# Checksums are published LAST, and they are the completion signal the node
+# side waits on. Two jobs:
+#   1. Presence of the .sha256 means the tar beside it is finished.
+#   2. The node verifies its DOWNLOAD against it. On 2026-09-08 ss-pp-so
+#      pulled 2.1 / 3.0 / 4.3 GB of this 7.2 GB file on three attempts --
+#      every one a clean ~30-minute cutoff -- and get_url reported success
+#      each time because the connection closed normally. Only a checksum
+#      distinguishes "transfer finished" from "transfer stopped".
+for f in "{{ so_registry_tar_name }}" "{{ so_registry_image_tar_name }}"; do
+  sha256sum "${MIRROR}/${f}" | awk '{print $1}' > "${MIRROR}/${f}.sha256.part"
+  mv "${MIRROR}/${f}.sha256.part" "${MIRROR}/${f}.sha256"
+  chown www-data:www-data "${MIRROR}/${f}.sha256"
+  chmod 0644 "${MIRROR}/${f}.sha256"
+done
+
+rm -rf "$BUILD"
+echo "BUILD_OK repositories=${repos} $(date -Is)"
+ls -lh "${MIRROR}/{{ so_registry_tar_name }}" "${MIRROR}/{{ so_registry_image_tar_name }}"

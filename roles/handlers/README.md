@@ -25,14 +25,6 @@ None - handlers use variables from the calling roles when needed.
 | Restart NetworkManager | NetworkManager | Linux | Restarts network management service |
 | Restart squid | squid | Linux | Restarts Squid proxy service with enable |
 | Restart apache2 | apache2 | Linux | Restarts Apache web server with enable |
-| Restart Splunk Service | splunk | Linux | Restarts Splunk service |
-
-### Splunk-Specific Handlers
-
-| Handler Name | Description |
-|--------------|-------------|
-| Initialize Splunk | Enables boot-start, accepts license, sets admin password |
-| Start Splunk After Installing and Initializing | Starts Splunk service after initial setup |
 
 ## Usage
 

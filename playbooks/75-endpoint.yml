@@ -12,12 +12,6 @@
 # fast land in Elasticsearch ahead of the sensor data and make correlation
 # meaningless. site.yml orders it that way.
 #
-# NOTE ON SPLUNK: these hosts already run the Splunk universal forwarder to
-# soc-splunk. Elastic Agent is ADDITIVE, not a replacement -- this branch
-# keeps endpoint telemetry in both stacks. The SO grid itself is excluded
-# from the Splunk rollout (site.yml, `linux:!splunk:!so_all`), not the other
-# way round.
-#
 # NO SYSMON INSTALL PLAY HERE, unlike PowerPlant's version of this file.
 # site.yml already ends with "Sysmon — Windows endpoint telemetry" scoped to
 # `hosts: windows`, so every Windows host in the range has it before this
@@ -62,9 +56,8 @@
 # https://<manager>/packages/, but that path returned 503 on PowerPlant's
 # grid, and pointing 69 hosts at the manager would have it serving ~14 GB
 # while it is also ingesting from four sensors. The controller already runs
-# nginx for so_apt_mirror, and endpoints already fetch Chrome, Sysmon and the
-# Splunk forwarder over the mgmt plane -- this is the delivery path they
-# already use.
+# nginx for so_apt_mirror, and endpoints already fetch Chrome and Sysmon over
+# the mgmt plane -- this is the delivery path they already use.
 - name: Stage the Elastic Agent installers on the controller mirror
   hosts: ansible_controller
   # NO play-level become. Nothing here needs root: so_apt_mirror creates the

@@ -90,7 +90,7 @@
 
       Without it the sensor forwards mirrored traffic, SO's FORWARD reject
       fires, and the sensor emits ICMP unreachables to hosts across the range
-      from its own prod IP -- telling workstations that Splunk and the DCs are
+      from its own prod IP -- telling workstations that the DCs are
       unreachable. A passive sensor must not generate traffic.
 
       Re-derive the anchor from the current template and update

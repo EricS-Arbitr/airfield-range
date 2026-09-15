@@ -1,7 +1,7 @@
 # Syslog Server Role
 
 ## Description
-Configures a Linux host as the range's central rsyslog collector. Installs rsyslog (no-op on Ubuntu Desktop/Server, which ship with it), opens UDP **and** TCP port 514, and writes incoming messages to per-host files at `/var/log/remote/<hostname>/syslog.log`. Local rsyslog/journald messages keep their normal `/var/log/syslog` path; only remote events land under `/var/log/remote/`, so the Splunk Universal Forwarder on the same host can tail that tree with correct `host=` attribution via the `lin_inputs.conf.j2` overlay's `host_segment = 4` stanza (see `roles/splunk-forwarder/templates/lin_inputs.conf.j2`).
+Configures a Linux host as the range's central rsyslog collector. Installs rsyslog (no-op on Ubuntu Desktop/Server, which ship with it), opens UDP **and** TCP port 514, and writes incoming messages to per-host files at `/var/log/remote/<hostname>/syslog.log`. Local rsyslog/journald messages keep their normal `/var/log/syslog` path; only remote events land under `/var/log/remote/`, so the Elastic Agent on the same host can tail that tree with correct `host=` attribution, reading the directory name as the host field.
 
 ## Variable Definition Location
 Variables for this role are defined in:
@@ -25,12 +25,12 @@ This role does not currently expose tunables. If you need to change the listen p
 ## Prerequisites
 - The host runs Ubuntu (`apt`-managed). The Linux NM pre-config play and `common` role run before this one.
 - Network reachability from every sender to `syslog_server_ip:514` is in place — verified end-to-end during the routing fixes (corp/DMZ/OT all reach the PP-Services subnet that pp-syslog lives on).
-- The host is a member of `[splunk-forwarder]` (transitively via `[corporate_servers]` for pp-syslog) so the Splunk UF picks up the `/var/log/remote/` tree and ships events to pp-splunk.
+- The host is enrolled into Security Onion's Fleet by `playbooks/75-endpoint.yml`, and `playbooks/76-syslog.yml` adds the filestream input over the `/var/log/remote/` tree.
 
 ## Notes
 - Listens on **both** UDP and TCP 514. UDP matches pfSense/VyOS defaults; TCP is available for any client configured to send over TCP. Most clients in this range use UDP for simplicity.
 - The rsyslog filter (`if $fromhost-ip != '127.0.0.1' then { ... stop }`) ensures remote events land **only** in `/var/log/remote/<hostname>/syslog.log` and don't also flow into `/var/log/syslog` on the collector. Local kernel/cron/etc. messages keep their normal path because they originate from `127.0.0.1`.
-- Per-host directory layout is intentional: Splunk UF's `host_segment = 4` reads the directory name as the `host=` field, so events show up under the **sender** (e.g., `pp-internal-router`, `pp-ot-firewall`) rather than under pp-syslog.
+- Per-host directory layout is intentional: the shipper reads the directory name as the `host=` field, so events show up under the **sender** (e.g. `bs-core-rtr`, `bs-ops-fw`) rather than under the collector.
 - File mode is `0640` (group `adm`), directory mode `0755`, owner `syslog:adm` — matches Ubuntu's stock log layout.
 - Idempotent — re-runs only restart rsyslog if `30-remote.conf` content changed (handler `restart rsyslog`).
 - pp-isp-router is explicitly excluded from the VyOS client play (`hosts: vyos:vyos_routes_only:!pp-isp-router`) because it represents the upstream ISP; sending its logs into the corp SIEM would break scenario fiction.

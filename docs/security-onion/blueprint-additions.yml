@@ -16,7 +16,7 @@
 # -------------------------------------------------------------------------
 # soc-elastic already exists at 172.31.7.15 (mgmt 10.255.240.131), reserved in
 # the inventory as "future Elastic / Security Onion stack" and deliberately
-# left without splunk-forwarder. It becomes the SO MANAGER.
+# left without an endpoint agent. It becomes the SO MANAGER.
 #
 # ** ITS IMAGE MUST CHANGE. ** It is currently
 # global/RDP_Ubuntu_Server_24.04:1.1.0 (noble). Security Onion 2.4 at our
@@ -138,8 +138,8 @@
 # =========================================================================
 # SOC subnet 172.31.7.0/24 currently in use:
 #   .1 bs-sec-rtr   .13 soc-syslog  .15 soc-elastic  .16 soc-openvas
-#   .19 soc-splunk  .31-.36 soc-analyst01-06
-# .20-.24 are free and contiguous.
+#   .31-.36 soc-analyst01-06
+# .19-.24 are free and contiguous.
 #
 # Management: this range uses a contiguous block 10.255.240.100-.181 (82
 # hosts). New allocations continue at .182-.186 rather than backfilling low

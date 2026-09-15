@@ -12,7 +12,7 @@ module(load="imtcp")
 input(type="imtcp" port="514")
 
 # Per-host file template for sources whose syslog messages DO include
-# a HOSTNAME field (VyOS routers, Linux hosts). The Splunk UF on this
+# a HOSTNAME field (VyOS routers, Linux hosts). The log shipper on this
 # same host uses the directory name as the host= field.
 template(
   name="RemoteHostFile"

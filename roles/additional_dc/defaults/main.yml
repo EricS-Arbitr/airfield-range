@@ -1,0 +1,9 @@
+---
+# How long to wait for a domain controller to become locatable before giving
+# up. 40 x 15s = 10 minutes.
+#
+# A DC on the far side of the range has strictly more to wait for than one
+# sitting beside the PDC -- routing, firewall rules and the PDC's own AD zone
+# all have to be up first. Its DNS is correctly configured; the path simply
+# is not ready yet when the play reaches it.
+additional_dc_locate_retries: 40

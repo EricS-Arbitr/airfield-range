@@ -12,6 +12,67 @@ Severity key:
 
 Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Symptom → Detection (if non-obvious) → Fix (upstream) → Workaround (overlay).
 
+---
+
+## 2026-09-15 · bug · Security Onion `so-setup` — seeds its container registry from ghcr.io
+
+**Symptom.** Every container except `so-dockerregistry` stays `missing` and `so-status` never goes green. The local registry store at `/nsm/docker-registry/docker/registry/v2/repositories/security-onion-solutions` is empty or short.
+
+**Root cause.** `so-setup`'s `docker_seed_registry()` pulls 22 images straight from `ghcr.io` on the manager. That made the SO nodes the only hosts in the range reaching the internet themselves — every other artifact class already came from the controller's nginx mirror. Worse, `so-setup` DELETES `/etc/systemd/system/docker.service.d/` on its reinstall path, so the docker proxy drop-in `so_base` writes is gone by the time seeding runs; docker falls back to direct DNS, hits an in-range DC that cannot resolve `ghcr.io`, and every pull 404s. Observed on ss-pp-stacked 2026-09-05: registry left at 8.0K / 0 repositories, and because `setup-completed` had already been written the next two attempts SKIPPED `so-setup` entirely.
+
+**Fix (overlay).** Use the mechanism `so-setup` already checks before any network call — the airgap-ISO path. The controller builds `registry.tar` + `registry_image.tar` with skopeo and serves them from the mirror (`roles/so_apt_mirror/tasks/registry_content.yml`, `templates/build_so_registry.sh.j2`); the manager stages them into `/nsm/docker-registry/docker/` before `so-setup` runs (`roles/so_manager/tasks/registry_seed.yml`). In-play systems now have zero internet dependency for images; the controller is the only host that reaches ghcr.io, and only to BUILD.
+
+**Fix (upstream).** `so-setup` should accept a registry mirror URL rather than hardcoding ghcr.io, and should not delete the docker drop-in directory on reinstall.
+
+---
+
+## 2026-09-15 · bug · `so-setup` writes its completion marker before the registry is proven
+
+**Symptom.** A deploy attempt that left the registry empty still wrote `setup-completed`, so the next two `deploy.sh` attempts skipped the 45-90 minute install and went straight to a 30-minute `so-status` wait they could never pass. 7h22m across three attempts, never retrying the one step that was broken.
+
+**Root cause.** The skip decision asserted the marker and a Salt install. Both can be true with an empty registry — neither is the outcome the next step depends on.
+
+**Fix (overlay).** `roles/so_manager/tasks/main.yml` now probes the registry repository count and folds it into `so_setup_can_skip`, and after `so-setup` returns it verifies the count against `so_registry_min_repos` and fails closed WITHOUT writing the marker — so the next attempt redoes the install rather than skipping it.
+
+---
+
+## 2026-09-15 · bug · `verify_vars.py` — could not see `group_vars/all/`
+
+**Symptom.** 96 "referenced but not defined" warnings, most of them false. Every variable defined under `group_vars/all/` read as undefined.
+
+**Detection.** Porting the Security Onion registry variables added 13 new warnings for variables that were demonstrably defined and loadable.
+
+**Root cause.** Three parser defects, all fixed in `PowerPlant/ss-pp-so` and not yet carried across: `collect_defined()` used a non-recursive `glob("*.yml")` so it walked straight past the `group_vars/all/` DIRECTORY; the `set_fact` pattern did not accept the `ansible.builtin.` FQCN prefix; and the `vars:` block regex was greedy enough to swallow the whole `tasks:` section. A checker with known-bogus warnings trains you to skim past the real ones.
+
+**Fix (overlay).** Re-copied `verify_vars.py` from `PowerPlant/ss-pp-so` wholesale. It is range-agnostic (takes a stage directory argument) and additionally adds ROLE-SCOPE checking — role defaults are role-scoped, and a play referencing one without including that role fails at run time. Warnings dropped 96 → 4, and the 4 survivors are genuine pre-existing items worth review: `dns_zone_replication`, `nat`, `out`, `pfsense_stale_gateways`.
+
+---
+
+## 2026-09-15 · bug · Ubuntu unattended-upgrades holds the dpkg lock at first boot
+
+**Symptom.** Every apt task fails outright on a fresh controller; `deploy.sh`'s three attempts fire seconds apart and all three lose the same race.
+
+**Fix (overlay).** `so_apt_mirror` and `so_base` wait for `/var/lib/dpkg/lock-frontend` to clear (60 x 10s), and `so_apt_mirror` masks the `apt-daily` timers plus the `unattended-upgrades` service and writes `20auto-upgrades` 0/0. The RUNNING job is deliberately never stopped — killing it mid-transaction risks a half-configured dpkg, which is worse than the lock contention it would fix.
+
+---
+
+## 2026-09-15 · bug · `additional_dc` retried promotion against an unchecked precondition
+
+**Symptom.** Promotion fails with "a domain controller could not be contacted", AFTER the DNS Server role is installed — leaving a zone-less DNS server that answers every query with SERVFAIL, which is worse than the host being down.
+
+**Fix (overlay).** `roles/additional_dc` now asserts the precondition first: it waits (40 x 15s) for `_ldap._tcp.dc._msdcs.<domain>` to resolve and fails BEFORE promotion is attempted, so no zone-less DNS server is ever created.
+
+---
+
+## 2026-09-15 · bug · VyOS image ships a console device that is not a tty
+
+**Symptom.** `serial-getty@ttyS0` restart-loops forever — one cycle per ~10s, roughly 200,000 junk messages a day into the central syslog store, burying real VyOS signal.
+
+**Root cause.** The image ships `set system console device ttyS0 speed '115200'` but `/dev/ttyS0` is not a working tty on these VMs, so agetty exits with "not a tty" and systemd restarts it.
+
+**Fix (overlay).** A play in `site.yml` deletes the console in CONFIG (not `systemctl mask` — VyOS regenerates unit state from its own configuration, so a mask is undone by the next commit) and stops the flapping getty so the fix takes effect without a reboot. Guarded by a check first, because VyOS errors on deleting an absent node.
+
+
 **Historical domain names:** entries dated before 2026-07-02 reference `vcab.lan` / `flightops.lan` and OU groups `pdc_vcab` / `pdc_flightops` / `members_vcab` / `members_flightops` — these were **renamed to `blackstone.mil` / `fops.blackstone.mil` / `pdc_blackstone` / `pdc_fops` / `members_blackstone` / `members_fops` in the Blackstone rebrand on 2026-07-02** (see `[[project_blackstone_rebrand]]` memory). The technical content of every pre-rebrand entry still applies; only the domain/group labels changed. Don't edit those entries retroactively — the labels are preserved as historical fact.
 
 ---

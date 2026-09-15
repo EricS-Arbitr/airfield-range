@@ -168,12 +168,28 @@
     path: "{{ so_manager_setup_marker }}"
   register: so_setup_marker_stat
 
+# The marker and Salt together are still not proof. On ss-pp-stacked
+# 2026-09-05 so-setup exited 0 with Salt installed and an EMPTY registry:
+# the marker was written, and the next two attempts skipped the 45-90 min
+# install and went straight to a 30-minute so-status wait they could never
+# pass. Three probes, none sufficient alone -- assert the OUTCOME the next
+# step depends on, which is images in the local store.
+- name: Probe the local container registry store
+  ansible.builtin.shell: |
+    d=/nsm/docker-registry/docker/registry/v2/repositories/security-onion-solutions
+    if [ -d "$d" ]; then ls "$d" | wc -l; else echo 0; fi
+  args:
+    executable: /bin/bash
+  register: so_registry_probe
+  changed_when: false
+
 - name: Decide whether the 45-90 min so-setup call can be skipped
   ansible.builtin.set_fact:
     so_setup_can_skip: >-
       {{ so_setup_marker_stat.stat.exists
          and salt_minion_present.stat.exists
-         and 'salt-minion.service' in salt_unit_probe.stdout }}
+         and 'salt-minion.service' in salt_unit_probe.stdout
+         and (so_registry_probe.stdout | trim | int) >= (so_registry_min_repos | int) }}
 
 - name: Report so-setup skip decision
   ansible.builtin.debug:
@@ -181,7 +197,14 @@
       so-setup {{ 'SKIPPED (marker + Salt both present)' if so_setup_can_skip
       else 'WILL RUN' }} — marker={{ so_setup_marker_stat.stat.exists }},
       minion={{ salt_minion_present.stat.exists }},
-      unit={{ 'salt-minion.service' in salt_unit_probe.stdout }}
+      unit={{ 'salt-minion.service' in salt_unit_probe.stdout }},
+      registry_repos={{ so_registry_probe.stdout | trim }}/{{ so_registry_min_repos }}
+
+# MUST be the last thing before so-setup. so-setup decides whether to reach
+# for ghcr.io by looking for these files; staging them afterwards is useless.
+- name: Stage container images so so-setup seeds locally, not from ghcr.io
+  ansible.builtin.include_tasks: registry_seed.yml
+  when: not so_setup_can_skip
 
 - name: Kick off so-setup network (long-running, backgrounded)
   ansible.builtin.shell: |
@@ -293,6 +316,37 @@
   when:
     - not so_setup_can_skip
     - not salt_minion_after.stat.exists
+
+- name: Verify the container registry was actually seeded
+  ansible.builtin.shell: |
+    d=/nsm/docker-registry/docker/registry/v2/repositories/security-onion-solutions
+    if [ -d "$d" ]; then ls "$d" | wc -l; else echo 0; fi
+  args:
+    executable: /bin/bash
+  register: so_registry_after
+  changed_when: false
+  when: not so_setup_can_skip
+
+- name: Fail if so-setup left the registry empty or short
+  ansible.builtin.fail:
+    msg: |
+      so-setup finished on {{ inventory_hostname }} but the local container
+      registry holds {{ so_registry_after.stdout | trim }} repositories,
+      expected at least {{ so_registry_min_repos }}.
+
+      Every container except so-dockerregistry will stay `missing` and
+      so-status can never go green. Check, in order:
+        1. /nsm/docker-registry/docker/registry.tar was staged before
+           so-setup ran (registry_seed.yml) and was ~7.2 GB.
+        2. {{ so_mirror_url }}/so-source/{{ so_registry_tar_name }} is
+           served by the controller's mirror.
+        3. grep -i registry {{ so_manager_setup_log }} for the seeding step.
+
+      Deliberately NOT writing {{ so_manager_setup_marker }}, so the next
+      deploy.sh attempt will redo the install rather than skip it.
+  when:
+    - not so_setup_can_skip
+    - (so_registry_after.stdout | trim | int) < (so_registry_min_repos | int)
 
 # Record that SO-SETUP ITSELF is done, as early as it is safe to — right
 # after Salt is confirmed, BEFORE the reboot and the 5-15 min so-status

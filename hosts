@@ -204,14 +204,7 @@ soc-sensor-corp
 soc-sensor-fops
 soc-sensor-ot
 soc-sensor-edge
-soc-splunk
 soc-syslog
-
-# Splunk indexer + search head (base splunk role from PowerPlant).
-# soc-splunk runs Splunk Enterprise Core; UFs ship to 172.31.7.19:9997.
-# See project memory `siem-choice`.
-[splunk]
-soc-splunk
 
 # ------------------------------------------------------------
 # Hosts that must NOT receive an endpoint agent
@@ -578,7 +571,6 @@ atc-weather
 fops-app01
 fops-app02
 fops-app03
-soc-splunk
 bs-proxy
 # Security Onion grid — Ubuntu Desktop 22.04.5. SO 2.4 at our pinned SHA
 # refuses noble outright (so-setup exits before Ansible gets a say) and only
@@ -616,7 +608,6 @@ ubuntu25
 atc-station
 bs-ro-hist
 soc-openvas
-soc-splunk
 bs-proxy
 bs-eng05
 bs-eng06
@@ -639,15 +630,13 @@ fops-wec01
 [syslog]
 soc-syslog
 
-# SIEM hosts have their own purpose-specific groups: [splunk] for Splunk
-# (soc-splunk) and [so_all] for the Security Onion grid. A generic [siem]
-# umbrella group is intentionally NOT defined -- it was previously used as a
-# forwarder exclusion ("hosts: linux:!siem"), which silently changes meaning
-# every time a host joins it. Forwarder plays use `linux:!splunk:!so_all`.
+# The Security Onion grid has its own purpose-specific group, [so_all]. A
+# generic [siem] umbrella group is intentionally NOT defined: used as a host
+# exclusion ("hosts: linux:!siem") it silently changes meaning every time a
+# host joins it. Plays name [so_all] directly instead.
 #
 # [so_all] is the right exclusion, not just the manager: SO owns /opt/so and
-# runs its own Elastic Agent on every grid node. A Splunk UF on a sensor
-# would double-ship the same logs and fight SO's log rotation.
+# runs its own Elastic Agent on every grid node.
 
 # Forensic / hunt tooling (do NOT receive baseline OS roles)
 [hunt]

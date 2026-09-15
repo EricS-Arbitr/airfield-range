@@ -317,67 +317,14 @@ for fw in bs-edge-fw bs-ops-fw; do
 done
 
 # =========================================================================
-# 6. SOC tier — Splunk SIEM
+# 6. SOC tier — endpoint telemetry
 # =========================================================================
-section "6. SOC tier — Splunk SIEM"
-
-# Indexer service active and listening on receiver (9997) + web (8000) + REST (8089).
-# Pattern: emit a sentinel from the remote shell then grep for it -- avoids
-# the trap where `ss` multi-line output is joined with literal "\n" in
-# ansible's --one-line format, defeating ^/$ anchors in the controller regex.
-check_pf_shell soc-splunk \
-  'systemctl is-active splunk' \
-  'active' \
-  "soc-splunk Splunk indexer service active"
-
-check_pf_shell soc-splunk \
-  'ss -lnt | grep -qE ":9997\\b" && echo OK_9997 || echo MISSING_9997' \
-  'OK_9997' \
-  "soc-splunk listening on :9997 (receiver — UF target)"
-
-check_pf_shell soc-splunk \
-  'ss -lnt | grep -qE ":8000\\b" && echo OK_8000 || echo MISSING_8000' \
-  'OK_8000' \
-  "soc-splunk listening on :8000 (Splunk Web)"
-
-# soc-syslog forwarder up + has an ESTABLISHED conn to the indexer on 9997.
-# Catches "service running but indexer unreachable" silently-broken state.
-check_pf_shell soc-syslog \
-  'systemctl is-active SplunkForwarder' \
-  'active' \
-  "soc-syslog SplunkForwarder service active"
-
-check_pf_shell soc-syslog \
-  'c=$(ss -ant | grep "172.31.7.19:9997" | grep -c ESTAB); [ "$c" -ge 1 ] && echo OK_ESTAB || echo NO_ESTAB' \
-  'OK_ESTAB' \
-  "soc-syslog UF has ESTABLISHED connection to indexer :9997"
-
-# Total forwarder count on soc-splunk. Expected ≥ 30 once the Windows UF
-# rollout is done (Linux UFs alone give us ~10; Windows UFs push us to
-# 50+). Threshold set at 30 to prove Windows UF landed successfully.
-# LOW_UFS_<n> below 30 usually means the Windows UF play never ran or the
-# MSI install failed on most hosts.
-check_pf_shell soc-splunk \
-  'c=$(ss -ant | grep ":9997 " | grep -c ESTAB); [ "$c" -ge 30 ] && echo "OK_UFS_$c" || echo "LOW_UFS_$c"' \
-  'OK_UFS_' \
-  "soc-splunk: ≥ 30 UFs ESTABLISHED on :9997 (Linux + Windows rollout done)"
-
-# Windows UF service spot checks — one per domain. Catches "MSI installed
-# but service failed to start" which the ESTAB count wouldn't distinguish
-# from "host offline."
-check_ps bs-hq01 \
-  '(Get-Service SplunkForwarder -ErrorAction SilentlyContinue).Status' \
-  '\(stdout\)[[:space:]]+Running' \
-  "bs-hq01 (blackstone): SplunkForwarder service running"
-
-check_ps fops-ops01 \
-  '(Get-Service SplunkForwarder -ErrorAction SilentlyContinue).Status' \
-  '\(stdout\)[[:space:]]+Running' \
-  "fops-ops01 (fops): SplunkForwarder service running"
+section "6. SOC tier — endpoint telemetry"
 
 # Sysmon service spot checks — proves the sysmon role landed the config +
-# started Sysmon64 service. Sysmon events land in index=sysmon via the UF's
-# templates/inputs.conf Microsoft-Windows-Sysmon/Operational stanza.
+# started Sysmon64 service. Sysmon events reach Security Onion via the
+# Elastic Agent enrolled by playbooks/75-endpoint.yml, which reads the
+# Microsoft-Windows-Sysmon/Operational channel.
 check_ps bs-hq01 \
   '(Get-Service Sysmon64 -ErrorAction SilentlyContinue).Status' \
   '\(stdout\)[[:space:]]+Running' \

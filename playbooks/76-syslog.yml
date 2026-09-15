@@ -3,10 +3,8 @@
 # 76-syslog.yml — central syslog into Security Onion
 # =========================================================================
 # soc-syslog collects syslog from the VyOS routers, both pfSense firewalls
-# and every Linux host, and writes /var/log/remote/<device>/syslog.log. A
-# Splunk UF on that host already tails those files. This phase points SO's
-# Elastic Agent at the SAME files, so both SIEMs read one source of truth and
-# neither depends on the other.
+# and every Linux host, and writes /var/log/remote/<device>/syslog.log. This
+# phase points SO's Elastic Agent at those files.
 #
 # RUNS AFTER 75-endpoint, and that ordering is a hard requirement: everything
 # below operates on an agent that phase 75 enrolled. Running this first fails
@@ -392,8 +390,8 @@
         msg: >-
           {{ so_syslog_host }} is on policy {{ so_syslog_policy_name }} with a
           filestream input over {{ so_syslog_paths | join(', ') }} into
-          dataset {{ so_syslog_dataset }}. Splunk still tails the same files
-          independently. DATA ARRIVAL IS A SEPARATE CLAIM — see the next play.
+          dataset {{ so_syslog_dataset }}.
+          DATA ARRIVAL IS A SEPARATE CLAIM — see the next play.
   tags: [so, syslog]
 
 # --- Did anything actually arrive? ----------------------------------------

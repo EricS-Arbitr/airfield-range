@@ -17,6 +17,67 @@
 # pre-approve minion IDs via `salt-key -y -a <minion_id>`.
 # =========================================================================
 
+- name: Wait for the controller's container-image artifacts
+  hosts: ansible_controller
+  become: true
+  gather_facts: false
+  tags:
+    - so
+    - so_manager
+  tasks:
+    - name: Poll for the registry artifacts (build may still be running)
+      ansible.builtin.shell: |
+        # Wait on the CHECKSUMS, not the tars. The build publishes them
+        # last, after the tars are already moved into place, so a .sha256
+        # existing proves the artifact beside it is complete. Waiting on the
+        # tar itself would only prove a file had been created.
+        tar={{ so_mirror_root }}/so-source/{{ so_registry_tar_name }}.sha256
+        img={{ so_mirror_root }}/so-source/{{ so_registry_image_tar_name }}.sha256
+        if [ -f "$tar" ] && [ -f "$img" ]; then echo REGISTRY_READY; exit 0; fi
+        # Fail fast instead of burning the full retry budget on a dead build.
+        if grep -q BUILD_FAIL {{ so_registry_build_log }} 2>/dev/null; then
+          echo REGISTRY_FAILED; exit 0
+        fi
+        echo REGISTRY_BUILDING
+      args:
+        executable: /bin/bash
+      register: so_registry_wait
+      until: "'REGISTRY_BUILDING' not in so_registry_wait.stdout"
+      retries: 120          # 120 x 30s = 60 min, matching the build ceiling
+      delay: 30
+      changed_when: false
+
+    - name: Fail if the controller could not produce the artifacts
+      ansible.builtin.fail:
+        msg: |
+          The container-image build did not produce
+          {{ so_registry_tar_name }} on the controller.
+
+          Log tail ({{ so_registry_build_log }}):
+          {{ lookup('ansible.builtin.pipe', 'tail -20 ' ~ so_registry_build_log
+                    ~ ' 2>/dev/null || echo "<log unreadable>"') }}
+
+          so_manager cannot seed the manager's registry without it, and
+          so-setup would fall back to ghcr.io -- which is exactly the
+          dependency this mechanism removes. Fix the controller's egress or
+          set so_registry_artifact_url to a Nexus path.
+      when: "'REGISTRY_READY' not in so_registry_wait.stdout"
+
+    # Proof they are SERVED, not merely present. A file nginx will not hand
+    # out is not a working mirror -- the SO nodes fetch over HTTP.
+    - name: Prove both artifacts are served over HTTP
+      ansible.builtin.uri:
+        url: "{{ so_mirror_url }}/so-source/{{ item }}"
+        method: HEAD
+        status_code: 200
+      loop:
+        - "{{ so_registry_tar_name }}"
+        - "{{ so_registry_image_tar_name }}"
+        - "{{ so_registry_tar_name }}.sha256"
+        - "{{ so_registry_image_tar_name }}.sha256"
+      loop_control:
+        label: "{{ item }}"
+
 - name: SO Manager install (distributed-airgap-manager)
   hosts: so_manager
   become: true
