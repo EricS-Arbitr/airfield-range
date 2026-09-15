@@ -14,6 +14,22 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-15 · bug · site.yml "Bootstrap simspace as fops.blackstone.mil Domain Admin" — raced ADWS on the freshly promoted child DC
+
+**Symptom.** `Create simspace in the child domain` failed on bs-dc01 with `Get-ADUser : Unable to contact the server. This may be because this server does not exist, it is currently down, or it does not have the Active Directory Web Services running.` fops-dc01 had completed its own promotion play clean in the same run (`ok=27, failed=0`).
+
+**Root cause.** `Get-ADUser` and `Get-ADDomain` do not speak LDAP — they talk to Active Directory Web Services on TCP 9389. ADWS starts AFTER AD DS on a freshly promoted DC, and after its post-promotion reboot. There is a window of minutes where the child DC is promoted, DNS resolves it and LDAP answers while ADWS still does not. The task had no wait and no retry: it assumed the child domain was serving the instant the play reached it.
+
+**Why it cost the whole range.** bs-dc01 is the sole member of `[pdc_blackstone]`. When this task failed, bs-dc01 was marked failed and dropped from every subsequent play — `Create Users` (hosts: pdc), `dns`, and BOTH domain joins all target it. One transient race took out the forest root, and nothing downstream of AD could be built. The run got no further than the range baseline; the Security Onion phases never started.
+
+**Fix (overlay).** A preflight gate ahead of the create step, same shape as `additional_dc`'s locatable-DC gate: retry `Get-ADDomain -Server <child>` until it answers (40 x 15s = 10 min), then fail with the reason if it never does. The probe deliberately uses Get-ADDomain rather than a TCP check on 9389 — it exercises the same ADWS path, the same credential and the same `-Server` target the create step uses, so a pass means the precondition actually holds rather than merely resembling it.
+
+**Fix (upstream).** Anything that promotes a DC and then immediately uses an AD cmdlet against it needs this gate; promotion returning success is not the same as the domain being serviceable.
+
+---
+
+---
+
 ## 2026-09-15 · bug · Init play — `any_errors_fatal: true` turned 4 unreachable hosts into 48
 
 **Symptom.** A fresh airfield-range deploy built the Linux side and the whole Security Onion grid, then failed 4.5 hours later at `75-endpoint`'s Fleet coverage check with all 48 Windows hosts missing. The recap showed 44 of them at `ok=2, changed=0, skipped=0, failed=0, unreachable=0` — they had completed init's two tasks and then been offered nothing else for the rest of the run. Four hosts showed `ok=1, unreachable=1`.

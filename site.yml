@@ -683,7 +683,72 @@
     # (parent) and are stable for the project.
     bootstrap_child_domain: "fops.blackstone.mil"
     bootstrap_parent_domain: "blackstone.mil"
+    # 40 x 15s = 10 minutes. ADWS on a freshly promoted child DC is usually up
+    # within two or three; ten leaves room for a slow post-promotion reboot
+    # without letting a genuinely broken child domain hang the deploy.
+    bootstrap_child_adws_retries: 40
   tasks:
+    # ADWS, NOT AD DS -- and that distinction is the whole bug.
+    #
+    # Get-ADUser / Get-ADDomain do not speak LDAP. They talk to Active
+    # Directory Web Services on TCP 9389, which starts AFTER AD DS on a
+    # freshly promoted DC and after its post-promotion reboot. So there is a
+    # window -- minutes, not seconds -- where fops-dc01 is promoted, DNS
+    # resolves it, LDAP answers, and ADWS still does not. The failure names it
+    # exactly: "...or it does not have the Active Directory Web Services
+    # running." Observed on airfield 2026-09-15: fops-dc01 finished its own
+    # play clean (ok=27, failed=0) and this task failed against it 
+    # seconds later.
+    #
+    # THE COST OF NOT GATING THIS IS THE WHOLE RANGE. bs-dc01 is the sole
+    # member of [pdc_blackstone]. When this task fails, bs-dc01 is marked
+    # failed and dropped from every later play -- Create Users, dns, and BOTH
+    # domain joins all target it. One transient race takes out the forest root
+    # and nothing downstream of AD can be built.
+    #
+    # Probe with Get-ADDomain rather than a port check on 9389: it exercises
+    # the same ADWS path, the same credential and the same -Server target the
+    # create step uses, so a pass here means the next task's precondition
+    # actually holds rather than merely resembling it.
+    - name: Preflight — the child domain answers ADWS
+      ansible.windows.win_shell: |
+        $sec = ConvertTo-SecureString "{{ domain_admin_password }}" -AsPlainText -Force
+        $cred = New-Object System.Management.Automation.PSCredential(
+                  "{{ bootstrap_parent_domain }}\Administrator", $sec)
+        try {
+          $d = Get-ADDomain -Server "{{ bootstrap_child_domain }}" `
+                            -Credential $cred -ErrorAction Stop
+          if ($d.DNSRoot) { "CHILD_ADWS_READY" } else { "CHILD_ADWS_NOT_READY" }
+        } catch { "CHILD_ADWS_NOT_READY" }
+      register: child_adws
+      until: "'CHILD_ADWS_READY' in (child_adws.stdout | default(''))"
+      retries: "{{ bootstrap_child_adws_retries }}"
+      delay: 15
+      changed_when: false
+      failed_when: false
+
+    # Fail HERE, with the reason, rather than inside the create step. Same
+    # shape as additional_dc's locatable-DC gate: assert the precondition the
+    # next task depends on, and say what to check when it does not hold.
+    - name: Fail if the child domain never answered ADWS
+      ansible.builtin.fail:
+        msg: |
+          {{ bootstrap_child_domain }} did not answer Active Directory Web
+          Services from {{ inventory_hostname }} after
+          {{ (bootstrap_child_adws_retries | int) * 15 }}s.
+
+          simspace has NOT been created in the child domain, so anything that
+          authenticates as {{ bootstrap_child_domain }}\simspace will fail.
+
+          Check, in order:
+            1. the ADWS service on the child PDC:
+                 Get-Service ADWS      (should be Running)
+            2. that this host resolves the child domain:
+                 Resolve-DnsName _ldap._tcp.dc._msdcs.{{ bootstrap_child_domain }} -Type SRV
+            3. that the child PDC finished promotion and rebooted -- a DC that
+               is still mid-promotion answers DNS but not ADWS
+      when: "'CHILD_ADWS_READY' not in (child_adws.stdout | default(''))"
+
     - name: Create simspace in the child domain
       ansible.windows.win_shell: |
         $sec = ConvertTo-SecureString "{{ domain_admin_password }}" -AsPlainText -Force
