@@ -42,12 +42,52 @@
     - init
     - dcpromo_child_heal
 
+# NO any_errors_fatal HERE, AND THAT IS THE POINT.
+#
+# It was `true` until 2026-09-15. Under that flag, one unreachable host does
+# not fail alone: Ansible marks EVERY host in the play failed, aborts the play,
+# and drops all of them from every later play. Measured on this range that day
+# -- four Windows hosts (bs-hq02, bs-hq04, bs-hq05, bs-it01) never finished
+# booting inside init's wait, and all 48 Windows hosts left the deploy. 44 of
+# them were healthy. The range built Linux-only and failed 4.5 hours later at
+# the Fleet coverage check, having never attempted a single Windows task.
+# Four slow hosts, forty-eight casualties.
+#
+# Unreachable hosts now fall out INDIVIDUALLY. The report below names them the
+# moment init finishes, so the failure is visible in minutes rather than at the
+# end of the run. The deploy deliberately CONTINUES: every reachable host still
+# gets built, and the end-of-run coverage assertions (playbooks/75-endpoint.yml
+# "Fail if any agent target is absent from Fleet") remain the hard gate. A
+# deploy with missing hosts still fails -- it just fails having done all the
+# work it could, which is what makes the retry cheap.
 - name: Init
   hosts: windows
   gather_facts: false
-  any_errors_fatal: true
   roles:
     - init
+  tasks:
+    # ansible_play_hosts_all is every host the play started with;
+    # ansible_play_hosts is those still alive. The difference is exactly the
+    # set that went unreachable or failed inside init.
+    - name: Report Windows hosts that never came online
+      ansible.builtin.debug:
+        msg: |
+          ===================================================================
+          {{ (ansible_play_hosts_all | difference(ansible_play_hosts)) | length }} of {{ ansible_play_hosts_all | length }} WINDOWS HOSTS DID NOT COME ONLINE
+
+            {{ (ansible_play_hosts_all | difference(ansible_play_hosts)) | sort | join(', ') }}
+
+          Each waited up to {{ init_wait_timeout }}s for WinRM and never
+          answered. They are excluded from every later play, so they will have
+          no AD join, no Sysmon and no Elastic Agent.
+
+          The deploy CONTINUES for the {{ ansible_play_hosts | length }} hosts that did come up, and
+          will fail at the end-of-run coverage checks naming exactly what is
+          missing. Confirm in the SimSpace console that these VMs are powered
+          on and finished booting, then re-run.
+          ===================================================================
+      run_once: true
+      when: (ansible_play_hosts_all | difference(ansible_play_hosts)) | length > 0
   tags:
     - init
 

@@ -1,0 +1,10 @@
+---
+# init — how long to wait for a cold Windows host to answer WinRM.
+#
+# A longer wait costs nothing when the host is ready: wait_for_connection
+# returns as soon as the connection succeeds. It only matters for hosts that
+# are genuinely slow or genuinely down, and the Init play no longer lets those
+# take the rest of the fleet with them (see site.yml).
+init_wait_timeout: 1800
+init_wait_delay: 30
+init_wait_sleep: 10

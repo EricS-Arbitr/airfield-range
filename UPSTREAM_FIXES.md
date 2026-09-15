@@ -14,6 +14,34 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-15 · bug · Init play — `any_errors_fatal: true` turned 4 unreachable hosts into 48
+
+**Symptom.** A fresh airfield-range deploy built the Linux side and the whole Security Onion grid, then failed 4.5 hours later at `75-endpoint`'s Fleet coverage check with all 48 Windows hosts missing. The recap showed 44 of them at `ok=2, changed=0, skipped=0, failed=0, unreachable=0` — they had completed init's two tasks and then been offered nothing else for the rest of the run. Four hosts showed `ok=1, unreachable=1`.
+
+**Root cause.** The Init play carried `any_errors_fatal: true`. Under that flag an unreachable host does not fail alone: Ansible marks EVERY host in the play failed, aborts the play, and removes all of them from every subsequent play. Plays targeting other groups keep running, so the deploy does NOT stop — it silently continues without the entire Windows fleet. Four hosts that never finished booting inside init's `wait_for_connection` therefore cost 44 healthy hosts their AD join, their Sysmon install and their Elastic Agent enrolment. The Fleet assertion at the end was the first thing to notice.
+
+**Detection.** Only visible by cross-reading the PLAY RECAP: `ok=2` with `skipped=0` and `failed=0` is the signature of a host that was silently dropped, not one that was skipped by a `when`. Fleet knowing exactly the Linux endpoints plus the SO grid, and nothing else, confirmed it.
+
+**Fix (overlay).** Removed `any_errors_fatal: true` from the Init play. Unreachable hosts now fall out individually. A `run_once` report at the end of the play names the dropped hosts immediately — `ansible_play_hosts_all | difference(ansible_play_hosts)` — so the problem is visible in minutes instead of hours. The deploy deliberately CONTINUES: the reachable hosts are still built, and the end-of-run coverage assertions remain the hard gate. A deploy with missing hosts still fails; it just fails having done all the work it could, which is what makes the retry cheap.
+
+**Why not fail immediately at init.** A fatal assertion there would report the problem better but still stop the deploy before any Windows work — reproducing the very failure being removed.
+
+---
+
+## 2026-09-15 · bug · deploy.sh — attempt 2 was never once retry-scoped
+
+**Symptom.** Attempt 1 fails, Ansible prints `to retry, use: --limit @/etc/ansible/retry/site.retry`, and deploy.sh announces `=== Attempt 2 (full sweep) ===` instead of the retry scope.
+
+**Root cause.** `RETRY_FILE="retry/$PLAYBOOK.retry"` with `PLAYBOOK="site.yml"` builds `retry/site.yml.retry`. Ansible strips the extension and writes `retry/site.retry`. The paths never matched, so the `[ -f "$RETRY_FILE" ]` guard was always false. That guard exists to handle "the deploy died before writing a retry file", so a missing file looked like a legitimate condition rather than a bug — it failed silently and safely, in the direction of doing more work rather than less, which is why it survived this long.
+
+**Fix (overlay).** `RETRY_FILE="retry/$(basename "${PLAYBOOK%.*}").retry"`. Handles `.yml` and `.yaml` and any directory prefix.
+
+**Scope.** The identical line was present in airfield-range, ss-pp-so, ss-pp-stacked and ss-pp-ab.
+
+---
+
+---
+
 ## 2026-09-15 · bug · Security Onion `so-setup` — seeds its container registry from ghcr.io
 
 **Symptom.** Every container except `so-dockerregistry` stays `missing` and `so-status` never goes green. The local registry store at `/nsm/docker-registry/docker/registry/v2/repositories/security-onion-solutions` is empty or short.
