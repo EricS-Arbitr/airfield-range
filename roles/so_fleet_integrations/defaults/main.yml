@@ -269,12 +269,17 @@ so_fleet_integrations:
     # so than the message, since pfSense emits malformed RFC3164 with no
     # HOSTNAME field at all (UPSTREAM_FIXES 2026-06-30).
     #
-    # NOTE the shape differs from the playbook this came from. That used the
-    # FULL package-policy format, where a yaml-typed var is
+    # THE SHAPE DIFFERS from the playbook this came from, and the bare form
+    # is CONFIRMED WORKING (2026-09-16). 76-syslog used the FULL
+    # package-policy format, where a yaml-typed var is
     # {"type": "yaml", "value": "<doc>"}. This role uses Fleet's SIMPLIFIED
-    # format, where vars are bare values. If Kibana rejects it, the attach
-    # step reports INTEGRATION_FAILED with the response body -- it fails
-    # loudly, not silently.
+    # format, where vars are bare values -- so the processor is passed as a
+    # plain YAML string. Verified on the grid after the first deploy:
+    #   "observer":{"hostname":"bs-modbus-gateway"}
+    # Acceptance alone would not have proved it: Kibana stores an unknown var
+    # without complaint, so a rejected shape fails loudly at attach but an
+    # INERT one would have looked identical to success. The field had to be
+    # read back.
     processors: |
       - dissect:
           tokenizer: "/var/log/remote/%{observer.hostname}/syslog.log"
