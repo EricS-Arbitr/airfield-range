@@ -14,6 +14,22 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-16 · bug · deploy.sh — a clean retry-scoped pass reported success over an unbuilt range
+
+**Symptom.** Attempt 1 failed, attempt 2 ran retry-scoped and passed, and deploy.sh exited 0 with `Success on attempt 2 (retry scope)`. The range had no domain joins and no Security Onion.
+
+**Root cause.** The retry file lists the hosts that FAILED. Running the playbook limited to them repairs those hosts, but every play whose targets were dropped when they failed still has not run. On airfield 2026-09-15, bs-dc01 — sole member of `[pdc_blackstone]` — failed on an ADWS race in attempt 1, so `Create Users`, `dns` and BOTH domain joins lost their target and the SO phases never started. Attempt 2 scoped to bs-dc01 fixed bs-dc01, passed, and the loop `break`ed on that success. A repair was mistaken for a deployment.
+
+**Detection.** Eric noticed the second attempt was suspiciously short, doubted that every play had run, and re-ran deploy.sh by hand — the full sweep then passed and built everything attempt 2 had skipped. Nothing in the script's output distinguished the two states.
+
+**Reachable only since 2026-09-15.** Before the `RETRY_FILE` path was fixed the `-f` guard never matched, so attempt 2 was always a full sweep and "success on attempt 2" genuinely meant a full sweep had passed. Correcting the retry path opened this hole behind it.
+
+**Fix (overlay).** The retry-scoped attempt is now a REPAIR PASS that never breaks out of the loop however well it goes. It reports `Repair pass clean — NOT declaring success`, clears the retry file and `continue`s, so attempt 3's full sweep is what actually confirms the range. This automates precisely the manual re-run that caught it.
+
+---
+
+---
+
 ## 2026-09-15 · bug · deploy.sh — no BOOT_DELAY on the largest range of the four
 
 **Symptom.** On two consecutive fresh deploys (2026-09-14, 2026-09-15) not every VM had finished provisioning by the time the playbook reached `Init`. On the 14th that cost four Windows hosts, which under the then-current `any_errors_fatal: true` took all 48 out of the deploy.
