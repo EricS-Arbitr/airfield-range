@@ -14,6 +14,22 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-15 · bug · deploy.sh — no BOOT_DELAY on the largest range of the four
+
+**Symptom.** On two consecutive fresh deploys (2026-09-14, 2026-09-15) not every VM had finished provisioning by the time the playbook reached `Init`. On the 14th that cost four Windows hosts, which under the then-current `any_errors_fatal: true` took all 48 out of the deploy.
+
+**Root cause.** A defensive `sleep 120` was removed from deploy.sh on 2026-07-02 in a speed pass, reasoning that the retry loop already handles a VM that is not ready. ss-pp-so removed it for the same reason and **restored it on 2026-08-05 at 180s**, having found that the reasoning did not survive a fresh range — the retry loop does "handle" an unprovisioned host, but only by spending a full multi-hour sweep to discover it. airfield never got that restoration, and it is the LARGEST of the four ranges (86 hosts against 74/74/78) with the longest provisioning tail.
+
+**Detection.** Comparing the four repos: airfield was the only one with `BOOT_DELAY=NONE`, and simultaneously the only one carrying the stale 2026-07-02 note claiming the delay was unnecessary.
+
+**Fix (overlay).** `BOOT_DELAY="${BOOT_DELAY:-300}"` before the attempt loop — 300s rather than ss-pp-so's 180s because the range is larger. Placed AFTER the galaxy, platform-prerequisite and vault checks, so a broken tree or a wrong vault password still fails in seconds rather than after a five-minute sleep. Overridable with `BOOT_DELAY=0 ./deploy.sh`, which was the legitimate half of the 2026-07-02 argument.
+
+Separately, `init_wait_timeout` raised 1800 -> 2400. These are different levers and are not interchangeable: BOOT_DELAY is flat wall clock paid once while the PLATFORM provisions, and covers hosts that do not exist yet — no IP, no NIC, nothing for `wait_for_connection` to connect to. `init_wait_timeout` is a per-host ceiling that costs nothing when a host is ready, because `wait_for_connection` returns the moment the connection succeeds. Raising the ceiling only became affordable once `any_errors_fatal` came off the Init play, since a host that exhausts it now drops out alone instead of taking the fleet with it.
+
+---
+
+---
+
 ## 2026-09-15 · bug · site.yml "Bootstrap simspace as fops.blackstone.mil Domain Admin" — raced ADWS on the freshly promoted child DC
 
 **Symptom.** `Create simspace in the child domain` failed on bs-dc01 with `Get-ADUser : Unable to contact the server. This may be because this server does not exist, it is currently down, or it does not have the Active Directory Web Services running.` fops-dc01 had completed its own promotion play clean in the same run (`ok=27, failed=0`).

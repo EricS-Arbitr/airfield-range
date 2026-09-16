@@ -5,6 +5,15 @@
 # returns as soon as the connection succeeds. It only matters for hosts that
 # are genuinely slow or genuinely down, and the Init play no longer lets those
 # take the rest of the fleet with them (see site.yml).
-init_wait_timeout: 1800
+# 2400 = 40 minutes. Raised from 1800 on 2026-09-15: four Windows hosts were
+# still not answering WinRM at the 30-minute mark on a fresh range.
+#
+# The ceiling is nearly free. wait_for_connection returns as soon as the
+# connection succeeds, so a healthy host never pays it -- it is only spent on
+# hosts that are genuinely slow or genuinely down. And since the Init play no
+# longer carries any_errors_fatal, a host that exhausts it drops out alone
+# instead of taking the fleet with it, which is what made a high ceiling too
+# expensive to contemplate before.
+init_wait_timeout: 2400
 init_wait_delay: 30
 init_wait_sleep: 10

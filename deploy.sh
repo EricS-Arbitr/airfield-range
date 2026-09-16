@@ -67,11 +67,13 @@ mkdir -p "$ANSIBLE_CACHE_PLUGIN_CONNECTION"
 # ansible-playbook will surface a clear "collection not found" error if
 # anything's actually missing.
 #
-# NOTE: The historical `sleep 120` before this section was removed 2026-07-02
-# as part of the speed pass. It was a defensive delay to let fresh-provisioned
-# VMs finish booting before the deploy started, but the retry loop already
-# handles any "host unreachable" from a VM that isn't ready. On iterative
-# deploys the sleep is pure wasted wall clock.
+# NOTE: a `sleep 120` here was removed 2026-07-02 in a speed pass, reasoning
+# that the retry loop already handles a VM that is not ready yet. RESTORED
+# 2026-09-15 as BOOT_DELAY (see below), because that reasoning did not survive
+# contact with a fresh range -- the same conclusion ss-pp-so reached on
+# 2026-08-05. The retry loop does "handle" it, but only by paying for a full
+# multi-hour sweep to discover the host was still booting. The legitimate half
+# of the 2026-07-02 argument survives as the override: BOOT_DELAY=0.
 echo "=== Checking for Ansible Galaxy collections ==="
 
 if [ -f requirements.yml ]; then
@@ -209,6 +211,32 @@ if command -v ansible-vault >/dev/null 2>&1; then
 	echo "  vault encrypted; password file present and DECRYPTS"
 else
 	echo "  vault encrypted; password file present and readable (ansible-vault absent, decrypt unverified)"
+fi
+
+# --- Let a freshly provisioned range finish booting --------------------------
+# THIS IS A DIFFERENT LEVER FROM init_wait_timeout, and they are not
+# interchangeable:
+#
+#   BOOT_DELAY          flat wall clock, paid ONCE before ansible starts, while
+#                       the PLATFORM finishes provisioning. Covers hosts that do
+#                       not exist yet -- no IP, no NIC, nothing to connect to.
+#                       wait_for_connection cannot help there; it can only wait
+#                       on a host that is at least present.
+#   init_wait_timeout   per-host ceiling inside init. Costs NOTHING when a host
+#                       is ready -- wait_for_connection returns the moment the
+#                       connection succeeds -- so it is the cheap lever, and it
+#                       only bites on hosts that are genuinely slow or dead.
+#
+# 300s, not ss-pp-so's 180s: this is the largest range of the four (86 hosts vs
+# 74), and the provisioning tail scales with it. Observed twice on fresh
+# deploys (2026-09-14 and 2026-09-15) that not every host had provisioned by
+# the time the playbook reached Init. Five minutes against a ~5 hour deploy is
+# noise; a wasted sweep is not.
+BOOT_DELAY="${BOOT_DELAY:-300}"
+if [ "$BOOT_DELAY" -gt 0 ]; then
+	echo "=== Waiting ${BOOT_DELAY}s for range VMs to finish booting ==="
+	echo "    (override with BOOT_DELAY=0 ./deploy.sh on an already-up range)"
+	sleep "$BOOT_DELAY"
 fi
 
 for i in $(seq 1 $MAX_ATTEMPTS); do
