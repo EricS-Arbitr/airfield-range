@@ -28,26 +28,32 @@
 so_fleet_json_dir: /opt/so/conf/arbitr-fleet
 
 # --- Which namespace these datasets land in -------------------------------
-# UNRESOLVED, AND DELIBERATELY A VARIABLE UNTIL IT IS.
+# RESOLVED 2026-09-16 by measuring this grid. `default` is correct.
 #
-# ss-pp-so's integrations use "default", and its verify step passes. But this
-# repo recorded the opposite on 2026-08-12, from a measurement on THIS grid:
+# This repo previously recorded the opposite, from 2026-08-12: "SO writes
+# every dataset into the `so` namespace ... logs-<dataset>-default is a real
+# index that SO's queries and dashboards never look at". BOTH HALVES WERE
+# WRONG, and the second half was the dangerous one.
 #
-#   namespace so -- NOT "default". SO writes every dataset into the `so`
-#   namespace, so the index is logs-<dataset>-so. Using "default" creates
-#   logs-<dataset>-default, which is a real index that SO's queries and
-#   dashboards never look at: data arrives, nothing shows it, and the deploy
-#   reports success.
+# What the grid actually shows -- 29 datastreams, 24 `default` and 5 `so`:
 #
-# Both cannot be right, and the verify step CANNOT TELL THEM APART: it queries
-# the datastream by name (so-elasticsearch-query "<datastream>/_search"), which
-# succeeds whether or not SOC and Hunt ever surface the index. It asserts
-# ingestion; what matters is visibility to an analyst.
+#   so        SO's OWN internals: zeek, suricata.alerts, kratos, soc,
+#             syslog.remote. Written by SO's salt states, not by Fleet.
+#   default   EVERY Elastic integration: endpoint.events.*, system.*,
+#             windows.*, winlog.winlog, elastic_agent.*. Written by Fleet,
+#             which is what ours are.
 #
-# Resolve against the live grid before trusting either value -- see the
-# _cat/indices and Kibana data-view check. Changing this one line moves every
-# integration AND its verification together, which is why verify_datastream
-# below is derived from it rather than written out.
+# So the split is by WHICH COMPONENT WRITES, not by what SO can see. And SOC
+# and Hunt query the index pattern `logs-*`, which matches both -- nothing
+# lands anywhere invisible.
+#
+# Using `so` would have been the actual mistake: it would have put four Fleet
+# integrations in the namespace SO reserves for its own salt-managed output,
+# alone among the 24 that use `default`.
+#
+# Kept as a variable anyway. verify_datastream below derives from it, so if a
+# future SO release changes the convention, one line moves the data and its
+# verification together.
 so_fleet_namespace: "default"
 
 # --- Base telemetry parity ------------------------------------------------
