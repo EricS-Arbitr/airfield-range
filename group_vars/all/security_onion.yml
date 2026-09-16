@@ -400,7 +400,7 @@ so_registry_build_log: /var/log/so_registry_build.log
 # Two mechanisms consume that, both configured by so_fleet_integrations:
 #
 #   pfSense  rsyslog on soc-syslog relays the RAW datagram from the firewall
-#            interface addresses to 127.0.0.1:{{ so_pfsense_syslog_port }},
+#            interface addresses to 127.0.0.1 on that firewall's own port,
 #            where the Elastic pfSense integration parses it. See
 #            roles/syslog_server/templates/29-fleet-forward.conf.j2 for why
 #            this is a local fan-out and not a second destination on the
@@ -418,10 +418,30 @@ so_registry_build_log: /var/log/so_registry_build.log
 # by a filter that can be forgotten.
 
 
-# Port the Elastic pfSense integration listens on, on soc-syslog. Package
-# default is 9001. IN GROUP_VARS RATHER THAN A ROLE DEFAULT: both
-# roles/syslog_server (the rsyslog relay template) and so_fleet_integrations
-# read it, and neither includes the other -- a role default would resolve
-# cleanly at build time and be undefined at run time. Fifth instance of that
-# trap; verify_vars.py now catches it.
-so_pfsense_syslog_port: 9001
+# ONE LISTENER PORT PER FIREWALL, and that is how the events get attributed.
+#
+# pfSense omits the HOSTNAME field entirely (UPSTREAM_FIXES 2026-06-30 --
+# FreeBSD syslogd does not insert it on remote forwards), so a pfSense event
+# carries no device identity of its own. rsyslog works around that for the
+# FILE store by mapping $fromhost-ip to a name, but the Fleet relay cannot:
+# it forwards with omfwd to loopback, so the Elastic agent sees
+# log.source.address 127.0.0.1 for every message regardless of origin.
+# Measured 2026-09-16 -- every pfsense document had the same source address.
+#
+# So the PORT carries the identity. Each firewall relays to its own port, and
+# each port has its own integration stamping observer.hostname with a static
+# processor. Nothing rewrites the message, so grok parsing is untouched --
+# which matters, because re-rendering is exactly what broke parsing on
+# ss-pp-so before %rawmsg% was adopted.
+#
+# IN GROUP_VARS RATHER THAN A ROLE DEFAULT: both roles/syslog_server (the
+# relay template) and so_fleet_integrations read this, and neither includes
+# the other -- a role default would resolve cleanly at build time and be
+# undefined at run time. Fifth instance of that trap.
+#
+# Adding a firewall is two lines: an entry here, and an integration entry in
+# so_fleet_integrations. The relay template reads this map directly, so it
+# needs no edit.
+so_pfsense_syslog_ports:
+  bs-edge-fw: 9001
+  bs-ops-fw: 9002

@@ -161,48 +161,79 @@ so_fleet_integrations:
         - "-O /dev/null -e use_proxy=yes -e http_proxy=127.0.0.1:3128 --header=Host:www.blackstone.mil http://172.31.12.3/"
         - "-O /dev/null -e use_proxy=yes -e http_proxy=127.0.0.1:3128 http://www.blackstone.mil/"
 
-  # --- pfSense: a LISTENER, and it belongs on soc-syslog ------------------
+  # --- pfSense: a LISTENER PER FIREWALL, on soc-syslog --------------------
   # The two firewalls cannot run an Elastic Agent, so an agent has to receive
   # from them.
   #
   # NOT so-manager. ss-pp-so tried that 2026-09-10: Fleet stored the
-  # integration correctly on FleetServer_so-manager -- enabled true,
-  # compiled_stream host 0.0.0.0:9001, agent at matching revision -- and the
-  # agent never materialised the input. Nothing on :9001, nothing in
-  # `elastic-agent inspect`, no error logged, and a restart changed none of
-  # it. The Fleet Server agent will not host an extra listener input,
-  # whatever the policy says.
+  # integration correctly on FleetServer_so-manager -- enabled true, compiled
+  # stream host 0.0.0.0, agent at matching revision -- and the agent never
+  # materialised the input. Nothing listening, nothing in
+  # `elastic-agent inspect`, no error logged. The Fleet Server agent will not
+  # host an extra listener input, whatever the policy says. soc-syslog is the
+  # right home anyway: it puts the receiver ON the syslog server, and it
+  # sidesteps SO's default-deny firewall.
   #
-  # soc-syslog is the right home anyway:
-  #   * it is the pattern already proven by nginx and squid -- dedicated
-  #     policy plus post-enrolment reassignment
-  #   * it puts the syslog receiver ON the syslog server
-  #   * it SIDESTEPS SO's firewall. so-manager is default-deny with no rule
-  #     for udp/9001, so even a working listener there would have needed a
-  #     deliberate hole in the SIEM's perimeter.
+  # ONE INTEGRATION PER FIREWALL, AND THE PORT IS THE IDENTITY.
+  # pfSense omits the HOSTNAME field (UPSTREAM_FIXES 2026-06-30), and the
+  # rsyslog relay forwards to loopback, so log.source.address is 127.0.0.1
+  # for every message regardless of origin -- measured 2026-09-16 across all
+  # 133 documents. Neither the message nor the transport says which firewall
+  # sent it, and observer.ingress.interface is vmx0/vmx1 on BOTH.
+  #
+  # So each firewall relays to its own port and its own integration stamps
+  # observer.hostname with a static add_fields processor. Nothing rewrites
+  # the message, so grok parsing is untouched.
   #
   # Input key is pfsense-udp: this package's policy template IS named after
   # the package, unlike squid's (which is `log`). Derived, not assumed.
   - policy: so-syslog
-    description: "Syslog collector — pfSense firewall logs"
+    description: "Syslog collector — pfSense firewall logs (bs-edge-fw)"
     package: pfsense
-    name: pfsense-firewalls
+    name: pfsense-bs-edge-fw
     template: pfsense.json.j2
     hosts: ["soc-syslog"]
     mirror_base: true
     input: pfsense-udp
     syslog_host: "0.0.0.0"
-    syslog_port: "{{ so_pfsense_syslog_port }}"
-    # Which side of a flow counts as internal. All in-scenario space here is
-    # RFC1918 -- but 199.252.163.0/24 on bs-edge-fw's WAN is not, and that is
-    # correct: it represents the public side. The package default is right,
-    # but it decides traffic DIRECTION on every firewall event, so it is
-    # stated rather than implied.
+    syslog_port: "{{ so_pfsense_syslog_ports['bs-edge-fw'] }}"
     internal_networks: ["private"]
+    processors: |
+      - add_fields:
+          target: observer
+          fields:
+            hostname: bs-edge-fw
     verify_datastream: "logs-pfsense.log-{{ so_fleet_namespace }}"
     verify_field: "source.ip"
+    # ASSERT THIS FIREWALL, not merely that the dataset has something in it.
+    # Both firewalls write the same dataset, so the default `<field>:*` check
+    # would pass for bs-ops-fw while bs-edge-fw sent nothing at all.
+    verify_query: "observer.hostname:bs-edge-fw"
     # No seed: the firewalls log continuously, and there is no equivalent of
     # a wget that would deterministically produce a firewall event.
+    seed:
+      host: soc-syslog
+      requests: []
+
+  - policy: so-syslog
+    description: "Syslog collector — pfSense firewall logs (bs-ops-fw)"
+    package: pfsense
+    name: pfsense-bs-ops-fw
+    template: pfsense.json.j2
+    hosts: ["soc-syslog"]
+    mirror_base: true
+    input: pfsense-udp
+    syslog_host: "0.0.0.0"
+    syslog_port: "{{ so_pfsense_syslog_ports['bs-ops-fw'] }}"
+    internal_networks: ["private"]
+    processors: |
+      - add_fields:
+          target: observer
+          fields:
+            hostname: bs-ops-fw
+    verify_datastream: "logs-pfsense.log-{{ so_fleet_namespace }}"
+    verify_field: "source.ip"
+    verify_query: "observer.hostname:bs-ops-fw"
     seed:
       host: soc-syslog
       requests: []

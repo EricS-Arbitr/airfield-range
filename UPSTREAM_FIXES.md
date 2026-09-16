@@ -14,6 +14,29 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-16 · bug · pfSense Fleet relay — 29% of documents were grok failures, and none were attributable
+
+**Symptom.** `logs-pfsense.log-default` held 133 documents: 94 parsed cleanly as firewall events, 39 with `event.kind: pipeline_error` and `"Provided Grok expressions do not match field value: [<78>Sep 16 19:44:00 /usr/sbin/cron[59995]: (root) CMD (/usr/sbin/newsyslog)]"`. No document carried `observer.hostname`, so with two firewalls writing one dataset there was no way to tell which had logged what.
+
+**Detection.** Not by the deploy, which passed. The role's verify gate requires at least ONE document with `source.ip` present — a single genuine filterlog entry satisfies it while the rest of the dataset fills with errors. It asserts "something parsed", not "parsing is healthy". Found by dumping a document and reading it.
+
+**Root cause, part 1 — the errors.** The relay matched on source IP and therefore forwarded EVERYTHING those firewalls emit. The pfSense ingest pipeline parses `filterlog` entries; cron, newsyslog and sshd messages fail grok by construction.
+
+**Root cause, part 2 — the attribution.** pfSense omits the HOSTNAME field entirely (see 2026-06-30), so the message carries no identity. rsyslog works around that for the FILE store by mapping `$fromhost-ip` to a name — but the Fleet relay cannot, because `omfwd` to loopback means the Elastic agent sees `log.source.address: 127.0.0.1` for every message regardless of origin. Measured across all 133 documents. `observer.ingress.interface` is vmx0/vmx1 on both firewalls, so it does not disambiguate either.
+
+**Fix (overlay).** Two changes to `29-fleet-forward.conf.j2`:
+
+1. Relay only messages containing `filterlog`. Matching on `$rawmsg` rather than `$msg` deliberately — the messages are malformed RFC3164, so rsyslog's own field parsing of them is not something to depend on. The system messages are NOT lost; they continue to the per-host file rules in 30-remote.conf. Only the Fleet relay is narrowed.
+2. One relay port per firewall (`so_pfsense_syslog_ports`), with one integration per port stamping `observer.hostname` via a static `add_fields` processor. The PORT carries the identity that the message cannot. Nothing rewrites the message, so grok parsing is untouched — which matters, because re-rendering is exactly what broke parsing before `%rawmsg%` was adopted.
+
+Also made the role's verify query overridable (`verify_query`), so each firewall asserts `observer.hostname:<its own name>` rather than the default `<field>:*`. Without that, one silent firewall would pass on the other's data.
+
+**Fix (upstream).** pfSense/FreeBSD syslogd should insert the local hostname on remote forwards. Until then the port is the only reliable carrier of device identity through a loopback relay.
+
+---
+
+---
+
 ## 2026-09-16 · bug · so_search / so_sensor — grid-join gate waited for a transition a healthy node never makes
 
 **Symptom (as seen on ss-pp-so 2026-09-03, latent here).** Sensors fail grid join with `attempts: 30, cmd: salt-key --list=unaccepted, stdout: "Unaccepted Keys:"` — an EMPTY list — while their keys sit in Accepted on the master and the nodes serve traffic with Zeek and Suricata green.

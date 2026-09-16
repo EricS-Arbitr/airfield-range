@@ -311,7 +311,7 @@
 # collecting before anything can land.
 - name: Wait for PARSED documents to arrive in each dataset
   ansible.builtin.shell: |
-    n=$(so-elasticsearch-query "{{ item.verify_datastream }}/_search?q={{ item.verify_field }}:*&size=0&filter_path=hits.total" 2>/dev/null | grep -o "\"value\":[0-9]*" | head -1 | cut -d: -f2)
+    n=$(so-elasticsearch-query "{{ item.verify_datastream }}/_search?q={{ item.verify_query | default(item.verify_field ~ ':*', true) }}&size=0&filter_path=hits.total" 2>/dev/null | grep -o "\"value\":[0-9]*" | head -1 | cut -d: -f2)
     if [ -n "$n" ] && [ "$n" -gt 0 ]; then echo "DATA_OK {{ item.verify_datastream }} {{ item.verify_field }}=$n"; else echo "DATA_NONE {{ item.verify_datastream }}"; fi
   args:
     executable: /bin/bash

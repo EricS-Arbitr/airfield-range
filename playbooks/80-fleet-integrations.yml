@@ -11,11 +11,12 @@
 #   pfSense  (soc-syslog)  -> logs-pfsense.log-*     bs-edge-fw, bs-ops-fw
 #   VyOS     (soc-syslog)  -> logs-vyos-*           the five [vyos] routers
 #
-# The last two both land on soc-syslog because the firewalls and routers
-# cannot run an agent themselves. pfSense SENDS (the integration listens on
-# udp/{{ so_pfsense_syslog_port }}, fed by the local rsyslog relay in
-# roles/syslog_server); VyOS is READ from the collector's own
-# /var/log/remote/<router>/syslog.log.
+# pfSense and VyOS both land on soc-syslog because the firewalls and routers
+# cannot run an agent themselves. pfSense SENDS -- one integration per
+# firewall, each listening on its own udp port and fed by the rsyslog relay
+# in roles/syslog_server, because the message carries no device identity and
+# the relay collapses the source address to 127.0.0.1. VyOS is READ from the
+# collector's own /var/log/remote/<router>/syslog.log.
 #
 # ORDERING: MUST run after 75-endpoint.yml. Enrolment puts every endpoint on
 # `endpoints-initial` because the token baked into SO's installer decides the

@@ -2,71 +2,92 @@
 # 29-fleet-forward.conf — relay firewall syslog to the local Elastic agent
 # Managed by roles/syslog_server. Do not edit on the host.
 # =========================================================================
-# THE NUMBER IS LOad-BEARING. rsyslog reads /etc/rsyslog.d in lexical order,
+# THE NUMBER IS LOAD-BEARING. rsyslog reads /etc/rsyslog.d in lexical order,
 # and 30-remote.conf ends its remote-message block with `stop` so remote logs
 # do not also land in /var/log/syslog. Anything numbered above 30 therefore
-# NEVER SEES a remote message. This file was 31- until 2026-09-10 and did
-# nothing at all: config valid, addresses rendered correctly, rsyslog
+# NEVER SEES a remote message. This file was 31- on ss-pp-so until 2026-09-10
+# and did nothing at all: config valid, addresses rendered correctly, rsyslog
 # restarted, zero packets relayed. Do not renumber it above 30.
+#
 # WHY A LOCAL RELAY AND NOT A SECOND DESTINATION ON THE FIREWALL
 # --------------------------------------------------------------
-# The firewalls were briefly configured to dual-send: :514 here for the
-# /var/log/remote/ store, and :{{ so_pfsense_syslog_port }} here for the
-# Elastic pfSense integration. pfSense honoured only ONE of them once both
-# entries pointed at the same address -- proved 2026-09-10 by tcpdump on
-# this host: steady traffic to :514, zero packets to :{{ so_pfsense_syslog_port }}.
-# The same dual-send DID work while the second target was a different host,
-# so pfSense appears to collapse remote syslog entries by address.
+# The firewalls were briefly configured to dual-send: :514 for the
+# /var/log/remote/ store and a second port for the Elastic integration.
+# pfSense honoured only ONE of them once both entries pointed at the same
+# address -- proved on ss-pp-so 2026-09-10 by tcpdump: steady traffic to
+# :514, zero packets to the second port. The same dual-send DID work while
+# the second target was a different host, so pfSense appears to collapse
+# remote syslog entries by address.
 #
-# So the firewalls send ONCE, and rsyslog fans out locally. Fewer moving
-# parts than the dual-send, and independent of pfSense's behaviour.
+# So the firewalls send ONCE, and rsyslog fans out locally.
 #
 # RELAY THE RAW MESSAGE, BYTE FOR BYTE
 # ------------------------------------
-# RSYSLOG_ForwardFormat was tried first and DELIVERED but did not PARSE:
-# 260 documents reached logs-pfsense.log-default on 2026-09-10, every one
-# carrying an ingest error ("Provided Grok expressions do not match...").
-# That format re-renders the header -- its own RFC3164 timestamp, its own
-# %syslogtag% handling -- so what arrives is valid syslog but not what
-# pfSense actually sent, and the pfSense pipeline greps for pfSense's exact
-# structure.
+# RSYSLOG_ForwardFormat was tried first and DELIVERED but did not PARSE: 260
+# documents reached logs-pfsense.log-default on ss-pp-so 2026-09-10, every one
+# carrying an ingest error ("Provided Grok expressions do not match"). That
+# format re-renders the header -- its own RFC3164 timestamp, its own
+# %syslogtag% handling -- so what arrives is valid syslog but not what pfSense
+# actually sent, and the pfSense pipeline greps for pfSense's exact structure.
 #
-# %rawmsg% forwards the original datagram unchanged, PRI and all. Attribution
-# comes free with it: the hostname in the message is pfSense's own, because
-# nothing has rewritten it.
+# %rawmsg% forwards the original datagram unchanged, PRI and all.
 #
-# NO `stop`: messages continue to the per-host file rules in 30-remote.conf.
-# The store keeps everything it has today.
+# ONE PORT PER FIREWALL, BECAUSE THE MESSAGE CARRIES NO IDENTITY
+# ---------------------------------------------------------------
+# pfSense omits the HOSTNAME field (UPSTREAM_FIXES 2026-06-30), and omfwd to
+# loopback means the Elastic agent sees log.source.address 127.0.0.1 for
+# every message whatever its origin -- measured 2026-09-16, all 133 documents
+# identical. So neither the message nor the transport identifies the sender.
+#
+# The PORT does. Each firewall relays to its own, and the matching
+# integration stamps observer.hostname with a static processor. Nothing
+# rewrites the message, so parsing is unaffected.
+#
+# FILTERLOG ONLY
+# --------------
+# The pfSense ingest pipeline parses `filterlog` entries. Everything else the
+# firewall emits -- cron, newsyslog, sshd -- fails grok and lands as an
+# event.kind=pipeline_error document. Measured 2026-09-16 before this filter:
+# 39 of 133 documents, 29%, were errors of exactly that kind. Matching on
+# $rawmsg rather than $msg deliberately: the messages are malformed RFC3164
+# with no HOSTNAME, so rsyslog's own field parsing of them is not something
+# to depend on.
+#
+# Those system messages are NOT lost -- they continue to the per-host file
+# rules in 30-remote.conf like everything else. Only the Fleet relay is
+# narrowed.
+#
+# NO `stop`: messages continue to 30-remote.conf. The store keeps everything.
+#
 # MATCH ON SOURCE IP, NOT HOSTNAME
 # ---------------------------------
-# pfSense does not send a resolvable hostname, so rsyslog falls back to the
-# source address: /var/log/remote/ on this host contains 172.16.0.9,
-# 172.16.0.18, 172.16.0.25 and 172.16.0.50 where the routers appear by name.
-# A `$hostname == pp-ot-firewall` rule therefore matched nothing at all
-# (2026-09-10) and the dataset was never created.
-#
-# Note pp-internal-firewall sends from TWO addresses (.18 WAN_EDGE and .25
-# INTERNAL), so matching one identity per firewall was never going to work
-# either. Every pfsense_interfaces entry is enumerated from inventory, so
-# adding an interface or a firewall keeps this in step automatically.
+# For the same reason: pfSense sends no resolvable hostname, so rsyslog falls
+# back to the source address. A `$hostname == bs-ops-fw` rule matches nothing
+# at all. Each firewall's interfaces are enumerated from inventory, so adding
+# an interface keeps this in step automatically.
+
 # The original datagram, untouched. Defined here rather than reusing a
 # built-in so it is obvious that nothing is being re-rendered.
 template(name="ArbitrRawForward" type="string" string="%rawmsg%")
 
-{% set ns = namespace(ips=[]) %}
-{% for h in groups['pfsense'] | default([]) %}
-{%   for i in hostvars[h].pfsense_interfaces | default([]) %}
-{%     if i.ipv4_address is defined %}{% set ns.ips = ns.ips + [i.ipv4_address] %}{% endif %}
-{%   endfor %}
-{% endfor %}
-{% if ns.ips | length > 0 %}
-if ({% for ip in ns.ips %}$fromhost-ip == '{{ ip }}'{% if not loop.last %} or {% endif %}{% endfor %}) then {
+{% for h in groups['pfsense'] | default([]) | sort %}
+{%   set ips = hostvars[h].pfsense_interfaces | default([])
+                | selectattr('ipv4_address', 'defined')
+                | map(attribute='ipv4_address') | list %}
+{%   set port = so_pfsense_syslog_ports | default({}) | dict2items
+                | selectattr('key', 'equalto', h) | map(attribute='value') | first | default(none) %}
+{%   if ips | length > 0 and port %}
+# {{ h }} -> :{{ port }}   ({{ ips | length }} interface address{{ 'es' if ips | length > 1 else '' }})
+if ({% for ip in ips %}$fromhost-ip == '{{ ip }}'{% if not loop.last %} or {% endif %}{% endfor %}) and $rawmsg contains 'filterlog' then {
     action(type="omfwd"
            target="127.0.0.1"
-           port="{{ so_pfsense_syslog_port }}"
+           port="{{ port }}"
            protocol="udp"
            template="ArbitrRawForward")
 }
-{% else %}
-# No pfsense_interfaces found in inventory; nothing to relay.
-{% endif %}
+{%   elif ips | length == 0 %}
+# {{ h }}: no pfsense_interfaces in inventory; nothing to relay.
+{%   else %}
+# {{ h }}: no entry in so_pfsense_syslog_ports; not relayed to Fleet.
+{%   endif %}
+{% endfor %}

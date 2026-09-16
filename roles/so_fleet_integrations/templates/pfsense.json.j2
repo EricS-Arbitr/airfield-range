@@ -16,7 +16,8 @@
             "internal_networks": {{ item.internal_networks | to_json }},
             "tz_offset": "local",
             "tags": ["pfsense", "forwarded"],
-            "preserve_original_event": false
+            "preserve_original_event": false{% if item.processors is defined %},
+            "processors": {{ item.processors | to_json }}{% endif %}
           }
         }
       }
