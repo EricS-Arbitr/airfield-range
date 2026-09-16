@@ -1,0 +1,25 @@
+{
+  "policy_id": "{{ item.policy }}",
+  "package": { "name": "{{ item.package }}", "version": "" },
+  "name": "{{ item.name }}",
+  "namespace": "{{ so_fleet_namespace }}",
+  "description": "Managed by so_fleet_integrations (Ansible). Do not edit in SOC.",
+  "inputs": {
+    "{{ item.input }}": {
+      "enabled": true,
+      "streams": {
+        "pfsense.log": {
+          "enabled": true,
+          "vars": {
+            "syslog_host": "{{ item.syslog_host }}",
+            "syslog_port": {{ item.syslog_port }},
+            "internal_networks": {{ item.internal_networks | to_json }},
+            "tz_offset": "local",
+            "tags": ["pfsense", "forwarded"],
+            "preserve_original_event": false
+          }
+        }
+      }
+    }
+  }
+}

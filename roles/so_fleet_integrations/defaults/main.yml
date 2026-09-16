@@ -1,0 +1,281 @@
+---
+# =========================================================================
+# so_fleet_integrations — host-scoped Elastic integrations in SO's Fleet
+# =========================================================================
+# WHY DEDICATED AGENT POLICIES
+# ---------------------------
+# A Fleet integration attaches to an agent POLICY, not a host. Every agent on
+# that policy runs every input in it. All ~65 endpoints on this range enrol
+# into `endpoints-initial`, so adding nginx there would have 64 hosts tailing
+# /var/log/nginx/*.log that does not exist -- continuous harvester errors in
+# logs-elastic_agent.filebeat-*, and Linux paths pushed onto Windows hosts.
+#
+# Elastic Agent inputs do support a `condition` expression, which would let
+# these live in the shared policy and self-disable elsewhere. NOT used: no
+# integration SO ships uses it, so it is unproven on this grid.
+#
+# WHY WE CALL THE API OURSELVES
+# -----------------------------
+# so-elastic-fleet-integration-policy-load walks ONLY hardcoded directories
+# (endpoints-initial, grid-nodes_general, grid-nodes_heavy,
+# integrations-optional/FleetServer*). A directory we add is never read. So
+# we drive elastic_fleet_integration_create/_update from so-elastic-fleet-
+# common directly. Upside: SO's loader and ours never contend, and the
+# highstate cannot revert what we create.
+#
+# Our JSON lives OUTSIDE /opt/so/conf/elastic-fleet/ deliberately -- salt
+# recurses that tree and could purge files it does not know about.
+so_fleet_json_dir: /opt/so/conf/arbitr-fleet
+
+# --- Which namespace these datasets land in -------------------------------
+# UNRESOLVED, AND DELIBERATELY A VARIABLE UNTIL IT IS.
+#
+# ss-pp-so's integrations use "default", and its verify step passes. But this
+# repo recorded the opposite on 2026-08-12, from a measurement on THIS grid:
+#
+#   namespace so -- NOT "default". SO writes every dataset into the `so`
+#   namespace, so the index is logs-<dataset>-so. Using "default" creates
+#   logs-<dataset>-default, which is a real index that SO's queries and
+#   dashboards never look at: data arrives, nothing shows it, and the deploy
+#   reports success.
+#
+# Both cannot be right, and the verify step CANNOT TELL THEM APART: it queries
+# the datastream by name (so-elasticsearch-query "<datastream>/_search"), which
+# succeeds whether or not SOC and Hunt ever surface the index. It asserts
+# ingestion; what matters is visibility to an analyst.
+#
+# Resolve against the live grid before trusting either value -- see the
+# _cat/indices and Kibana data-view check. Changing this one line moves every
+# integration AND its verification together, which is why verify_datastream
+# below is derived from it rather than written out.
+so_fleet_namespace: "default"
+
+# --- Base telemetry parity ------------------------------------------------
+# A dedicated agent policy contains ONLY what we put in it. Moving a host off
+# endpoints-initial therefore STRIPS its endpoint telemetry unless we put it
+# back: verified on ss-pp-so 2026-09-10, pp-www had elastic-defend producing
+# 0 documents after the move while endpoints-initial carried defend, osquery,
+# system, windows and windows-defender.
+#
+# That is a worse outcome than the harvester noise dedicated policies were
+# meant to avoid, so every policy we create is endpoints-initial PLUS its
+# host-specific integration, never instead of.
+so_fleet_base_policy: endpoints-initial
+
+# The Linux-applicable subset. windows and winlog inputs are deliberately
+# NOT mirrored: our targets (bs-www, bs-proxy, soc-syslog) are all Linux, and
+# cloning a winlog input onto them would recreate the useless-input problem
+# on a smaller scale. Revisit if a Windows host ever needs a dedicated policy.
+so_fleet_base_packages:
+  - system
+  - osquery_manager
+  - endpoint
+
+# Common wget options for seeding. Short timeouts and few retries: a seed
+# that cannot complete quickly is not worth waiting on, and the verify step
+# is what actually decides success.
+so_fleet_seed_opts: "-q -T 10 -t 2"
+
+# 20 x 30s = 10 min. Long enough for an agent to check in, receive a new
+# policy and start collecting. NOT long enough to paper over a real fault:
+# on ss-pp-so 2026-09-09 this failed honestly after 10 min because the host
+# had been assigned the wrong policy, which is the outcome we want from it.
+so_fleet_verify_retries: 20
+
+# Fleet policy defaults. inactivity_timeout matches SO's own endpoints-initial
+# (14 days) so a powered-off range host is not marked inactive mid-exercise.
+so_fleet_policy_timeout: 1209600
+
+# Package input/stream identifiers. IN VARS, NOT BAKED INTO THE TEMPLATES:
+# these come from each package's own manifest and differ per integration.
+# Confirm against the grid with:
+#   . /usr/sbin/so-elastic-fleet-common
+#   fleet_api "epm/packages/nginx" | jq -r '.item.data_streams[]
+#     | "\(.dataset)  input=\(.streams[0].input)"'
+# A wrong id yields an integration that creates cleanly and collects nothing,
+# which is exactly the failure mode the verify step below exists to catch.
+so_fleet_integrations:
+  - policy: so-webserver
+    description: "Web server — nginx access and error logs"
+    package: nginx
+    name: nginx-webservers
+    template: nginx.json.j2
+    hosts: ["bs-www"]
+    mirror_base: true
+    input: nginx-logfile
+    # ONE vhost here, unlike ss-pp-so's two. blackstone_www writes
+    # /var/log/nginx/blackstone_www.access.log and .error.log, which the
+    # package default (access.log* / error.log*) would MISS -- the prefix is
+    # the site name, not "access". Hence the wider glob.
+    access_paths: ["/var/log/nginx/*access.log*"]
+    error_paths: ["/var/log/nginx/*error.log*"]
+    verify_datastream: "logs-nginx.access-{{ so_fleet_namespace }}"
+    verify_field: "url.path"
+    # server_name is `www.blackstone.mil blackstone.mil _`, so the default
+    # server answers a bare loopback request. One request is enough.
+    seed:
+      host: bs-www
+      requests:
+        - "-O /dev/null http://127.0.0.1/"
+
+  - policy: so-proxy
+    description: "Forward proxy — Squid access log"
+    package: squid
+    name: squid-proxy
+    template: squid.json.j2
+    hosts: ["bs-proxy"]
+    mirror_base: true
+    # NOT a file tailer. squid.log carries input=udp, so the integration
+    # LISTENS and squid must SEND. Squid supports a udp:// log destination
+    # natively, so it emits straight to the agent on loopback -- nothing on
+    # the wire, and no syslog copy landing in system.syslog as unparsed text.
+    # The matching squid.conf change is a post-play in site.yml (squid is a
+    # base role; workarounds are plays, not role forks -- CLAUDE.md).
+    #
+    # Input key is <policy_template>-<input_type>, and squid's policy
+    # template is named `log`, NOT `squid`. nginx happens to name its
+    # template after the package (nginx-logfile), which is what made the
+    # wrong assumption look right on ss-pp-so. Derive, do not pattern-match:
+    #   fleet_api "epm/packages/<pkg>" | jq -r '.item.policy_templates[]
+    #     | .name as $t | .inputs[] | "\($t)-\(.type)"'
+    input: log-udp
+    udp_host: "127.0.0.1"
+    udp_port: 9537           # package default; no reason to move it
+    verify_datastream: "logs-squid.log-{{ so_fleet_namespace }}"
+    verify_field: "source.ip"
+    # Two targets, by IP and by name. Squid logs EVERY request it receives
+    # whether or not the origin answers, and verify_field is source.ip --
+    # which comes from the client, not the target -- so either one alone
+    # would do. Both are cheap and it removes any dependence on in-range DNS
+    # resolving from bs-proxy at this point in the deploy.
+    # 172.31.12.3 is bs-www's DMZ address (host_vars/bs-www.yml).
+    seed:
+      host: bs-proxy
+      requests:
+        - "-O /dev/null -e use_proxy=yes -e http_proxy=127.0.0.1:3128 --header=Host:www.blackstone.mil http://172.31.12.3/"
+        - "-O /dev/null -e use_proxy=yes -e http_proxy=127.0.0.1:3128 http://www.blackstone.mil/"
+
+  # --- pfSense: a LISTENER, and it belongs on soc-syslog ------------------
+  # The two firewalls cannot run an Elastic Agent, so an agent has to receive
+  # from them.
+  #
+  # NOT so-manager. ss-pp-so tried that 2026-09-10: Fleet stored the
+  # integration correctly on FleetServer_so-manager -- enabled true,
+  # compiled_stream host 0.0.0.0:9001, agent at matching revision -- and the
+  # agent never materialised the input. Nothing on :9001, nothing in
+  # `elastic-agent inspect`, no error logged, and a restart changed none of
+  # it. The Fleet Server agent will not host an extra listener input,
+  # whatever the policy says.
+  #
+  # soc-syslog is the right home anyway:
+  #   * it is the pattern already proven by nginx and squid -- dedicated
+  #     policy plus post-enrolment reassignment
+  #   * it puts the syslog receiver ON the syslog server
+  #   * it SIDESTEPS SO's firewall. so-manager is default-deny with no rule
+  #     for udp/9001, so even a working listener there would have needed a
+  #     deliberate hole in the SIEM's perimeter.
+  #
+  # Input key is pfsense-udp: this package's policy template IS named after
+  # the package, unlike squid's (which is `log`). Derived, not assumed.
+  - policy: so-syslog
+    description: "Syslog collector — pfSense firewall logs"
+    package: pfsense
+    name: pfsense-firewalls
+    template: pfsense.json.j2
+    hosts: ["soc-syslog"]
+    mirror_base: true
+    input: pfsense-udp
+    syslog_host: "0.0.0.0"
+    syslog_port: "{{ so_pfsense_syslog_port }}"
+    # Which side of a flow counts as internal. All in-scenario space here is
+    # RFC1918 -- but 199.252.163.0/24 on bs-edge-fw's WAN is not, and that is
+    # correct: it represents the public side. The package default is right,
+    # but it decides traffic DIRECTION on every firewall event, so it is
+    # stated rather than implied.
+    internal_networks: ["private"]
+    verify_datastream: "logs-pfsense.log-{{ so_fleet_namespace }}"
+    verify_field: "source.ip"
+    # No seed: the firewalls log continuously, and there is no equivalent of
+    # a wget that would deterministically produce a firewall event.
+    seed:
+      host: soc-syslog
+      requests: []
+
+  # --- VyOS: read the collector's own files ------------------------------
+  # filestream READS FILES, so soc-syslog's agent tails
+  # /var/log/remote/<router>/syslog.log directly -- no relay, no listening
+  # port, no rsyslog rule ordering to get wrong.
+  #
+  # data_stream.dataset is set DELIBERATELY. The package default is
+  # filestream.generic, which SO already uses for its own zeek, suricata and
+  # idh imports; landing VyOS there would mix router syslog into SO's import
+  # datasets. `vyos` gives logs-vyos-default, unambiguous and greppable.
+  #
+  # exclude_lines drops range-agent: a fixed 10s platform heartbeat that will
+  # never carry a security event. systemd is deliberately KEPT -- its session
+  # scopes pair with the sshd logins.
+  #
+  # NO PARSING. There is no VyOS integration in Elastic's catalogue and the
+  # generic udp/tcp packages are absent from this airgapped registry, so the
+  # message body stays text. log.file.path carries the router name, so events
+  # remain filterable by device.
+  - policy: so-syslog
+    description: "Syslog collector — VyOS router logs"
+    package: filestream
+    name: vyos-routers
+    template: vyos.json.j2
+    hosts: ["soc-syslog"]
+    mirror_base: true
+    input: filestream-filestream
+    dataset: vyos
+    # Explicit per-router paths, NEVER a glob over /var/log/remote/. That
+    # directory holds every sender -- the Linux hosts already reporting via
+    # their own agents, and the pfSense firewalls now arriving parsed -- so a
+    # glob would re-ingest both.
+    #
+    # The ROUTER LIST only. The paths themselves are built by a loop in
+    # vyos.json.j2, deliberately: a map('regex_replace', ...) with a \1
+    # backreference here rendered the backreference LITERALLY on the host
+    # (ss-pp-so 2026-09-10 -- four identical paths reading
+    # /var/log/remote/\1/...). A loop has nothing to escape.
+    #
+    # airfield has no vyos_routes_only group and no ISP router to exclude;
+    # [vyos] is the whole set, bs-modbus-gateway included -- it is a VyOS
+    # node on the OT boundary and its logs are worth as much as the others'.
+    path_hosts: >-
+      {{ groups['vyos'] | default([]) | unique | sort }}
+    exclude_lines: ["range-agent"]
+    # LIFT THE ROUTER NAME INTO AN ECS FIELD, not just the file path.
+    #
+    # ss-pp-so's role does not do this and notes "a dissect processor could
+    # lift the hostname into host.name if that proves worth having". It was
+    # already proven worth having HERE: the playbook this replaces ran exactly
+    # this tokenizer, and its own verification aggregated on
+    # observer.hostname. Porting without it would have been a regression --
+    # analysts would have to parse log.file.path to answer "which router".
+    #
+    # observer.hostname, not host.name. host.name stays soc-syslog and that is
+    # correct: it IS the host the agent runs on. observer.hostname is the ECS
+    # field for the device that emitted the event.
+    #
+    # /var/log/remote/ is already demultiplexed by device into a directory per
+    # sender, so the PATH is the most reliable attribution available -- more
+    # so than the message, since pfSense emits malformed RFC3164 with no
+    # HOSTNAME field at all (UPSTREAM_FIXES 2026-06-30).
+    #
+    # NOTE the shape differs from the playbook this came from. That used the
+    # FULL package-policy format, where a yaml-typed var is
+    # {"type": "yaml", "value": "<doc>"}. This role uses Fleet's SIMPLIFIED
+    # format, where vars are bare values. If Kibana rejects it, the attach
+    # step reports INTEGRATION_FAILED with the response body -- it fails
+    # loudly, not silently.
+    processors: |
+      - dissect:
+          tokenizer: "/var/log/remote/%{observer.hostname}/syslog.log"
+          field: "log.file.path"
+          target_prefix: ""
+    verify_datastream: "logs-vyos-{{ so_fleet_namespace }}"
+    verify_field: "log.file.path"
+    seed:
+      host: soc-syslog
+      requests: []

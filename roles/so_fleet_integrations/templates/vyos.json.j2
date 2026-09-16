@@ -1,0 +1,24 @@
+{
+  "policy_id": "{{ item.policy }}",
+  "package": { "name": "{{ item.package }}", "version": "" },
+  "name": "{{ item.name }}",
+  "namespace": "{{ so_fleet_namespace }}",
+  "description": "Managed by so_fleet_integrations (Ansible). Do not edit in SOC.",
+  "inputs": {
+    "{{ item.input }}": {
+      "enabled": true,
+      "streams": {
+        "filestream.generic": {
+          "enabled": true,
+          "vars": {
+            "paths": [{% for h in item.path_hosts %}"/var/log/remote/{{ h }}/syslog.log"{% if not loop.last %}, {% endif %}{% endfor %}],
+            "data_stream.dataset": "{{ item.dataset }}",
+            "exclude_lines": {{ item.exclude_lines | to_json }},
+            "tags": ["vyos", "forwarded"]{% if item.processors is defined %},
+            "processors": {{ item.processors | to_json }}{% endif %}
+          }
+        }
+      }
+    }
+  }
+}

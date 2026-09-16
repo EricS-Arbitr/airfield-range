@@ -1,0 +1,23 @@
+{
+  "policy_id": "{{ item.policy }}",
+  "package": { "name": "{{ item.package }}", "version": "" },
+  "name": "{{ item.name }}",
+  "namespace": "{{ so_fleet_namespace }}",
+  "description": "Managed by so_fleet_integrations (Ansible). Do not edit in SOC.",
+  "inputs": {
+    "{{ item.input }}": {
+      "enabled": true,
+      "streams": {
+        "squid.log": {
+          "enabled": true,
+          "vars": {
+            "udp_host": "{{ item.udp_host }}",
+            "udp_port": {{ item.udp_port }},
+            "tags": ["squid-log", "forwarded"],
+            "preserve_original_event": false
+          }
+        }
+      }
+    }
+  }
+}

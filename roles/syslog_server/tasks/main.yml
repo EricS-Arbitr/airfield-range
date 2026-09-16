@@ -37,3 +37,29 @@
     name: rsyslog
     state: started
     enabled: true
+
+# --- Relay firewall syslog to the local Elastic agent ---------------------
+# See templates/29-fleet-forward.conf.j2 for why this is a local fan-out
+# rather than a second destination configured on the firewalls.
+- name: Relay pfSense syslog to the local Elastic agent
+  ansible.builtin.template:
+    src: 29-fleet-forward.conf.j2
+    dest: /etc/rsyslog.d/29-fleet-forward.conf
+    mode: '0644'
+    owner: root
+    group: root
+  register: fleet_forward_conf
+
+# Was 31- until 2026-09-10, where it sorted AFTER 30-remote.conf's `stop`
+# and was therefore unreachable. Remove the stale copy or both exist.
+- name: Remove the superseded 31- relay config
+  ansible.builtin.file:
+    path: /etc/rsyslog.d/31-fleet-forward.conf
+    state: absent
+  register: fleet_forward_old
+
+- name: Restart rsyslog if the relay config changed
+  ansible.builtin.systemd:
+    name: rsyslog
+    state: restarted
+  when: fleet_forward_conf.changed

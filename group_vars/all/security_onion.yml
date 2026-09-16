@@ -397,65 +397,31 @@ so_registry_build_log: /var/log/so_registry_build.log
 # firewalls and every Linux host ship to UDP/TCP 514 there, and it writes
 # /var/log/remote/<device>/syslog.log (roles/syslog_server).
 #
-# SO reads THOSE FILES with the Elastic Agent that phase 75 already enrolled
-# on soc-syslog.
+# Two mechanisms consume that, both configured by so_fleet_integrations:
 #
-# WHY NOT rsyslog omfwd TO THE MANAGER. That is SO's more conventional path
-# and it preserves the original source IP, but it needs a Fleet listener
-# configured either way, PLUS a so-firewall change, PLUS an edit to a working
-# 30-remote.conf whose `stop` statements are load-bearing -- put an action
-# after one and it never runs. Strictly more risk for the same data. Revisit only if Fleet turns
-# out to reconcile away the package policy (see playbooks/76-syslog.yml).
-so_syslog_host: "soc-syslog"
-so_syslog_paths:
-  - "/var/log/remote/*/syslog.log"
+#   pfSense  rsyslog on soc-syslog relays the RAW datagram from the firewall
+#            interface addresses to 127.0.0.1:{{ so_pfsense_syslog_port }},
+#            where the Elastic pfSense integration parses it. See
+#            roles/syslog_server/templates/29-fleet-forward.conf.j2 for why
+#            this is a local fan-out and not a second destination on the
+#            firewalls.
+#   VyOS     the agent tails /var/log/remote/<router>/syslog.log directly.
+#
+# THE VyOS PATHS ARE ENUMERATED PER ROUTER, NEVER GLOBBED. /var/log/remote/
+# holds every sender, including the SO grid nodes themselves -- they are in
+# [linux] so their daemon logs land there like everyone else. Measured on the
+# first ingest 2026-08-12: soc-so-manager alone was the single largest source
+# at 453k events, and the six grid nodes together were roughly a third of all
+# syslog volume. SO already collects its own component logs natively, so
+# reading them back in is duplicate data about the thing doing the reading.
+# Listing the [vyos] hosts explicitly excludes them structurally rather than
+# by a filter that can be forgotten.
 
-# Its own agent policy, COPIED from whatever policy soc-syslog is already on
-# so it keeps Elastic Defend and the system integration. Adding the input to
-# the shared endpoint policy instead would push a filestream glob to all 66
-# endpoints -- harmless where the path does not exist, but it makes every
-# host's policy claim something that is only true of one of them.
-so_syslog_policy_name: "so-syslog-collector"
-so_syslog_dataset: "syslog.remote"
 
-# The INPUT package to collect with, and the namespace to land in. Both are
-# copied from what SO does for Zeek on this grid rather than from Elastic's
-# docs, because the grid is the authority on what works here:
-#
-#   package   filestream 1.2.0 "Custom Logs (Filestream)"  -- NOT `log`.
-#             `log` is Elastic's deprecated input; filestream supersedes it,
-#             and filestream is what SO's own zeek-logs policy uses.
-#   namespace so  -- NOT "default". SO writes every dataset into the `so`
-#             namespace, so the index is logs-<dataset>-so. Using "default"
-#             creates logs-<dataset>-default, which is a real index that SO's
-#             queries and dashboards never look at: data arrives, nothing
-#             shows it, and the deploy reports success.
-so_syslog_package: "filestream"
-so_syslog_namespace: "so"
-
-# Do NOT re-ingest the SO grid's own syslog.
-#
-# Every Linux host ships to soc-syslog, and the grid nodes are in [linux], so
-# their daemon logs land in /var/log/remote/<node>/ like everyone else. SO
-# already collects its own component logs natively -- reading them back in
-# through this input is duplicate data about the thing doing the reading.
-#
-# Measured on the first ingest 2026-08-12: soc-so-manager alone was the single
-# largest source at 453k events, and the six grid nodes together were roughly a
-# third of all syslog volume.
-#
-# Derived from the inventory so it cannot drift when a sensor is added.
-# filestream matches these as regexes against the full path.
-so_syslog_exclude_files:
-  - "/var/log/remote/({{ groups['so_all'] | sort | join('|') }})/"
-
-# The device name is recovered from the FILE PATH, not the message. rsyslog
-# already demultiplexed by host into a directory per device, so the path is
-# the most reliable attribution available -- pfSense in particular emits
-# malformed RFC3164 with no HOSTNAME field at all (UPSTREAM_FIXES 2026-06-30),
-# which is why syslog_source_ip_map exists.
-#
-# host.name stays soc-syslog and that is correct: it IS the host the agent
-# runs on. The originating device lands in observer.hostname, which is the
-# ECS field for "the device that observed/emitted the event".
-so_syslog_path_tokenizer: "/var/log/remote/%{observer.hostname}/syslog.log"
+# Port the Elastic pfSense integration listens on, on soc-syslog. Package
+# default is 9001. IN GROUP_VARS RATHER THAN A ROLE DEFAULT: both
+# roles/syslog_server (the rsyslog relay template) and so_fleet_integrations
+# read it, and neither includes the other -- a role default would resolve
+# cleanly at build time and be undefined at run time. Fifth instance of that
+# trap; verify_vars.py now catches it.
+so_pfsense_syslog_port: 9001

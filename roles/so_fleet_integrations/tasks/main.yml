@@ -1,0 +1,356 @@
+---
+# =========================================================================
+# so_fleet_integrations — create host-scoped Fleet policies + integrations
+# =========================================================================
+# Runs on so-manager. See defaults/main.yml for why dedicated policies and
+# why we call the Fleet API rather than SO's loader.
+#
+# Every API call goes through so-elastic-fleet-common's fleet_api(), which
+# uses /opt/so/conf/elasticsearch/curl.config for auth -- the same mechanism
+# defend_exclusions.yml already uses. No credentials in vault, nothing for us
+# to rotate.
+# =========================================================================
+
+- name: Preflight — confirm this role is running with escalated privilege
+  ansible.builtin.command: id -u
+  register: _fleet_euid
+  changed_when: false
+
+- name: Fail immediately if so_fleet_integrations was invoked without become
+  ansible.builtin.fail:
+    msg: >-
+      so_fleet_integrations must run with become: true — every task reads
+      /opt/so/conf/elasticsearch/curl.config, which is root-only.
+  when: (_fleet_euid.stdout | trim) != '0'
+
+- name: Ensure our integration JSON directory exists
+  ansible.builtin.file:
+    path: "{{ so_fleet_json_dir }}/{{ item.policy }}"
+    state: directory
+    mode: '0750'
+    owner: root
+    group: root
+  loop: "{{ so_fleet_integrations }}"
+  loop_control:
+    label: "{{ item.policy }}"
+
+- name: Render the integration definition for each policy
+  ansible.builtin.template:
+    src: "{{ item.template }}"
+    dest: "{{ so_fleet_json_dir }}/{{ item.policy }}/{{ item.name }}.json"
+    mode: '0640'
+    owner: root
+    group: root
+  loop: "{{ so_fleet_integrations }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# --- Agent policies -------------------------------------------------------
+# elastic_fleet_policy_create sets id == name, so the policy id is
+# deterministic and existence is a plain string match. No lookup table.
+- name: Create the dedicated agent policy if it does not exist
+  ansible.builtin.shell: |
+    . /usr/sbin/so-elastic-fleet-common
+    if elastic_fleet_agent_policy_ids | grep -qxF "{{ item.policy }}"; then
+      echo "POLICY_EXISTS {{ item.policy }}"
+    elif elastic_fleet_policy_create "{{ item.policy }}" "{{ item.description }}" "false" "{{ so_fleet_policy_timeout }}" > /dev/null; then
+      echo "POLICY_CREATED {{ item.policy }}"
+    else
+      echo "POLICY_FAILED {{ item.policy }}"
+    fi
+  args:
+    executable: /bin/bash
+  register: so_fleet_policy
+  changed_when: "'POLICY_CREATED' in so_fleet_policy.stdout"
+  failed_when: "'POLICY_FAILED' in so_fleet_policy.stdout"
+  loop: "{{ so_fleet_integrations }}"
+  loop_control:
+    label: "{{ item.policy }}"
+
+# --- Base telemetry parity ------------------------------------------------
+# MUST run before the host-specific integration and before reassignment: the
+# moment a host moves onto a dedicated policy it runs ONLY what that policy
+# carries, so the base integrations have to be there first or the host has a
+# window with no endpoint telemetry at all.
+#
+# Clones each base package policy from endpoints-initial rather than
+# re-authoring it. Re-authoring would mean maintaining a second copy of SO`s
+# own Defend/osquery/system configuration and drifting from it silently on
+# every SO upgrade; a clone tracks whatever SO ships.
+#
+# Verified necessary 2026-09-10: after moving to so-webserver, pp-www had
+# elastic-defend producing 0 documents.
+- name: Mirror the base endpoint integrations onto each dedicated policy
+  ansible.builtin.shell: |
+    . /usr/sbin/so-elastic-fleet-common
+    DST="{{ item.0.policy }}"
+    PKG="{{ item.1 }}"
+    NEWNAME="$PKG-$DST"
+    SRC=$(/usr/sbin/so-elastic-fleet-agent-policy-view "{{ so_fleet_base_policy }}" \
+          | jq -r --arg p "$PKG" '.item.package_policies[]? | select(.package.name==$p) | .id' | head -1)
+    if [ -z "$SRC" ]; then
+      echo "BASE_MISSING $PKG not on {{ so_fleet_base_policy }}"
+      exit 0
+    fi
+    EXIST=$(/usr/sbin/so-elastic-fleet-agent-policy-view "$DST" \
+            | jq -r --arg n "$NEWNAME" '.item.package_policies[]? | select(.name==$n) | .id' | head -1)
+    if [ -n "$EXIST" ]; then
+      echo "BASE_PRESENT $NEWNAME"
+      exit 0
+    fi
+    # BOTH policy_id AND policy_ids. Fleet honours the PLURAL; setting only
+    # the singular leaves the clone pointing at the SOURCE policy, which on
+    # 2026-09-10 created duplicate `system` integrations on endpoints-initial
+    # and had Fleet reject `endpoint`/`osquery_manager` with "already exists
+    # on this agent policy" -- an error that reads like a no-op and is
+    # actually the clone landing in the wrong place.
+    BODY=$(fleet_api "package_policies/$SRC" \
+           | jq --arg pid "$DST" --arg nm "$NEWNAME" '.item
+               | .policy_id=$pid | .policy_ids=[$pid] | .name=$nm
+               | del(.id,.revision,.created_at,.created_by,.updated_at,.updated_by,.version,.agents,.spaceIds,.elasticsearch)')
+    if [ -z "$BODY" ]; then
+      echo "BASE_FAILED $NEWNAME could not read source policy"
+      exit 0
+    fi
+    if ! printf '%s' "$BODY" | fleet_api "package_policies" -XPOST -H "kbn-xsrf: true" -H "Content-Type: application/json" -d @- > /dev/null; then
+      echo "BASE_FAILED $NEWNAME"
+      exit 0
+    fi
+    # A 2xx is not proof it landed where we asked. The policy_ids bug above
+    # returned success while creating the integration on the WRONG policy,
+    # so confirm it is actually on DST before claiming it worked.
+    LANDED=$(/usr/sbin/so-elastic-fleet-agent-policy-view "$DST" \
+             | jq -r --arg n "$NEWNAME" '.item.package_policies[]? | select(.name==$n) | .id' | head -1)
+    if [ -n "$LANDED" ]; then
+      echo "BASE_CLONED $NEWNAME"
+    else
+      echo "BASE_FAILED $NEWNAME created but not on $DST"
+    fi
+  args:
+    executable: /bin/bash
+  register: so_fleet_base
+  changed_when: "'BASE_CLONED' in so_fleet_base.stdout"
+  failed_when: "'BASE_FAILED' in so_fleet_base.stdout"
+  loop: >-
+    {{ so_fleet_integrations | selectattr('mirror_base') | list
+       | product(so_fleet_base_packages) | list }}
+  loop_control:
+    label: "{{ item.1 }} -> {{ item.0.policy }}"
+
+# Assert parity, do not assume the clones landed. This is the exact failure
+# that shipped on 2026-09-09 and was only caught by inspecting the policies
+# by hand two days later -- nothing in the run reported it, because every
+# API call had succeeded. A policy short of a base package means the host on
+# it is missing endpoint telemetry.
+- name: Verify each dedicated policy carries the full base telemetry set
+  ansible.builtin.shell: |
+    . /usr/sbin/so-elastic-fleet-common
+    HAVE=$(/usr/sbin/so-elastic-fleet-agent-policy-view "{{ item.policy }}" \
+           | jq -r '.item.package_policies[]? | .package.name' | sort -u | tr '\n' ' ')
+    MISSING=""
+    for p in {{ so_fleet_base_packages | join(' ') }}; do
+      case " $HAVE " in
+        *" $p "*) ;;
+        *) MISSING="$MISSING $p" ;;
+      esac
+    done
+    if [ -n "$MISSING" ]; then
+      echo "PARITY_MISSING {{ item.policy }} lacks:$MISSING (has: $HAVE)"
+    else
+      echo "PARITY_OK {{ item.policy }} ($HAVE)"
+    fi
+  args:
+    executable: /bin/bash
+  register: so_fleet_parity
+  changed_when: false
+  failed_when: "'PARITY_MISSING' in so_fleet_parity.stdout"
+  loop: "{{ so_fleet_integrations | selectattr('mirror_base') | list }}"
+  loop_control:
+    label: "{{ item.policy }}"
+
+# --- Integrations ---------------------------------------------------------
+# check then create-or-update, mirroring what SO's own loader does for its
+# hardcoded directories. Idempotent: a re-run updates in place.
+- name: Attach the integration to its policy
+  ansible.builtin.shell: |
+    . /usr/sbin/so-elastic-fleet-common
+    JSON="{{ so_fleet_json_dir }}/{{ item.policy }}/{{ item.name }}.json"
+    elastic_fleet_integration_check "{{ item.policy }}" "$JSON"
+    # Deliberately NOT using fleet_api here. It passes --fail and discards
+    # stderr, so a 4xx returns an empty body and the reason is lost -- every
+    # INTEGRATION_FAILED on this track has been opaque for that reason, and
+    # each one cost a round-trip to rediscover by hand. Same auth, same
+    # endpoint, response kept.
+    API="localhost:5601/api/fleet/package_policies"
+    CFG=/opt/so/conf/elasticsearch/curl.config
+    if [ -n "$INTEGRATION_ID" ]; then
+      RESP=$(curl -sK "$CFG" -L "$API/$INTEGRATION_ID" -H "kbn-xsrf: true" -H "Content-Type: application/json" -XPUT -d "@$JSON")
+      ACTION=UPDATED
+    else
+      RESP=$(curl -sK "$CFG" -L "$API" -H "kbn-xsrf: true" -H "Content-Type: application/json" -XPOST -d "@$JSON")
+      ACTION=CREATED
+    fi
+    if printf '%s' "$RESP" | grep -q '"item"'; then
+      echo "INTEGRATION_$ACTION {{ item.name }}"
+    else
+      echo "INTEGRATION_FAILED {{ item.name }} :: $(printf '%s' "$RESP" | head -c 400)"
+    fi
+  args:
+    executable: /bin/bash
+  register: so_fleet_integration
+  changed_when: "'INTEGRATION_CREATED' in so_fleet_integration.stdout"
+  failed_when: "'INTEGRATION_FAILED' in so_fleet_integration.stdout"
+  loop: "{{ so_fleet_integrations }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# --- Move the target hosts onto their policy ------------------------------
+# Enrolment puts every endpoint on endpoints-initial, because the token baked
+# into SO's installer decides the policy. Reassignment is the supported way
+# to move one afterwards. Idempotent: we compare the current policy first.
+- name: Reassign the target host onto its dedicated policy
+  ansible.builtin.shell: |
+    . /usr/sbin/so-elastic-fleet-common
+    WANT="{{ item.1 }}"
+    # The kuery VALUE MUST be quoted (%22). Unquoted, KQL tokenises on the
+    # hyphen, so hostname:pp-www also matches pp-proxy and pp-syslog -- and
+    # taking [0] then picks an arbitrary one. On 2026-09-09 that
+    # cross-assigned the two hosts: pp-www landed on so-proxy and never ran
+    # the nginx input, which surfaced ten minutes later as DATA_NONE with
+    # nothing visibly wrong at either end.
+    #
+    # The jq select() is the real guard, not the quoting. A lookup that CAN
+    # return the wrong host must be made to prove it returned the right one,
+    # so we match the hostname exactly rather than trusting the query.
+    AID=$(fleet_api "agents?kuery=local_metadata.host.hostname:%22$WANT%22" \
+          | jq -r --arg h "$WANT" '(.items // .list)[]
+              | select(((.local_metadata.host.hostname // "") | ascii_downcase) == ($h | ascii_downcase))
+              | .id' | head -1)
+    if [ -z "$AID" ]; then
+      echo "AGENT_NOT_FOUND $WANT"
+      exit 0
+    fi
+    # Re-read the agent and confirm identity before mutating it.
+    GOT=$(fleet_api "agents/$AID" | jq -r ".item.local_metadata.host.hostname // empty")
+    if [ "$(echo "$GOT" | tr A-Z a-z)" != "$(echo "$WANT" | tr A-Z a-z)" ]; then
+      echo "AGENT_MISMATCH wanted=$WANT got=$GOT id=$AID"
+      exit 0
+    fi
+    CUR=$(fleet_api "agents/$AID" | jq -r ".item.policy_id // empty")
+    if [ "$CUR" = "{{ item.0.policy }}" ]; then
+      echo "ALREADY_ASSIGNED {{ item.1 }}"
+    elif fleet_api "agents/$AID/reassign" -XPOST -H "kbn-xsrf: true" -H "Content-Type: application/json" -d "{\"policy_id\":\"{{ item.0.policy }}\"}" > /dev/null; then
+      echo "REASSIGNED {{ item.1 }} -> {{ item.0.policy }}"
+    else
+      echo "REASSIGN_FAILED {{ item.1 }}"
+    fi
+  args:
+    executable: /bin/bash
+  register: so_fleet_reassign
+  changed_when: "'REASSIGNED' in so_fleet_reassign.stdout"
+  failed_when: >-
+    'REASSIGN_FAILED' in so_fleet_reassign.stdout
+    or 'AGENT_NOT_FOUND' in so_fleet_reassign.stdout
+    or 'AGENT_MISMATCH' in so_fleet_reassign.stdout
+  loop: "{{ so_fleet_integrations | subelements('hosts') }}"
+  loop_control:
+    label: "{{ item.1 }} -> {{ item.0.policy }}"
+
+# --- Seed traffic so verification does not depend on luck -----------------
+# On the 2026-09-10 fresh build these datasets verified on 2 and 4 documents
+# -- whatever incidental traffic happened to cross the range during the
+# 10-minute wait. User emulation is not running yet at this point in the
+# deploy, so a quieter build would have produced zero and hard-failed the
+# LAST phase of a five-hour run.
+#
+# Generating the traffic ourselves removes the dependence on ambient
+# activity, and unlike downgrading the check to a warning it still proves
+# the whole path works: request -> log line -> agent -> ingest pipeline ->
+# parsed document.
+#
+# Deliberately tolerant. A seed that fails is not itself a deploy failure;
+# the verify step below is the judge. wget over curl (Eric, 2026-09-10).
+- name: Seed traffic so the verify step does not depend on ambient activity
+  ansible.builtin.shell: |
+    if ! command -v wget > /dev/null 2>&1; then
+      echo "SEED_SKIPPED wget not present on {{ item.seed.host }}"
+      exit 0
+    fi
+    ok=0
+    {% for r in item.seed.requests %}
+    if wget {{ so_fleet_seed_opts }} {{ r }} > /dev/null 2>&1; then ok=$((ok+1)); fi
+    {% endfor %}
+    echo "SEEDED {{ item.seed.host }} $ok/{{ item.seed.requests | length }}"
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ item.seed.host }}"
+  register: so_fleet_seed
+  changed_when: false
+  failed_when: false
+  loop: "{{ so_fleet_integrations }}"
+  loop_control:
+    label: "{{ item.seed.host }}"
+
+- name: Report what was seeded
+  ansible.builtin.debug:
+    msg: "{{ so_fleet_seed.results | map(attribute='stdout') | list }}"
+
+# --- Proof, not an exit code ---------------------------------------------
+# An integration can create cleanly, attach cleanly, and collect NOTHING --
+# a wrong input or stream id in defaults/main.yml produces exactly that, and
+# every 200 along the way still says success.
+#
+# We assert a PARSED FIELD, not a document count. A count only proves bytes
+# arrived: if the log format does not match what the ingest pipeline expects,
+# documents still land, they just have no usable fields. That is the squid
+# trap in particular -- the integration wants squid`s native format, and
+# feeding it something else yields a full index of unqueryable rows. Asking
+# for url.path / source.ip proves the pipeline actually understood the data.
+#
+# Retries because the agent has to check in, receive the new policy and start
+# collecting before anything can land.
+- name: Wait for PARSED documents to arrive in each dataset
+  ansible.builtin.shell: |
+    n=$(so-elasticsearch-query "{{ item.verify_datastream }}/_search?q={{ item.verify_field }}:*&size=0&filter_path=hits.total" 2>/dev/null | grep -o "\"value\":[0-9]*" | head -1 | cut -d: -f2)
+    if [ -n "$n" ] && [ "$n" -gt 0 ]; then echo "DATA_OK {{ item.verify_datastream }} {{ item.verify_field }}=$n"; else echo "DATA_NONE {{ item.verify_datastream }}"; fi
+  args:
+    executable: /bin/bash
+  register: so_fleet_data
+  until: "'DATA_OK' in so_fleet_data.stdout"
+  retries: "{{ so_fleet_verify_retries }}"
+  delay: 30
+  changed_when: false
+  ignore_errors: true
+  loop: "{{ so_fleet_integrations }}"
+  loop_control:
+    label: "{{ item.verify_datastream }}"
+
+- name: Fail if any integration produced no data
+  ansible.builtin.fail:
+    msg: |
+      These integrations attached successfully but collected nothing:
+        {{ dead | map(attribute='item.name') | join(', ') }}
+
+      The API accepted every call, so the fault is in WHAT was asked for,
+      not whether it was asked. Check, in order:
+        1. input / stream ids in so_fleet_integrations (defaults/main.yml).
+           Confirm against the grid:
+             . /usr/sbin/so-elastic-fleet-common
+             fleet_api "epm/packages/<pkg>" | jq -r '.item.data_streams[]
+               | "\(.dataset)  input=\(.streams[0].input)"'
+        2. the source is actually sending. nginx: the paths exist and are
+           readable by the elastic-agent user. squid: squid.conf carries
+           `access_log udp://127.0.0.1:9537 squid` and squid was reloaded.
+        2b. the FORMAT matches. Documents with no parsed fields mean the
+           ingest pipeline did not recognise the input -- check a raw doc.
+        3. the host actually moved policy — so-elastic-fleet-agent-policy-view
+           <policy> should list it.
+  vars:
+    dead: "{{ so_fleet_data.results | rejectattr('stdout', 'search', 'DATA_OK') | list }}"
+  when: dead | length > 0
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      Fleet integrations live:
+      {{ so_fleet_data.results | map(attribute='stdout') | select('search', 'DATA_OK') | list }}

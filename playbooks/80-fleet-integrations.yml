@@ -1,0 +1,38 @@
+---
+# =========================================================================
+# 80-fleet-integrations.yml — host-scoped log sources into Security Onion
+# =========================================================================
+# Security Onion is the only SIEM on this range. Log sources reach it through
+# Elastic integrations, parsed into proper datasets rather than raw syslog
+# text:
+#
+#   nginx    (bs-www)      -> logs-nginx.access-*  / logs-nginx.error-*
+#   squid    (bs-proxy)    -> logs-squid.log-*
+#   pfSense  (soc-syslog)  -> logs-pfsense.log-*     bs-edge-fw, bs-ops-fw
+#   VyOS     (soc-syslog)  -> logs-vyos-*           the five [vyos] routers
+#
+# The last two both land on soc-syslog because the firewalls and routers
+# cannot run an agent themselves. pfSense SENDS (the integration listens on
+# udp/{{ so_pfsense_syslog_port }}, fed by the local rsyslog relay in
+# roles/syslog_server); VyOS is READ from the collector's own
+# /var/log/remote/<router>/syslog.log.
+#
+# ORDERING: MUST run after 75-endpoint.yml. Enrolment puts every endpoint on
+# `endpoints-initial` because the token baked into SO's installer decides the
+# policy; this phase moves the three target hosts onto dedicated policies
+# afterwards. Run before enrolment and there is no agent to reassign.
+#
+# Runs on soc-so-manager, not on the log-producing hosts: Fleet is configured
+# centrally through the API, and the agents pick the change up at check-in.
+# =========================================================================
+
+- name: Fleet integrations — host-scoped log sources
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  roles:
+    - so_fleet_integrations
+  tags:
+    - so
+    - fleet
+    - fleet_integrations

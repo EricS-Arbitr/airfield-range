@@ -25,7 +25,7 @@ This role does not currently expose tunables. If you need to change the listen p
 ## Prerequisites
 - The host runs Ubuntu (`apt`-managed). The Linux NM pre-config play and `common` role run before this one.
 - Network reachability from every sender to `syslog_server_ip:514` is in place — verified end-to-end during the routing fixes (corp/DMZ/OT all reach the PP-Services subnet that pp-syslog lives on).
-- The host is enrolled into Security Onion's Fleet by `playbooks/75-endpoint.yml`, and `playbooks/76-syslog.yml` adds the filestream input over the `/var/log/remote/` tree.
+- The host is enrolled into Security Onion's Fleet by `playbooks/75-endpoint.yml`, and `playbooks/80-fleet-integrations.yml` puts it on a dedicated policy carrying the pfSense listener and the VyOS filestream input over the `/var/log/remote/` tree.
 
 ## Notes
 - Listens on **both** UDP and TCP 514. UDP matches pfSense/VyOS defaults; TCP is available for any client configured to send over TCP. Most clients in this range use UDP for simplicity.
