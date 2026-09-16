@@ -355,12 +355,21 @@
   # swallowed by the 30×10s `until` loop below — it retries a hard
   # "command not found" for a full 5 min before surfacing the real error.
 
-- name: Grid join — wait for this node's salt-key to appear in Unaccepted on master
+- name: Grid join — wait for this node's salt-key to reach the master
   # Invoked bare (not /usr/sbin/salt-key). SO ships its OWN helpers in
   # /usr/sbin (so-firewall, so-minion), but salt's binaries come from the
   # Salt onedir package and land in /usr/bin. sudo's secure_path covers
   # them — `sudo salt-call` above already proves that.
-  ansible.builtin.command: "sudo salt-key --list=unaccepted --no-color"
+  ansible.builtin.shell: |
+    key="{{ inventory_hostname }}_{{ so_role }}"
+    un=$(sudo salt-key --list=unaccepted --no-color | sed 's/^[[:space:]]*//')
+    ac=$(sudo salt-key --list=accepted   --no-color | sed 's/^[[:space:]]*//')
+    printf 'unaccepted:\n%s\naccepted:\n%s\n' "$un" "$ac"
+    if printf '%s\n%s\n' "$un" "$ac" | grep -qxF "$key"; then
+      echo "GRIDKEY_PRESENT"
+    else
+      echo "GRIDKEY_ABSENT"
+    fi
   delegate_to: "{{ groups['so_manager'][0] }}"
   become: true
   register: pending_keys
@@ -368,7 +377,25 @@
   # up to 5 min (30 × 10s) for our key to appear. Without this wait,
   # so-minion -o=add below races with the minion's own auth and no-ops
   # with "does not match any unaccepted keys".
-  until: (inventory_hostname + '_' + so_role) in pending_keys.stdout
+  # WAIT FOR THE END STATE, NOT THE TRANSITION. Polling --list=unaccepted
+  # alone is only correct on a FIRST install, where the key genuinely passes
+  # through Unaccepted on its way to Accepted. A node that is already a grid
+  # member never enters Unaccepted -- it reconnects with the accepted key it
+  # already holds -- so on any re-run against a working grid the old gate
+  # waited five minutes for a transition that could not happen and then failed
+  # a healthy node. (ss-pp-so 2026-09-03: two sensors failed this way while
+  # both were serving traffic with Zeek and Suricata green.)
+  #
+  # The reboot above carries no `when:` guard so it runs even when
+  # so_setup_can_skip is true, while the stale-key delete DOES carry it and is
+  # skipped -- so on a re-run the key is left in place ON PURPOSE, and the old
+  # gate then demanded to see it somewhere it could never be.
+  #
+  # so-minion -o=add below already tolerates exactly this case
+  # ("does not match any unaccepted keys"), so the gate was strictly stricter
+  # than the step it exists to protect. When a gate and the operation behind it
+  # disagree about what counts as ready, the gate is the one that is wrong.
+  until: "'GRIDKEY_PRESENT' in pending_keys.stdout"
   retries: 30
   delay: 10
   changed_when: false

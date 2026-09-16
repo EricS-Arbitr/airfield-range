@@ -14,6 +14,32 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-16 · bug · so_search / so_sensor — grid-join gate waited for a transition a healthy node never makes
+
+**Symptom (as seen on ss-pp-so 2026-09-03, latent here).** Sensors fail grid join with `attempts: 30, cmd: salt-key --list=unaccepted, stdout: "Unaccepted Keys:"` — an EMPTY list — while their keys sit in Accepted on the master and the nodes serve traffic with Zeek and Suricata green.
+
+**Root cause.** The gate polled `salt-key --list=unaccepted` and waited for the node's key to appear there. That is only correct on a FIRST install, where the key genuinely passes through Unaccepted on its way to Accepted. A node that is already a grid member never enters Unaccepted — it reconnects with the accepted key it already holds — so on any re-run against a working grid the gate waits five minutes for a transition that cannot happen, then fails a healthy node. The reboot above it carries no `when:` guard so it runs even when `so_setup_can_skip` is true, while the stale-key delete DOES carry that guard and is skipped: on a re-run the key is left in place ON PURPOSE, and the gate then demanded to see it somewhere it could never be.
+
+**Why airfield had not hit it.** The range has only ever installed SO fresh. The 2026-09-15/16 deploy reached the SO phases for the first time on its third run, so the key genuinely passed through Unaccepted. The first re-deploy over an existing grid would have failed healthy nodes.
+
+**Fix (overlay).** Wait for the END STATE — the master knows this key, in either list — and let `so-minion -o=add` accept it or no-op. The task below the gate already tolerated exactly this case (`"does not match any unaccepted keys" not in so_min_add.stdout`), so the gate was strictly stricter than the step it exists to protect. When a gate and the operation behind it disagree about what counts as ready, the gate is the one that is wrong.
+
+---
+
+## 2026-09-16 · platform · init — default-gateway ARP answered by an impostor MAC
+
+**Symptom.** Off-subnet routing silently fails on Windows hosts. Presents as DNS failures, domain joins failing and Fleet enrolment failing — never as an ARP problem.
+
+**Root cause.** One MAC, `00:50:56:98:7D:D7`, answers ARP for the default-gateway address on whatever segment it appears on. Observed on four subnets across three independent ranges, always Windows-only: Linux on the same wire ignores unsolicited ARP for an address it did not ask about (`arp_accept=0`) while Windows accepts the reply and overwrites its cache. **It answers ICMP**, so any check that stops at "can I reach my gateway" reports healthy while nothing routes off-subnet. It is in a different VMware MAC block (`:98:`) from every real router interface (`:A8:`), so only the platform vendor can remove the cause.
+
+**A flush alone is not enough.** The impostor re-announces — hosts repaired by a flush reverted within the same run, with no reboot. The entry must be PINNED as a Permanent neighbour, which a forged reply cannot overwrite.
+
+**Fix (overlay).** Ported from ss-pp-so: flush and re-probe until the learned MAC is not blocklisted, confirm an OFF-SUBNET host is reachable (the host's own DNS server — proving routing, not merely that the gateway answers), then write a Permanent neighbour entry, and roll it back if reachability breaks. Non-fatal: a host that cannot route fails a later precondition that reports it better than init can.
+
+---
+
+---
+
 ## 2026-09-16 · bug · deploy.sh — a clean retry-scoped pass reported success over an unbuilt range
 
 **Symptom.** Attempt 1 failed, attempt 2 ran retry-scoped and passed, and deploy.sh exited 0 with `Success on attempt 2 (retry scope)`. The range had no domain joins and no Security Onion.
