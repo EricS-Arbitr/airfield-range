@@ -171,6 +171,36 @@
 # --- Integrations ---------------------------------------------------------
 # check then create-or-update, mirroring what SO's own loader does for its
 # hardcoded directories. Idempotent: a re-run updates in place.
+# Remove superseded integrations BEFORE attaching the current set. Order
+# matters when the old and new bind the same listener port: leaving the old
+# one in place means two inputs contend and the winner is arbitrary.
+- name: Remove integrations this role no longer manages
+  ansible.builtin.shell: |
+    . /usr/sbin/so-elastic-fleet-common
+    ID=$(fleet_api "package_policies?perPage=500" \
+         | jq -r --arg n "{{ item }}" '(.items // [])[] | select(.name == $n) | .id' | head -1)
+    if [ -z "$ID" ]; then
+      echo "RETIRED_ABSENT {{ item }}"
+      exit 0
+    fi
+    CFG=/opt/so/conf/elasticsearch/curl.config
+    RESP=$(curl -sK "$CFG" -L "localhost:5601/api/fleet/package_policies/delete" \
+           -H "kbn-xsrf: true" -H "Content-Type: application/json" \
+           -XPOST -d "{\"packagePolicyIds\":[\"$ID\"]}")
+    if printf '%s' "$RESP" | grep -q '"success":true'; then
+      echo "RETIRED_DELETED {{ item }} ($ID)"
+    else
+      echo "RETIRED_FAILED {{ item }} :: $(printf '%s' "$RESP" | head -c 300)"
+    fi
+  args:
+    executable: /bin/bash
+  register: so_fleet_retire
+  changed_when: "'RETIRED_DELETED' in so_fleet_retire.stdout"
+  failed_when: "'RETIRED_FAILED' in so_fleet_retire.stdout"
+  loop: "{{ so_fleet_retired_integrations | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+
 - name: Attach the integration to its policy
   ansible.builtin.shell: |
     . /usr/sbin/so-elastic-fleet-common

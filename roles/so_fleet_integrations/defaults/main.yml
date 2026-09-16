@@ -27,6 +27,27 @@
 # recurses that tree and could purge files it does not know about.
 so_fleet_json_dir: /opt/so/conf/arbitr-fleet
 
+# --- Integrations this role used to create and no longer does -------------
+# THE ROLE CREATES AND UPDATES, IT DOES NOT PRUNE. elastic_fleet_integration_
+# check matches by NAME, so renaming an integration does not replace the old
+# one -- it leaves it attached and RUNNING alongside the new one.
+#
+# That is not merely untidy when the input binds a PORT. On 2026-09-16
+# pfsense-firewalls (one integration for both firewalls, udp/9001) was
+# superseded by pfsense-bs-edge-fw on the same port. Both existed, both
+# claimed udp/9001, and the survivor was the old one -- which has no
+# add_fields processor, so its documents carried no observer.hostname and the
+# per-firewall verify for bs-edge-fw found nothing. bs-ops-fw on 9002 had no
+# competitor and passed. The symptom pointed at the firewall; the cause was a
+# stale policy object.
+#
+# EXPLICIT LIST, NOT "delete anything unrecognised". This policy also carries
+# the mirrored base integrations (system, osquery_manager, endpoint) and
+# anything SO's own loader put there. A prune-by-exclusion would eventually
+# delete something it did not understand.
+so_fleet_retired_integrations:
+  - pfsense-firewalls
+
 # --- Which namespace these datasets land in -------------------------------
 # RESOLVED 2026-09-16 by measuring this grid. `default` is correct.
 #

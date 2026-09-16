@@ -14,6 +14,24 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-16 · bug · so_fleet_integrations — the role creates and updates but never prunes
+
+**Symptom.** `pfsense-bs-edge-fw` attached successfully and collected nothing: 20 retries of `observer.hostname:bs-edge-fw` returned zero documents, failing the deploy. `pfsense-bs-ops-fw` passed on the same run.
+
+**Detection.** The symptom pointed at the firewall. It was not the firewall: `/var/log/remote/bs-edge-fw/syslog.log` held 873 `filterlog` lines out of 1552, so the device was logging, forwarding and reaching the collector normally. `syslog_source_ip_map` and `pfsense_interfaces` agreed on its sender address, and that address was in the relay's match list.
+
+**Root cause.** `elastic_fleet_integration_check` matches by NAME, so renaming an integration does not replace the old one — it leaves it attached and RUNNING. `pfsense-firewalls` (one integration covering both firewalls, udp/9001) was superseded by `pfsense-bs-edge-fw` on the same port. Both existed, both claimed udp/9001, and the survivor was the old one — which has no `add_fields` processor, so its documents carry no `observer.hostname` and the per-firewall query matched nothing. bs-ops-fw on udp/9002 had no competitor, which is why exactly one of the two passed.
+
+**Fix (overlay).** A prune step, `so_fleet_retired_integrations`, running BEFORE the attach. Order matters: when old and new bind the same listener port, leaving the old one in place means two inputs contend and the winner is arbitrary.
+
+Deliberately an EXPLICIT list rather than "delete anything not in so_fleet_integrations". The same agent policy also carries the mirrored base integrations (system, osquery_manager, endpoint) and whatever SO's own loader placed there; a prune-by-exclusion would eventually delete something it did not understand.
+
+**Wider point.** Renaming an integration is a destructive operation dressed as a rename, and it is silent until something contends for a shared resource. Any future rename needs an entry in the retired list in the same commit.
+
+---
+
+---
+
 ## 2026-09-16 · bug · pfSense Fleet relay — 29% of documents were grok failures, and none were attributable
 
 **Symptom.** `logs-pfsense.log-default` held 133 documents: 94 parsed cleanly as firewall events, 39 with `event.kind: pipeline_error` and `"Provided Grok expressions do not match field value: [<78>Sep 16 19:44:00 /usr/sbin/cron[59995]: (root) CMD (/usr/sbin/newsyslog)]"`. No document carried `observer.hostname`, so with two firewalls writing one dataset there was no way to tell which had logged what.
