@@ -14,6 +14,38 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-17 · bug · init gateway-ARP repair pinned a black-hole MAC and isolated a host
+
+**Symptom.** A fresh deploy failed all three attempts on one host of 86. `bs-file01` could not reach Fleet on 8220, so the `elastic_agent` preflight failed it and no agent was ever installed. Its neighbour `bs-file02`, at the adjacent address in the same subnet with the same gateway, enrolled normally.
+
+**Detection.** Comparing the two hosts' gateway neighbour entries:
+
+```
+bs-file01: 172.31.2.1 -> 00-00-00-00-00-00  Permanent
+bs-file02: 172.31.2.1 -> 00-50-56-A8-E5-D7  Permanent
+```
+
+A Permanent entry holding the all-zeros MAC is a black hole that ARP can never re-learn past. **This was self-inflicted** — by the gateway-ARP repair ported from ss-pp-so on 2026-09-16, on its first cold-range run. It is strictly worse than the poisoning it exists to fix.
+
+**Root cause, two compounding defects.**
+
+1. *The validity test accepted a sentinel.* The guard was `if (-not $mac -or ($blocked -contains $mac))`. `00-00-00-00-00-00` is a non-empty string that is not on the blocklist, so it read as a real address. Windows returns exactly that MAC for an `Incomplete` neighbour — the state a failed re-probe leaves behind — so the script's own repair loop manufactures the value it then trusts.
+
+2. *The routing proof did not prove routing.* `Routes` pinged the host's first configured DNS server, on the stated assumption that DNS "is off-subnet in every range these roles serve". False here: hosts in the Services segment (172.31.2.0/24) have their DCs in that same segment, so the ping never crossed the gateway. And `if (-not $dns) { return $true }` returned SUCCESS when there was nothing to test with. A proof that passes when it cannot run is not a proof — which is also why the post-pin rollback failed to catch the bad pin.
+
+**Fix (overlay).**
+
+- `Usable()` requires a well-formed `xx-xx-xx-xx-xx-xx`, rejects all-zeros and broadcast, and rejects blocklisted MACs.
+- The probe target is verified to be genuinely off-subnet against the host's own addresses and prefixes, preferring `init_gw_probe_targets` (soc-syslog, soc-so-manager) over DNS. Subnet comparison right-shifts both operands by the host-bit count rather than building a mask with `[uint32]0xFFFFFFFF -shl n`, which PowerShell widens to int64 and gets wrong.
+- **If no off-subnet target exists, the task does not pin at all.** Failing closed: an unpinned gateway is the status quo, a wrongly pinned one is an isolated host.
+- A Permanent entry holding an unusable MAC is deleted at the start, so a host already damaged by the previous version heals itself on the next run.
+
+**Remediation for a host already affected.** `Remove-NetNeighbor -IPAddress <gw> -Confirm:$false`, then re-probe. The new task does this automatically.
+
+---
+
+---
+
 ## 2026-09-16 · bug · so_fleet_integrations — the role creates and updates but never prunes
 
 **Symptom.** `pfsense-bs-edge-fw` attached successfully and collected nothing: 20 retries of `observer.hostname:bs-edge-fw` returned zero documents, failing the deploy. `pfsense-bs-ops-fw` passed on the same run.

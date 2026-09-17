@@ -27,3 +27,18 @@ init_gw_arp_blocklist:
   - "00-50-56-98-7D-D7"
 # How many flush/re-probe cycles before giving up and reporting INIT_GW_FAIL.
 init_gw_arp_attempts: 6
+
+# Off-subnet addresses the gateway-ARP check may probe, tried before the
+# host's own DNS servers. Needed because DNS is NOT reliably off-subnet: hosts
+# in the Services segment (172.31.2.0/24) have their DCs in that same segment,
+# so pinging them never crosses the gateway and proves nothing about routing.
+#
+# The check verifies each candidate is genuinely off-subnet before using it,
+# and refuses to pin at all when none is -- an unpinned gateway is the status
+# quo, a wrongly pinned one is an isolated host.
+#
+# soc-syslog and the SO manager are good targets: off-subnet for every segment
+# that carries endpoints, and reaching them is what the deploy needs anyway.
+init_gw_probe_targets:
+  - "172.31.7.13"      # soc-syslog
+  - "172.31.7.15"      # soc-so-manager
