@@ -39,6 +39,14 @@ init_gw_arp_attempts: 6
 #
 # soc-syslog and the SO manager are good targets: off-subnet for every segment
 # that carries endpoints, and reaching them is what the deploy needs anyway.
+# THREE TARGETS, DELIBERATELY IN DIFFERENT SEGMENTS. Any single target is
+# on-subnet for the hosts that share its segment, and those hosts would then
+# fall through to DNS -- which is exactly the assumption that broke this check
+# in the first place. bs-dc01 covers the SOC segment (soc-analyst01-06 sit at
+# 172.31.7.x alongside both SOC targets); the SOC pair covers everything else.
+# Verified 2026-09-17: all 48 Windows hosts have at least one off-subnet
+# target from this list, with no reliance on the DNS fallback.
 init_gw_probe_targets:
-  - "172.31.7.13"      # soc-syslog
-  - "172.31.7.15"      # soc-so-manager
+  - "172.31.7.13"      # soc-syslog       — off-subnet for all but SOC
+  - "172.31.7.15"      # soc-so-manager   — off-subnet for all but SOC
+  - "172.31.2.7"       # bs-dc01          — off-subnet for SOC

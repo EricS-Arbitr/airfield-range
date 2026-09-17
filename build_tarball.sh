@@ -242,6 +242,28 @@ done
 
 # --- Verify ----------------------------------------------------------------
 
+# HARD GATE, AND SEPARATE FROM verify_vars.py ON PURPOSE.
+#
+# An apostrophe in a PowerShell or shell comment inside a free-form module
+# argument makes the PLAY FAIL TO LOAD -- not one task, the whole run, before
+# any host is touched. Ansible runs split_args() over those arguments and
+# counts quotes; it does not know the script has comments.
+#
+# The file is still valid YAML and yaml.safe_load() accepts it, which is
+# exactly why this check cannot be folded into verify_vars.py: that validates
+# with a parser weaker than the one that would reject it. airfield shipped
+# commit 5b91051 with three odd-quote lines in the gateway-ARP task because
+# this repo had no such check while ss-pp-so did.
+if [ -x "$AIRFIELD_RANGE/verify_shell_args.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying free-form shell arguments ==="
+  if ! python3 "$AIRFIELD_RANGE/verify_shell_args.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball whose plays cannot load."
+    exit 1
+  fi
+fi
+
 if [ -x "$AIRFIELD_RANGE/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
   echo ""
   echo "=== Verifying Jinja var references ==="

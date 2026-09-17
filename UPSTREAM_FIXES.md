@@ -14,6 +14,22 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-17 · gap · build_tarball.sh had no free-form shell-argument check
+
+**Symptom.** Commit 5b91051 built and shipped cleanly with three odd-quote lines inside the gateway-ARP task's PowerShell comments. Those make the PLAY FAIL TO LOAD — not one task, the whole run, before any host is touched.
+
+**Root cause.** Ansible runs `split_args()` over free-form module arguments and counts quotes; it does not know PowerShell has comments. An apostrophe in `bs-file01's gateway`, or a quoted phrase opened on one line and closed on the next, is an unterminated string to it. The file remains valid YAML and `verify_vars.py` accepts it happily — which is the point: the tree was being validated with a parser weaker than the one that would reject it.
+
+**Detection.** Not here. `ss-pp-so` refused to build the identical text while airfield built it without a word. That repo has `verify_shell_args.py` wired into its tarball build and this one did not, so the same defect was fatal in one repo and invisible in the other.
+
+**Fix (overlay).** Copied `verify_shell_args.py` from ss-pp-so and wired it into `build_tarball.sh` as a HARD GATE ahead of the archive step, matching ss-pp-so. Verified by reintroducing the exact apostrophe from 5b91051: the build now refuses with `odd quote count at line 9` and exits non-zero, and succeeds again once reworded.
+
+Deliberately separate from `verify_vars.py` rather than folded into it: one validates variable references, the other validates that the play can be parsed at all, and they fail for different reasons.
+
+---
+
+---
+
 ## 2026-09-17 · bug · init gateway-ARP repair pinned a black-hole MAC and isolated a host
 
 **Symptom.** A fresh deploy failed all three attempts on one host of 86. `bs-file01` could not reach Fleet on 8220, so the `elastic_agent` preflight failed it and no agent was ever installed. Its neighbour `bs-file02`, at the adjacent address in the same subnet with the same gateway, enrolled normally.

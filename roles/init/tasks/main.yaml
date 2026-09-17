@@ -57,7 +57,7 @@
     # A MAC is USABLE only if it is well-formed AND not a sentinel. The
     # previous test was `if (-not $mac)`, which treats 00-00-00-00-00-00 as a
     # real address: a non-empty string that is not on the blocklist. On
-    # airfield 2026-09-17 that pinned bs-file01's gateway to all-zeros as
+    # airfield 2026-09-17 that pinned the gateway on bs-file01 to all-zeros as
     # Permanent -- a black hole that ARP could never re-learn past, and
     # strictly worse than the poisoning this task exists to fix. Windows
     # returns the zero MAC for an Incomplete neighbour, which is exactly the
@@ -78,8 +78,8 @@
 
     # THE PROBE TARGET MUST BE OFF-SUBNET, AND WE VERIFY THAT RATHER THAN
     # ASSUME IT. The previous version used the first configured DNS server on
-    # the stated assumption that it is off-subnet "in every range these roles
-    # serve". False here: hosts in the Services segment (172.31.2.0/24) have
+    # the stated assumption that it is off-subnet in every range these roles
+    # serve. False here: hosts in the Services segment (172.31.2.0/24) have
     # their DCs in that same segment, so the ping never crossed the gateway
     # and proved nothing about routing. Worse, `if (-not $dns) { return $true }`
     # returned SUCCESS when there was nothing to test with -- a routing proof
