@@ -721,6 +721,11 @@
           if ($d.DNSRoot) { "CHILD_ADWS_READY" } else { "CHILD_ADWS_NOT_READY" }
         } catch { "CHILD_ADWS_NOT_READY" }
       register: child_adws
+      # no_log: the command embeds domain_admin_password, and Ansible echoes
+      # `cmd` verbatim on failure. Nothing is lost here -- this task already
+      # carries failed_when: false and the task below reports the reason
+      # without referencing the command.
+      no_log: true
       until: "'CHILD_ADWS_READY' in (child_adws.stdout | default(''))"
       retries: "{{ bootstrap_child_adws_retries }}"
       delay: 15
@@ -778,6 +783,31 @@
         }
       register: bootstrap_simspace
       changed_when: "'CREATED' in bootstrap_simspace.stdout"
+      # THIS TASK LEAKED THE DOMAIN ADMIN PASSWORD. On 2026-09-15 it failed and
+      # Ansible printed the whole `cmd`, including
+      # ConvertTo-SecureString "<password>", into the run output -- which
+      # deploy.sh tees to /var/log/playbook_run.log on the controller.
+      #
+      # no_log hides the command. failed_when: false plus the task below keeps
+      # the DIAGNOSIS: the script's catch block writes "FAILED: <message>" to
+      # stdout, and that is what actually tells you what went wrong. Same shape
+      # as elastic_agent, which checks the outcome separately rather than
+      # trusting an exit code.
+      no_log: true
+      failed_when: false
+
+    # Surfaces stdout ONLY -- never the command. stdout carries the catch
+    # block's "FAILED: <exception>"; the command is what carries the secret.
+    - name: Fail if simspace could not be created in the child domain
+      ansible.builtin.fail:
+        msg: |
+          Creating {{ bootstrap_child_domain }}\simspace failed.
+
+          {{ bootstrap_simspace.stdout | default('(no output)') | trim }}
+
+          The credential is not shown. If you need the exact command, read the
+          play -- do not remove no_log from the task above.
+      when: (bootstrap_simspace.rc | default(1)) != 0
 
     - name: Show bootstrap result
       ansible.builtin.debug:

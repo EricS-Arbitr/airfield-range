@@ -93,6 +93,9 @@
     $cs = Get-WmiObject Win32_ComputerSystem
     if ($cs.PartOfDomain -and $cs.Domain -eq '{{ domain_name }}') { 'ALREADY_JOINED' } else { 'NEEDS_PROMOTION' }
   register: child_dc_state
+  # no_log: the command embeds domain_admin_password. Pure probe -- its output
+  # drives a conditional and nothing reports it, so nothing is lost.
+  no_log: true
   changed_when: false
   when: parent_domain_name is defined
 
@@ -234,6 +237,11 @@
         Write-Output "STACK: $($_.ScriptStackTrace)"
       }
   register: dcpromo_child
+  # no_log: the command embeds domain_admin_password and Ansible echoes `cmd`
+  # on failure. Diagnosis is not lost -- this task writes its own transcript to
+  # C:\ProgramData\dcpromo-install.log, which the post-dcpromo snapshot play
+  # collects, and that log is where the useful detail already lived.
+  no_log: true
   # NO `notify: Reboot Windows`. The handler cannot authenticate after this
   # task -- that is the defect, not a timing quirk. The reboot is fired
   # in-session above.
@@ -273,7 +281,20 @@
       Write-Output ([string](($svc | Where-Object Status -ne 'Running').Count))
   register: child_dc_services
   changed_when: false
-  failed_when: (child_dc_services.output[0] | default('9') | int) != 0
+  # no_log: the command embeds domain_admin_password and Ansible echoes `cmd`
+  # on failure. The DIAGNOSIS is preserved by the task below, which prints the
+  # probe output and never the command -- same pattern as elastic_agent.
+  no_log: true
+  failed_when: false
+
+- name: Fail if AD services did not come up on the new child DC
+  ansible.builtin.fail:
+    msg: |
+      AD services are not running on {{ inventory_hostname }} after promotion.
+      probe output: {{ child_dc_services.output | default(['(none)']) | join(' ') }}
+
+      The credential is not shown. Read the play if you need the command.
+  when: (child_dc_services.output[0] | default('9') | int) != 0
   when:
     - parent_domain_name is defined
     - dcpromo_child is defined
