@@ -25,11 +25,64 @@
   ansible.windows.win_feature:
     name: "rsat-ADDS"
     state: present
+  register: rsat_adds
 
 - name: Install RSAT DNS
   ansible.windows.win_feature:
     name: "rsat-DNS-Server"
     state: present
+  register: rsat_dns
+
+# DCPromo refuses to run while a servicing operation is pending, and says so:
+#
+#   Failed to install ADDSForest, DCPromo exited with 15: Role change is in
+#   progress or this computer needs to be restarted.
+#
+# The two feature installs above are what leave it pending. Until 2026-09-19
+# the only reboot-if-required task in this role was guarded
+# `parent_domain_name is defined`, so it ran on the CHILD path only -- the
+# forest root went straight from installing RSAT to promoting, with nothing
+# between them, and neither install even registered a result for anything to
+# check.
+#
+# This stayed invisible for as long as the base image happened to ship RSAT
+# pre-installed: both tasks were no-ops, nothing was pending, and the promotion
+# worked. The first image without it took the forest root down on all three
+# deploy.sh attempts in 40 minutes, and with the forest root gone nothing
+# downstream of AD could build.
+#
+# Registry keys, not just the module reports, because a pending reboot can also
+# arrive from the image or from an earlier play. PendingFileRenameOperations is
+# deliberately NOT checked -- it is set on most Windows hosts most of the time
+# and would reboot every DC on every deploy.
+- name: Check for a pending reboot before promotion
+  ansible.windows.win_shell: |
+    $pending = @()
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $pending += 'CBS' }
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $pending += 'WindowsUpdate' }
+    if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\ServerManager\CurrentRebootAttempts') { $pending += 'ServerManager' }
+    if ($pending.Count -eq 0) {
+      Write-Output "REBOOT_NOT_PENDING"
+    } else {
+      Write-Output ("REBOOT_PENDING " + ($pending -join ','))
+    }
+  register: dcpromo_pending_reboot
+  changed_when: false
+
+- name: Reboot before promotion if a role change is pending
+  ansible.windows.win_reboot:
+    reboot_timeout: 900
+  when: >-
+    (rsat_adds.reboot_required | default(false)) or
+    (rsat_dns.reboot_required | default(false)) or
+    ('REBOOT_PENDING' in (dcpromo_pending_reboot.stdout | default('')))
+
+- name: Report the pre-promotion reboot decision
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ dcpromo_pending_reboot.stdout | default('(no probe)') | trim }}
+      rsat_adds_reboot={{ rsat_adds.reboot_required | default(false) }}
+      rsat_dns_reboot={{ rsat_dns.reboot_required | default(false) }}
 
 - name: local admin guest customization fix - Server 2019
   ansible.windows.win_shell: "net user administrator /passwordreq:yes"

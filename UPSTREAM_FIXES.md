@@ -14,6 +14,33 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-19 · bug · roles/dcpromo — the forest root promotes with a reboot pending and DCPromo refuses
+
+**Symptom.** The forest root fails on every deploy.sh attempt, in minutes, and the whole range dies with it:
+
+```
+TASK [dcpromo : Create forest root domain (this host becomes first DC)]
+fatal: [bs-dc01]: FAILED! => {"changed": false, "msg": "Failed to install ADDSForest,
+DCPromo exited with 15: Role change is in progress or this computer needs to be
+restarted.\r\n", "reboot_required": true}
+```
+
+Three attempts, 40m 33s total. With the forest root gone, nothing downstream of AD can build.
+
+**Root cause.** `Install RSAT ADDS` and `Install RSAT DNS` run at the top of the role and can each leave a servicing operation pending. DCPromo exits 15 rather than promoting a host in that state.
+
+The role does have a reboot-if-required task — guarded `parent_domain_name is defined`, so it runs on the **child-domain path only**. The forest root went straight from installing RSAT to promoting with nothing in between, and neither feature install registered a result, so nothing could have checked even if a task had wanted to.
+
+**Why it surfaced now.** It is invisible for as long as the base image ships RSAT pre-installed: both tasks are no-ops, nothing is pending, promotion works. The deploy on 2026-09-18 had `bs-dc01` at `changed=3` on the following build and succeeded; the first image without RSAT baked in took the forest root down immediately. The bug was always there — the image was hiding it.
+
+**Fix (upstream).** Reboot between installing the AD features and promoting, on **both** paths, not just the child one.
+
+**Workaround (overlay).** Both RSAT tasks now register. A probe reads the pending-reboot registry keys (`Component Based Servicing\RebootPending`, `WindowsUpdate\Auto Update\RebootRequired`, `ServerManager\CurrentRebootAttempts`) and a `win_reboot` fires when either module reported `reboot_required` or any key is present, before either promotion path. Registry keys as well as the module reports, because a pending reboot can also arrive from the image or an earlier play.
+
+`PendingFileRenameOperations` is deliberately **not** checked: it is set on most Windows hosts most of the time and would reboot every DC on every deploy.
+
+---
+
 ## 2026-09-18 · bug · roles/mapped_drive — DSC GPLink has no -Domain/-Server, so it depends on the DC locator
 
 **Supersedes the 2026-07-08 entry**, whose root-cause theory was wrong.
