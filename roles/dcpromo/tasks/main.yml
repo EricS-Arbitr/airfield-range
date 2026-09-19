@@ -55,34 +55,81 @@
 # arrive from the image or from an earlier play. PendingFileRenameOperations is
 # deliberately NOT checked -- it is set on most Windows hosts most of the time
 # and would reboot every DC on every deploy.
-- name: Check for a pending reboot before promotion
+# AD-Domain-Services is installed HERE, explicitly, for BOTH promotion paths.
+#
+# `microsoft.ad.domain` will auto-install the feature itself if it is missing
+# -- and that is the bug. It installs the feature and then runs DCPromo in the
+# SAME task, so DCPromo meets the role change its own module just created and
+# refuses:
+#
+#   Failed to install ADDSForest, DCPromo exited with 15: Role change is in
+#   progress or this computer needs to be restarted.
+#
+# The module then reports `reboot_required: true`, which is it saying it needed
+# a reboot partway through and had no way to take one. Nothing is pending
+# BEFORE the task, which is why probing for a pending reboot ahead of it finds
+# a clean host and changes nothing -- measured on 2026-09-19, twice.
+#
+# The child-domain path never hit this because it always installed the feature
+# explicitly first. The forest root relied on the auto-install. Installing it
+# here, for both, means the module is handed a host that already has the
+# feature and has rebooted, so it only ever has to promote.
+#
+# `include_management_tools: true` also brings the RSAT-ADDS bundle, a superset
+# of the `rsat-ADDS` install above -- idempotent, so double-installing is fine.
+- name: Install AD-Domain-Services + management tools
+  ansible.windows.win_feature:
+    name: AD-Domain-Services
+    state: present
+    include_management_tools: true
+  register: adds_feature_install
+
+# Reboot before promoting, and do NOT rely on detecting whether one is needed.
+#
+# Detection was tried on 2026-09-19 and did not work. The probe checked both
+# win_feature `reboot_required` reports and the pending-reboot registry keys;
+# every signal came back clean while DCPromo went on refusing with
+#
+#   Failed to install ADDSForest, DCPromo exited with 15: Role change is in
+#   progress or this computer needs to be restarted.
+#
+# ...and its own `reboot_required: true`. Windows knows a role change is
+# pending and does not expose it anywhere the probe was looking. Guessing
+# which flag it used is a game with no end: the ServerManager key alone is
+# `HKLM:\SOFTWARE\Microsoft\ServerManager\CurrentRebootAttemps`, spelled
+# wrong by Microsoft and in a different hive from where it reads.
+#
+# A reboot is cheap and it makes the state knowable rather than inferred. The
+# guard is the only thing that matters: reboot hosts that are about to be
+# promoted, and leave hosts that are already DCs alone, so re-deploys pay
+# nothing. DomainRole 4 and 5 are backup and primary DC respectively.
+- name: Determine whether this host is already a domain controller
   ansible.windows.win_shell: |
-    $pending = @()
-    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $pending += 'CBS' }
-    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $pending += 'WindowsUpdate' }
-    if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\ServerManager\CurrentRebootAttempts') { $pending += 'ServerManager' }
-    if ($pending.Count -eq 0) {
-      Write-Output "REBOOT_NOT_PENDING"
+    $cs = Get-CimInstance Win32_ComputerSystem
+    if ($cs.DomainRole -ge 4) {
+      Write-Output "ALREADY_DC role=$($cs.DomainRole)"
     } else {
-      Write-Output ("REBOOT_PENDING " + ($pending -join ','))
+      Write-Output "NOT_DC role=$($cs.DomainRole)"
     }
-  register: dcpromo_pending_reboot
+  register: dcpromo_dc_state
   changed_when: false
 
-- name: Reboot before promotion if a role change is pending
+- name: Reboot before promotion to clear any pending role change
   ansible.windows.win_reboot:
     reboot_timeout: 900
   when: >-
     (rsat_adds.reboot_required | default(false)) or
     (rsat_dns.reboot_required | default(false)) or
-    ('REBOOT_PENDING' in (dcpromo_pending_reboot.stdout | default('')))
+    (adds_feature_install.reboot_required | default(false)) or
+    ('NOT_DC' in (dcpromo_dc_state.stdout | default('')))
 
 - name: Report the pre-promotion reboot decision
   ansible.builtin.debug:
     msg: >-
-      {{ inventory_hostname }}: {{ dcpromo_pending_reboot.stdout | default('(no probe)') | trim }}
+      {{ inventory_hostname }}: {{ dcpromo_dc_state.stdout | default('(no probe)') | trim }}
       rsat_adds_reboot={{ rsat_adds.reboot_required | default(false) }}
       rsat_dns_reboot={{ rsat_dns.reboot_required | default(false) }}
+      adds_feature_reboot={{ adds_feature_install.reboot_required | default(false) }}
 
 - name: local admin guest customization fix - Server 2019
   ansible.windows.win_shell: "net user administrator /passwordreq:yes"
@@ -119,27 +166,6 @@
   ansible.builtin.set_fact:
     child_domain_label: "{{ domain_name | regex_replace('\\.' + (parent_domain_name | regex_escape) + '$', '') }}"
   when: parent_domain_name is defined
-
-# `Install-ADDSDomain` lives in the ADDSDeployment PowerShell module, which
-# only ships once the AD-Domain-Services Windows Feature is installed. The
-# forest-root path uses microsoft.ad.domain which auto-installs the feature;
-# the child-domain path uses win_powershell directly, so we have to install
-# it explicitly here. `include_management_tools: true` gives us the RSAT-ADDS
-# module bundle as well (superset of the `rsat-ADDS` install at the top of
-# this role, but idempotent -- ok to double-install).
-- name: Install AD-Domain-Services + management tools (child-domain path)
-  ansible.windows.win_feature:
-    name: AD-Domain-Services
-    state: present
-    include_management_tools: true
-  register: adds_feature_install
-  when: parent_domain_name is defined
-
-- name: Reboot if AD-Domain-Services install requires it
-  ansible.windows.win_reboot:
-  when:
-    - parent_domain_name is defined
-    - adds_feature_install.reboot_required | default(false)
 
 - name: Check if host is already a DC for {{ domain_name | default('') }}
   ansible.windows.win_shell: |

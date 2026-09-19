@@ -14,9 +14,9 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
-## 2026-09-19 · bug · roles/dcpromo — the forest root promotes with a reboot pending and DCPromo refuses
+## 2026-09-19 · bug · roles/dcpromo — microsoft.ad.domain installs AD-DS and promotes in the same task
 
-**Symptom.** The forest root fails on every deploy.sh attempt, in minutes, and the whole range dies with it:
+**Symptom.** The forest root fails on every deploy.sh attempt, in minutes, and the range dies with it:
 
 ```
 TASK [dcpromo : Create forest root domain (this host becomes first DC)]
@@ -25,19 +25,19 @@ DCPromo exited with 15: Role change is in progress or this computer needs to be
 restarted.\r\n", "reboot_required": true}
 ```
 
-Three attempts, 40m 33s total. With the forest root gone, nothing downstream of AD can build.
+Three attempts, ~45 minutes total. With the forest root gone, nothing downstream of AD can build.
 
-**Root cause.** `Install RSAT ADDS` and `Install RSAT DNS` run at the top of the role and can each leave a servicing operation pending. DCPromo exits 15 rather than promoting a host in that state.
+**Root cause.** `microsoft.ad.domain` auto-installs the AD-Domain-Services feature when it is missing, then runs DCPromo **in the same task**. DCPromo meets the role change the module itself just created and exits 15. The `reboot_required: true` in the response is the module reporting that it needed a reboot partway through and had no way to take one.
 
-The role does have a reboot-if-required task — guarded `parent_domain_name is defined`, so it runs on the **child-domain path only**. The forest root went straight from installing RSAT to promoting with nothing in between, and neither feature install registered a result, so nothing could have checked even if a task had wanted to.
+The child-domain path never hit this: it installs the feature explicitly first, then reboots if required, because `Install-ADDSDomain` needs the ADDSDeployment module on disk before it can be called at all. The forest-root path relied on the auto-install and had no equivalent step.
 
-**Why it surfaced now.** It is invisible for as long as the base image ships RSAT pre-installed: both tasks are no-ops, nothing is pending, promotion works. The deploy on 2026-09-18 had `bs-dc01` at `changed=3` on the following build and succeeded; the first image without RSAT baked in took the forest root down immediately. The bug was always there — the image was hiding it.
+**Why it surfaced now.** Invisible for as long as the base image shipped AD-Domain-Services already present — the module had nothing to install, so nothing went pending and promotion worked. The first image without it took the forest root down immediately.
 
-**Fix (upstream).** Reboot between installing the AD features and promoting, on **both** paths, not just the child one.
+**Detection note — what does NOT work.** Probing for a pending reboot before the promotion task finds a clean host, because the pending state does not exist until the task runs. Measured twice on 2026-09-19: `win_feature` `reboot_required` reports were false and no pending-reboot registry key was present, while DCPromo went on refusing. Worth knowing before anyone tries that again. (If you do check those keys for other reasons: the Server Manager one is `HKLM:\SOFTWARE\Microsoft\ServerManager\CurrentRebootAttemps`, misspelled by Microsoft and in a different hive from the obvious guess.)
 
-**Workaround (overlay).** Both RSAT tasks now register. A probe reads the pending-reboot registry keys (`Component Based Servicing\RebootPending`, `WindowsUpdate\Auto Update\RebootRequired`, `ServerManager\CurrentRebootAttempts`) and a `win_reboot` fires when either module reported `reboot_required` or any key is present, before either promotion path. Registry keys as well as the module reports, because a pending reboot can also arrive from the image or an earlier play.
+**Fix (upstream).** Do not let `microsoft.ad.domain` install the feature. Install AD-Domain-Services as its own task, reboot if required, then promote.
 
-`PendingFileRenameOperations` is deliberately **not** checked: it is set on most Windows hosts most of the time and would reboot every DC on every deploy.
+**Workaround (overlay).** `Install AD-Domain-Services + management tools` now runs for **both** paths, ahead of either promotion, with its `parent_domain_name is defined` guard removed. A single reboot task follows it, firing when any feature install reported `reboot_required` or when the host is not yet a DC (`Win32_ComputerSystem.DomainRole` below 4). Hosts that are already DCs skip it, so re-deploys pay nothing.
 
 ---
 
