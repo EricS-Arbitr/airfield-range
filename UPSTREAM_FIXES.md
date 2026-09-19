@@ -14,6 +14,75 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-18 · bug · roles/dns — AD-integrated zone task races the child domain's DomainDnsZones partition
+
+**Symptom.** On a cold build, `dns : Create Forward Lookup Zones` fails on the child PDC:
+
+```
+TASK [dns : Create Forward Lookup Zones] ***************************************
+failed: [fops-dc01] (item=fops.blackstone.mil) => {"msg": "Failed to set properties on
+the zone fops.blackstone.mil: Failed to reset the directory partition for zone
+fops.blackstone.mil on server FOPS-DC01."}
+```
+
+The same task, unchanged, succeeds on every later attempt.
+
+**Detection.** Measured on a fresh airfield deploy 2026-09-18 (`/var/log/playbook_run.log`):
+
+```
+2867   failed: [fops-dc01] (item=fops.blackstone.mil)   <- attempt 1, 48 min in
+13886  ok:     [fops-dc01] (item=fops.blackstone.mil)   <- attempt 2
+17701  ok:     [fops-dc01] (item=fops.blackstone.mil)   <- attempt 3
+```
+
+**Root cause.** `Install-ADDSDomain` creates the child zone, and the role then re-scopes it with `replication: domain` → `Set-DnsServerPrimaryZone -ReplicationScope Domain`. The `DomainDnsZones.<child>` application partition is created and enlisted **asynchronously** after promotion. Until it exists, the re-scope has nowhere to put the zone and fails with that message.
+
+The pre-existing child-ADWS gate does not cover this. ADWS is a different subsystem and answers minutes earlier — a gate has to test what the step behind it needs, not something adjacent to it (same lesson as 2026-09-03).
+
+**Blast radius is the real cost.** A failed task ends the play for that host, so `fops-dc01` also dropped out of *every play below `dns`* — it received no `internal_dns_records`, never enrolled in Fleet, and the deploy failed 4 hours later at the Fleet coverage gate. Attempt 1 burned 4h 48m to fail on a race that resolves itself in minutes.
+
+**Fix (upstream).** The role should not assume a freshly promoted DC can host an AD-integrated zone. Either gate on partition readiness or make the zone task retriable.
+
+**Workaround (overlay).** Two layers:
+
+1. `pre_tasks` on the `dns` play probe readiness with `until:`/40×15s, accepting **either** signal — the zone already being AD-integrated at Domain scope (in which case `win_dns_zone` is a no-op and cannot fail), **or** `DomainDnsZones.<domain>` present at `State 0`. Two independent signals because the gate is fail-closed: one property name that reads differently on some image would otherwise stall a healthy range for ten minutes and then fail it. A dedicated `fail` task reports what the probe saw and what to check.
+2. `register`/`until: ... is succeeded`, 6×15s on both zone tasks in the role, absorbing the gap between "partition enlisted" and "DNS server accepts a re-scope against it".
+
+---
+
+## 2026-09-18 · bug · roles/domain_member_retry — joins blind, with no check that a DC is reachable
+
+**Symptom.** On a cold build, a minority of members fail to join while the majority succeed on the same pass with the same variables:
+
+```
+fatal: [bs-hq02]: FAILED! => {"msg": "Computer 'bs-hq02' failed to join domain
+'blackstone.mil' from its current workgroup 'WORKGROUP' with following error message:
+The specified domain either does not exist or could not be contacted."}
+```
+
+3 of 29 `members_blackstone` hosts on 2026-09-18. The reboot-and-retry recovered one; two never joined, failed the Fleet coverage gate, and failed the deploy.
+
+**Detection.** The 15-host `members_fops` play that ran immediately afterwards never entered the retry path at all (log 3428–3500). Same role, same credentials, fewer hosts.
+
+**Root cause.** Two compounding factors.
+
+*Concurrency.* Every member joins against a single DC — the second DC is promoted **after** both join plays — and `deploy.sh` runs 76 forks, so all 29 hit the DC locator simultaneously. "The specified domain either does not exist or could not be contacted" is what a member reports when the locator times out, not evidence of misconfiguration.
+
+*No precondition.* The role attempted the join blind: try, and on failure reboot and try once more. A blind attempt cannot distinguish "the DC is busy" from "the DC is wrong", so it spent its one retry on a reboot that fixed nothing.
+
+**Fix (upstream).** Probe before joining, and let a busy DC be waited for rather than failed on.
+
+**Workaround (overlay).** The role is restructured around a per-pass `join_pass.yml`, included `domain_join_passes` times (default 3), every task guarded by `when: not member_joined` so passes short-circuit the moment one lands:
+
+- **Locator preflight** before each pass — resolves `_ldap._tcp.dc._msdcs.<domain>` and opens TCP 389, 88 and 445 to an advertised DC, `until:`/20×15s. This is precisely what the join needs, so a pass here means the precondition holds rather than resembling it. `nltest` would be the obvious tool but is not guaranteed present on every client image, so the probe is pure PowerShell.
+- **Three passes instead of two**, with the reboot only from pass 2 on — rebooting before the first attempt would add ~5 minutes to every host on every deploy to fix a state that is almost never wrong.
+- **`wait_for` delegated to localhost replaces `pause`.** Identical wall clock, but `pause` bypasses the host loop and is unsupported under `strategy: free`; with it gone, the join plays can be switched to `free` without the crash documented in `site.yml` and in PowerPlant's 2026-07-03 entry.
+- **A `fail` task that names the last probe result**, distinguishing "no DC answered" (check DNS, SRV records, APIPA) from "DC answered but the join was refused" (check the credential and for a stale computer object).
+
+On a healthy range the preflight returns on its first try and costs nothing.
+
+---
+
 ## 2026-09-17 · gap · build_tarball.sh had no free-form shell-argument check
 
 **Symptom.** Commit 5b91051 built and shipped cleanly with three odd-quote lines inside the gateway-ARP task's PowerShell comments. Those make the PLAY FAIL TO LOAD — not one task, the whole run, before any host is touched.

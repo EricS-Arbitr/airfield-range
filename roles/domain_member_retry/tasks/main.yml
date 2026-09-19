@@ -1,73 +1,78 @@
 ---
+# Domain join, made precondition-aware.
+#
+# The old shape attempted the join BLIND: try, and on failure reboot and try
+# once more, with nothing asserting that a domain controller was reachable
+# first. On a cold airfield build 2026-09-18 that cost the deploy -- three of
+# the 29 `members_blackstone` hosts reported
+#
+#   "Computer 'bs-hq02' failed to join domain 'blackstone.mil' from its
+#    current workgroup 'WORKGROUP' with following error message: The
+#    specified domain either does not exist or could not be contacted."
+#
+# ...while the other 26 joined on the same pass with the same variables. The
+# 15-host `members_fops` play that followed never entered the retry path at
+# all. The distinguishing factor is load, not configuration: every member
+# joins against a single DC (the second DC is promoted AFTER these plays), and
+# deploy.sh runs 76 forks, so all 29 hit the locator simultaneously.
+#
+# A blind attempt cannot tell "the DC is busy" from "the DC is wrong", so it
+# burned its one retry on a reboot that fixed nothing. The probe below waits
+# for the thing the join actually needs, which turns an instant failure into a
+# bounded wait -- and costs nothing on a healthy range, where it returns on
+# the first try.
 - name: Check if already domain joined
   ansible.windows.win_powershell:
     script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
   register: initial_status
   failed_when: false
 
-- name: Domain join with connection loss tolerance
-  when: initial_status.output[0] == false
-  block:
-    - name: Join Domain (expect connection loss)
-      microsoft.ad.membership:
-        dns_domain_name: "{{ domain_name }}"
-        hostname: "{{ inventory_hostname }}"
-        domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
-        domain_admin_password: "{{ domain_admin_password }}"
-        state: domain
-      ignore_unreachable: true
-      ignore_errors: true
-      register: join_attempt
+- name: Seed join state
+  ansible.builtin.set_fact:
+    member_joined: "{{ (initial_status.output | default([false]))[0] | default(false) | bool }}"
+    member_joined_at_start: "{{ (initial_status.output | default([false]))[0] | default(false) | bool }}"
 
-    - name: Wait for network reconfiguration to complete
-      pause:
-        seconds: 45
+# `when` on a dynamic include is re-evaluated for EVERY task it pulls in, so
+# once a pass sets member_joined the remaining passes skip task-by-task rather
+# than running and being discarded.
+- name: Join {{ domain_name }}
+  ansible.builtin.include_tasks: join_pass.yml
+  loop: "{{ range(1, (domain_join_passes | int) + 1) | list }}"
+  loop_control:
+    loop_var: join_pass
+  when: not member_joined
 
-    - name: Reconnect to host after domain join
-      wait_for_connection:
-        timeout: 300
-        delay: 10
+# Fail HERE, naming what the probe last saw, rather than letting the bare
+# module error stand as the whole explanation.
+- name: Fail if {{ inventory_hostname }} never joined {{ domain_name }}
+  ansible.builtin.fail:
+    msg: |
+      {{ inventory_hostname }} did not join {{ domain_name }} in
+      {{ domain_join_passes }} passes.
 
-    - name: Verify domain membership
-      ansible.windows.win_powershell:
-        script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
-      register: join_verification
-      failed_when: false
+      Last locator probe: {{ dc_locator.stdout | default('(never ran)') | trim }}
 
-    - name: Retry if domain join failed
-      when: join_verification.output[0] == false
-      block:
-        - name: Reboot before retry
-          ansible.windows.win_reboot:
-            reboot_timeout: 600
+      DCLOCATOR_NOT_READY means no DC advertised in DNS answered LDAP/389,
+      Kerberos/88 and SMB/445 from this host. Check, in order:
+        1. this host's DNS server -- a member pointed at anything other than a
+           DC for {{ domain_name }} cannot resolve the locator SRV records:
+             Get-DnsClientServerAddress
+        2. the SRV records themselves:
+             Resolve-DnsName _ldap._tcp.dc._msdcs.{{ domain_name }} -Type SRV
+        3. a leftover 169.254.x.x APIPA address (the `strip_apipa` play above
+           clears these, but a late DHCP handoff can re-add one):
+             Get-NetIPAddress -AddressFamily IPv4
 
-        - name: Retry domain join
-          microsoft.ad.membership:
-            dns_domain_name: "{{ domain_name }}"
-            hostname: "{{ inventory_hostname }}"
-            domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
-            domain_admin_password: "{{ domain_admin_password }}"
-            state: domain
-          ignore_unreachable: true
-          ignore_errors: true
+      DCLOCATOR_READY followed by a join failure is a different problem: the
+      DC answered, so look at the credential and at the computer object --
+      a stale account for this name in AD rejects a fresh join.
+  when: not member_joined
 
-        - name: Wait after retry
-          pause:
-            seconds: 45
-
-        - name: Reconnect after retry
-          wait_for_connection:
-            timeout: 300
-            delay: 10
-
-        - name: Final verification
-          ansible.windows.win_powershell:
-            script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
-          register: final_check
-          failed_when: final_check.output[0] == false
-
-    - name: Trigger reboot for successfully joined hosts
-      debug:
-        msg: "Domain join successful for {{ inventory_hostname }}"
-      changed_when: true
-      notify: Reboot Windows
+- name: Trigger reboot for hosts joined on this run
+  ansible.builtin.debug:
+    msg: "Domain join successful for {{ inventory_hostname }}"
+  changed_when: true
+  notify: Reboot Windows
+  when:
+    - member_joined
+    - not member_joined_at_start

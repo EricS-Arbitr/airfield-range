@@ -1,0 +1,10 @@
+---
+# How many join passes before the host is declared failed. Pass 1 is a plain
+# attempt; every pass after it reboots first. Was effectively 2 until
+# 2026-09-18 -- see UPSTREAM_FIXES.md.
+domain_join_passes: 3
+
+# Per-pass locator wait: 20 x 15s = 5 minutes. The probe below is what the
+# join itself depends on, so this is the window in which a busy DC is allowed
+# to start answering before the pass is spent.
+domain_join_locator_retries: 20

@@ -16,6 +16,13 @@
     - internal_dns_records is defined
     - not item.endswith('.in-addr.arpa')
     - not item.endswith('.ip6.arpa')
+  # Belt for the DomainDnsZones gate in site.yml's `dns` play. That gate is
+  # the real fix; this absorbs the seconds between "partition enlisted" and
+  # "DNS server will accept a re-scope against it". Retries are per loop item.
+  register: fwd_zone
+  until: fwd_zone is succeeded
+  retries: 6
+  delay: 15
 
 - name: Create Reverse Lookup Zones
   community.windows.win_dns_zone:
@@ -28,6 +35,10 @@
   when:
     - internal_dns_records is defined
     - item.endswith('.in-addr.arpa') or item.endswith('.ip6.arpa')
+  register: rev_zone
+  until: rev_zone is succeeded
+  retries: 6
+  delay: 15
 
 - name: Manage Internal DNS Records
   community.windows.win_dns_record:

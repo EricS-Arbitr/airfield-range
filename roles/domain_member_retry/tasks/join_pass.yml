@@ -1,0 +1,93 @@
+---
+# One join pass. Included once per entry in `domain_join_passes`; the caller's
+# `when: not member_joined` short-circuits every task here once a pass lands.
+
+# Probe what the join needs, not something that resembles it: a DC advertised
+# in DNS for this domain that answers LDAP, Kerberos and SMB. `nltest` would
+# be the obvious tool but is not guaranteed present on every client image, so
+# this resolves the locator SRV set directly and opens the three sockets the
+# join uses.
+- name: "Join pass {{ join_pass }} — preflight: a {{ domain_name }} DC answers"
+  ansible.windows.win_shell: |
+    $ErrorActionPreference = 'SilentlyContinue'
+    $dom = "{{ domain_name }}"
+    $srv = @(Resolve-DnsName -Type SRV -Name "_ldap._tcp.dc._msdcs.$dom" -ErrorAction SilentlyContinue |
+             Where-Object { $_.QueryType -eq 'SRV' -and $_.NameTarget })
+    if ($srv.Count -eq 0) {
+      "DCLOCATOR_NOT_READY no-srv-records-for-$dom"
+    } else {
+      $ready = $null
+      foreach ($r in $srv) {
+        $ok = $true
+        foreach ($port in 389, 88, 445) {
+          $c = New-Object System.Net.Sockets.TcpClient
+          try {
+            if (-not $c.ConnectAsync($r.NameTarget, $port).Wait(3000)) { $ok = $false }
+          } catch {
+            $ok = $false
+          } finally {
+            $c.Dispose()
+          }
+          if (-not $ok) { break }
+        }
+        if ($ok) { $ready = $r.NameTarget; break }
+      }
+      if ($ready) {
+        "DCLOCATOR_READY dc=$ready"
+      } else {
+        $names = ($srv | ForEach-Object { $_.NameTarget }) -join ','
+        "DCLOCATOR_NOT_READY none-answered srv=$names"
+      }
+    }
+  register: dc_locator
+  until: "'DCLOCATOR_READY' in (dc_locator.stdout | default(''))"
+  retries: "{{ domain_join_locator_retries }}"
+  delay: 15
+  changed_when: false
+  failed_when: false
+
+# Only from pass 2 on. A reboot before the FIRST attempt would add ~5 minutes
+# to every host on every deploy to fix a state that is almost never wrong.
+- name: "Join pass {{ join_pass }} — reboot before re-attempting"
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+  when: join_pass | int > 1
+
+# Deliberately non-fatal: the module frequently loses the connection mid-join
+# because the host reconfigures its network identity. `Verify domain
+# membership` below is what decides the outcome, not this task's rc.
+- name: "Join pass {{ join_pass }} — join {{ domain_name }}"
+  microsoft.ad.membership:
+    dns_domain_name: "{{ domain_name }}"
+    hostname: "{{ inventory_hostname }}"
+    domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
+    domain_admin_password: "{{ domain_admin_password }}"
+    state: domain
+  ignore_unreachable: true
+  ignore_errors: true
+  register: join_attempt
+
+# `wait_for` on localhost rather than `pause`. Identical wall clock, but pause
+# bypasses the host loop and is unsupported under `strategy: free` -- with it
+# gone, these plays can be switched to free without the crash documented in
+# site.yml and in PowerPlant's UPSTREAM_FIXES.md 2026-07-03.
+- name: "Join pass {{ join_pass }} — settle after network reconfiguration"
+  ansible.builtin.wait_for:
+    timeout: 45
+  delegate_to: localhost
+  become: false
+
+- name: "Join pass {{ join_pass }} — reconnect"
+  ansible.builtin.wait_for_connection:
+    timeout: 300
+    delay: 10
+
+- name: "Join pass {{ join_pass }} — verify domain membership"
+  ansible.windows.win_powershell:
+    script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
+  register: join_verification
+  failed_when: false
+
+- name: "Join pass {{ join_pass }} — record outcome"
+  ansible.builtin.set_fact:
+    member_joined: "{{ (join_verification.output | default([false]))[0] | default(false) | bool }}"

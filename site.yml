@@ -825,9 +825,92 @@
   tags:
     - create_users
 
+# A freshly promoted child DC answers ADWS (gated above) minutes before its
+# DomainDnsZones application partition is enlisted. The `dns` role's zone task
+# runs `replication: domain`, which re-scopes the zone Install-ADDSDomain has
+# already created -- and that call fails until the partition exists:
+#
+#   "Failed to set properties on the zone fops.blackstone.mil: Failed to reset
+#    the directory partition for zone fops.blackstone.mil on server FOPS-DC01."
+#
+# Measured on a cold range 2026-09-18: failed 48 minutes into the run, then
+# passed UNCHANGED on the next two attempts. The cost was not one red line --
+# a failed task ends the play for that host, so fops-dc01 also dropped out of
+# every play below this one. It got no internal DNS records, never enrolled in
+# Fleet, and the deploy failed 4h later at the Fleet coverage gate.
+#
+# The ADWS gate above does not cover this. ADWS is a different subsystem: it
+# answers while the DNS application partition is still being enlisted. Gate on
+# what the next step actually needs.
 - name: dns
   hosts: pdc
   gather_facts: false
+  vars:
+    dns_partition_retries: 40     # 40 x 15s = 10 minutes
+  pre_tasks:
+    # Probe the partition rather than the zone: this is the precondition the
+    # zone re-scope depends on, and it is readable without a credential.
+    - name: Preflight — the DomainDnsZones partition is enlisted
+      ansible.windows.win_shell: |
+        $dom = "{{ domain_name }}"
+        $ready = $false
+        $detail = ""
+        # Signal 1, and the one that matters: the zone is already AD-integrated
+        # at Domain scope. When this holds, `win_dns_zone` has nothing to change
+        # and cannot fail -- so it predicts what the next task will do, exactly.
+        try {
+          $z = Get-DnsServerZone -Name $dom -ErrorAction Stop
+          $detail = "zone ds=$($z.IsDsIntegrated) scope=$($z.ReplicationScope)"
+          if ($z.IsDsIntegrated -and "$($z.ReplicationScope)" -match 'Domain') { $ready = $true }
+        } catch {
+          $detail = "zone-query-failed: $($_.Exception.Message)"
+        }
+        # Signal 2, for a zone that genuinely has to be created rather than
+        # re-scoped: the partition exists and is healthy (State 0 = DNS_DP_OKAY).
+        # Two independent signals on purpose -- this gate is fail-closed, and a
+        # single property name that turns out to read differently on some image
+        # would otherwise stall a healthy range for ten minutes and then fail it.
+        if (-not $ready) {
+          try {
+            $p = Get-DnsServerDirectoryPartition -Name "DomainDnsZones.$dom" -ErrorAction Stop
+            $detail += " | partition state=$($p.State) flags=$($p.Flags)"
+            if ($p.State -eq 0) { $ready = $true }
+          } catch {
+            $detail += " | partition-query-failed: $($_.Exception.Message)"
+          }
+        }
+        if ($ready) { "DNSPART_READY $detail" } else { "DNSPART_NOT_READY $detail" }
+      register: dns_partition
+      until: "'DNSPART_READY' in (dns_partition.stdout | default(''))"
+      retries: "{{ dns_partition_retries }}"
+      delay: 15
+      changed_when: false
+      failed_when: false
+
+    # Fail HERE with the reason rather than inside the zone loop, where the
+    # message names a DNS API call and not the thing that is actually missing.
+    - name: Fail if the DomainDnsZones partition never enlisted
+      ansible.builtin.fail:
+        msg: |
+          {{ inventory_hostname }} did not enlist the DNS application partition
+          DomainDnsZones.{{ domain_name }} after
+          {{ (dns_partition_retries | int) * 15 }}s.
+
+          Probe said: {{ dns_partition.stdout | default('(no output)') | trim }}
+
+          Neither signal held: the zone is not AD-integrated at Domain scope,
+          and DomainDnsZones.{{ domain_name }} is absent or unhealthy.
+
+          Creating or re-scoping an AD-integrated zone on this server will fail
+          until the partition exists. Check, in order:
+            1. Get-DnsServerDirectoryPartition
+                 (DomainDnsZones.{{ domain_name }} should be listed, State 0,
+                  Flags containing Enlisted)
+            2. Register-DnsServerDirectoryPartition -Name DomainDnsZones.{{ domain_name }}
+                 (enlists this server if the partition exists but it is not joined)
+            3. repadmin /showrepl  -- a child DC that has not completed its
+               first inbound replication has no application partitions yet
+      when: "'DNSPART_READY' not in (dns_partition.stdout | default(''))"
   roles:
     - dns
   tags:
@@ -879,12 +962,16 @@
 - name: Join Domain — blackstone.mil
   hosts: members_blackstone
   gather_facts: false
-  # NOTE: cannot use `strategy: free` here -- the domain_member_retry role
-  # uses ansible.builtin.pause, which bypasses the host loop and is
-  # unsupported under the free strategy (all 3 deploy.sh attempts crash on
-  # the first Check-if-already-joined task). Same gotcha hit PowerPlant on
-  # 2026-07-03 (see UPSTREAM_FIXES.md there). If wall-clock matters, port
-  # the upstream fix: swap `pause` for a `wait_for` delegated to localhost.
+  # `strategy: free` is available here but NOT enabled. The blocker is gone --
+  # domain_member_retry settles with a `wait_for` delegated to localhost, not
+  # `ansible.builtin.pause`, which bypasses the host loop and crashes every
+  # deploy.sh attempt under the free strategy (PowerPlant, 2026-07-03).
+  #
+  # Left on `linear` deliberately: all 29 members join against a single DC
+  # (bs-dc02 is promoted below this play), and 2026-09-18 showed that herd
+  # already costing joins. Freeing the strategy raises the concurrency this
+  # play was failing at. Revisit once the locator preflight has a clean cold
+  # run behind it.
   roles:
     - domain_member_retry
   tags:
@@ -894,7 +981,7 @@
 - name: Join Domain — fops.blackstone.mil
   hosts: members_fops
   gather_facts: false
-  # Same reason as above -- pause + strategy: free = hard fail.
+  # Same as above: `free` is available, and left off for the same reason.
   roles:
     - domain_member_retry
   tags:

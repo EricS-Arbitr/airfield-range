@@ -38,6 +38,11 @@ MAGIC = {
     # Loop / lookup
     "ansible_loop", "ansible_loop_var", "item", "lookup", "query", "omit",
     "role_name", "role_path",
+    # Jinja global functions. `range` reads exactly like a variable reference
+    # to REF_RE (`{{ range(1, n) }}`), so without this it is reported missing
+    # on every use -- see the note at _vars_block_keys: a checker with
+    # known-bogus warnings trains you to skim past the real ones.
+    "range", "dict", "namespace", "cycler", "joiner", "lipsum",
     # Jinja keywords
     "true", "false", "none", "True", "False", "None",
     "and", "or", "not", "in", "is", "if", "else", "elif",
