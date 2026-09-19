@@ -286,6 +286,24 @@ if [ -x "$AIRFIELD_RANGE/verify_dup_keys.py" ] && command -v python3 >/dev/null 
   fi
 fi
 
+# HARD GATE. so_defend_exclusions is static group_vars data, so every check
+# the so_manager role makes at deploy time can be made here in a second.
+#
+# On 2026-09-19 a 485-character description -- against Kibana's 256 limit --
+# was caught by the role assert 1h 31m into deploy.sh attempt 3, after six
+# hours of wall clock, on a range that was otherwise fully built. The assert
+# is in the right place to protect Kibana and the wrong place to protect the
+# deploy. This does not replace it; it means you never get that far.
+if [ -x "$AIRFIELD_RANGE/verify_defend_filters.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying Elastic Defend filters ==="
+  if ! python3 "$AIRFIELD_RANGE/verify_defend_filters.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball with Defend filters the deploy will reject."
+    exit 1
+  fi
+fi
+
 if [ -x "$AIRFIELD_RANGE/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
   echo ""
   echo "=== Verifying Jinja var references ==="
