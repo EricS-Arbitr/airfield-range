@@ -86,6 +86,7 @@
   ansible.windows.win_powershell:
     script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
   register: join_verification
+  changed_when: false     # read-only probe
   failed_when: false
 
 - name: "Join pass {{ join_pass }} — record outcome"

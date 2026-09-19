@@ -264,6 +264,28 @@ if [ -x "$AIRFIELD_RANGE/verify_shell_args.py" ] && command -v python3 >/dev/nul
   fi
 fi
 
+# HARD GATE, for the same reason as the check above: yaml.safe_load() accepts
+# the defect silently, so a checker built on it cannot see the problem.
+#
+# A task with two `when:` keys loses the first one. YAML keeps the last value
+# and discards the earlier one without complaint, so a condition you wrote is
+# simply not running -- and the file reads correctly, because both lines are
+# right there. roles/dcpromo shipped a "Fail if AD services did not come up on
+# the new child DC" gate whose service condition had been dead the entire time;
+# the probe feeding it ran on every deploy and was read by nothing.
+#
+# Ansible does warn, at run time, on stderr, one line deep in a 26,000-line log.
+# That is not a gate. This is.
+if [ -x "$AIRFIELD_RANGE/verify_dup_keys.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying no duplicate YAML keys ==="
+  if ! python3 "$AIRFIELD_RANGE/verify_dup_keys.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball with logic that silently does not run."
+    exit 1
+  fi
+fi
+
 if [ -x "$AIRFIELD_RANGE/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
   echo ""
   echo "=== Verifying Jinja var references ==="

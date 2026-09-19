@@ -294,8 +294,15 @@
       probe output: {{ child_dc_services.output | default(['(none)']) | join(' ') }}
 
       The credential is not shown. Read the play if you need the command.
-  when: (child_dc_services.output[0] | default('9') | int) != 0
+  # ONE `when`, deliberately. This task carried two until 2026-09-18: a bare
+  # `when:` with the service condition, followed by a `when:` list with the
+  # guards. YAML keeps the last key and silently drops the first, so the
+  # service condition -- the entire point of the task -- was never evaluated,
+  # and `child_dc_services` was probed above and then read by nothing but the
+  # message string. Ansible reports this as a construction WARNING, which
+  # scrolls past in a 26,000-line deploy log.
   when:
     - parent_domain_name is defined
     - dcpromo_child is defined
     - dcpromo_child is changed
+    - (child_dc_services.output[0] | default('9') | int) != 0

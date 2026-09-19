@@ -25,6 +25,7 @@
   ansible.windows.win_powershell:
     script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
   register: initial_status
+  changed_when: false     # read-only probe; win_powershell reports changed by default
   failed_when: false
 
 - name: Seed join state

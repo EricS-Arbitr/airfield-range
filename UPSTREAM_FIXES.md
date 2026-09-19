@@ -14,6 +14,47 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-18 · bug · roles/dcpromo — duplicate `when` silently deleted the AD-services gate
+
+**Symptom.** None visible. That is the problem.
+
+**Detection.** Ansible emits a construction warning on every run that loads the role:
+
+```
+[WARNING]: While constructing a mapping from roles/dcpromo/tasks/main.yml, line 290,
+column 3, found a duplicate dict key (when). Using last defined value only.
+```
+
+One line on stderr, in the middle of a 26,000-line deploy log. It had been printing for months.
+
+**Root cause.** The task carried two `when:` keys:
+
+```yaml
+- name: Fail if AD services did not come up on the new child DC
+  ansible.builtin.fail:
+    msg: |
+      AD services are not running on {{ inventory_hostname }} after promotion.
+  when: (child_dc_services.output[0] | default('9') | int) != 0
+  when:
+    - parent_domain_name is defined
+    - dcpromo_child is defined
+    - dcpromo_child is changed
+```
+
+YAML keeps the last key and discards the earlier one without complaint. The service condition — the entire reason the task exists — was never evaluated. The `Confirm AD services are actually running on the new child DC` probe immediately above it ran on every deploy and was read by nothing but the failure message.
+
+Both lines are right there in the file and both are individually correct, which is what makes this class of defect survive review.
+
+**Fix (upstream).** One `when:`, with the service condition as a fourth entry in the list.
+
+**Workaround (overlay).** Applied directly; the role is copied into this repo.
+
+**Prevention.** `verify_dup_keys.py`, wired into `build_tarball.sh` as a hard gate. `yaml.safe_load()` accepts duplicate keys silently, so neither `verify_shell_args.py` nor `verify_vars.py` could see this despite both parsing the file on every build. The new checker uses a loader that records duplicates instead of swallowing them, and was verified against the original defect rather than only against a clean tree.
+
+**Still open, deliberately not changed here.** The surviving guard requires `dcpromo_child is changed`. That task fires an in-session reboot, so it typically returns unreachable and `is changed` evaluates false — meaning the gate stays skipped in exactly the case where a half-promoted child DC most needs catching. Widening it could newly fail deploys that currently pass, so it is a separate decision rather than a drive-by.
+
+---
+
 ## 2026-09-18 · bug · roles/dns — AD-integrated zone task races the child domain's DomainDnsZones partition
 
 **Symptom.** On a cold build, `dns : Create Forward Lookup Zones` fails on the child PDC:
