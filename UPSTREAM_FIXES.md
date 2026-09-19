@@ -38,7 +38,9 @@ domain either does not exist or could not be contacted. (Exception from HRESULT:
 
 **Workaround (overlay).** The task is now a `win_shell` calling `Get-GPInheritance` / `New-GPLink` with both `-Domain` and `-Server` set to this host, which removes the locator from the path: the DC being configured is the DC being asked. Idempotency comes from checking `GpoLinks` for the GPO name rather than from DSC.
 
-The `block`/`rescue` in `site.yml` is kept as scaffolding until a cold build confirms the fix, and its message is now an unmissable `MAPPED_DRIVE_FOPS_FAILED` rather than a reassuring note about a known quirk. That wrapper is the reason this went unnoticed for months; a convenience feature that silently does not exist is worse than one that stops the deploy and says so.
+**Verified on the running range**, from the shipped tarball: the task created the link on `fops-dc01` and, re-run, reported it present with `changed=0`; `bs-dc01` stayed `changed=0` throughout, confirming the already-working domain was unaffected.
+
+The `block`/`rescue` that wrapped this play in `site.yml` is **removed** — the fops play is now fatal, like the blackstone one. That wrapper existed so a failing link would not stop a deploy; what it actually did was hide the failure for two months while the run reported success. A convenience feature that silently does not exist is worse than one that stops the deploy and says so.
 
 ---
 

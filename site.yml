@@ -1110,36 +1110,18 @@
 - name: Mapped Drive — fops.blackstone.mil
   hosts: pdc_fops
   gather_facts: false
-  # The GPO link on fops-dc01 fails with "The specified domain either does not
-  # exist or could not be contacted" (HRESULT 0x8007054B) while every other
-  # task in the role succeeds on the same host in the same run. The role now
-  # pins -Domain and -Server to this DC so New-GPLink never calls the DC
-  # locator, which is where that error comes from.
+  # Fatal, like the blackstone play above it, because the role works here.
   #
-  # The rescue stays until a cold build confirms the fix. It is scaffolding,
-  # not a permanent posture: this wrapper is why the failure went unnoticed
-  # for months -- it fired on attempts 2 AND 3 of the 2026-09-18 deploy, six
-  # hours in, and the run was still reported a success. If the next cold build
-  # links cleanly, delete the block/rescue and let the task be fatal. A
-  # convenience feature that silently does not exist is worse than one that
-  # stops the deploy and says so.
-  tasks:
-    # block/rescue is the only way to make tasks INSIDE an included role
-    # non-fatal -- `ignore_errors: true` on include_role only affects the
-    # include operation itself, not the tasks it pulls in.
-    - name: Attempt mapped_drive on fops.blackstone.mil (non-fatal)
-      block:
-        - ansible.builtin.include_role:
-            name: mapped_drive
-      rescue:
-        - ansible.builtin.debug:
-            msg: >-
-              MAPPED_DRIVE_FOPS_FAILED -- the mapped-drive GPO is NOT linked on
-              fops.blackstone.mil, so fops users do not get their mapped drive.
-              The deploy continues because this is a convenience feature, but
-              it did not work. Re-run with `--tags mapped_drive_fops` to see
-              the error, and do not assume the old warm-up theory: that was
-              disproven on 2026-09-18 when it failed six hours into a build.
+  # This play wrapped the role in block/rescue for two months so a failing GPO
+  # link would not stop the deploy. What it actually did was hide the failure:
+  # the link never got made, the run reported success, and nobody knew the
+  # mapped drive did not exist. The role now pins -Domain and -Server to this
+  # DC so New-GPLink never calls the DC locator -- which is where HRESULT
+  # 0x8007054B came from -- and links cleanly and idempotently on both DCs.
+  #
+  # If this ever fails again it should stop the deploy and say so.
+  roles:
+    - mapped_drive
   tags:
     - mapped_drive
     - mapped_drive_fops
