@@ -1110,14 +1110,19 @@
 - name: Mapped Drive — fops.blackstone.mil
   hosts: pdc_fops
   gather_facts: false
-  # Fresh child DCs (fops-dc01) sometimes reject GPMC's New-GPLink RPC call
-  # even when LDAP, ADWS, DNS, and SMB all work individually -- observed on
-  # 2026-07-08 with the exact error "The specified domain either does not
-  # exist or could not be contacted" (HRESULT 0x8007054B), reproducible via
-  # `New-GPLink` even as Administrator. Root cause appears to be RPC/GPMI
-  # not yet fully bound on a freshly-promoted child DC. Non-blocking for
-  # range play (mapped drives are convenience), so wrap the role in an
-  # include_role task with ignore_errors -- see UPSTREAM_FIXES.md 2026-07-08.
+  # The GPO link on fops-dc01 fails with "The specified domain either does not
+  # exist or could not be contacted" (HRESULT 0x8007054B) while every other
+  # task in the role succeeds on the same host in the same run. The role now
+  # pins -Domain and -Server to this DC so New-GPLink never calls the DC
+  # locator, which is where that error comes from.
+  #
+  # The rescue stays until a cold build confirms the fix. It is scaffolding,
+  # not a permanent posture: this wrapper is why the failure went unnoticed
+  # for months -- it fired on attempts 2 AND 3 of the 2026-09-18 deploy, six
+  # hours in, and the run was still reported a success. If the next cold build
+  # links cleanly, delete the block/rescue and let the task be fatal. A
+  # convenience feature that silently does not exist is worse than one that
+  # stops the deploy and says so.
   tasks:
     # block/rescue is the only way to make tasks INSIDE an included role
     # non-fatal -- `ignore_errors: true` on include_role only affects the
@@ -1129,10 +1134,12 @@
       rescue:
         - ansible.builtin.debug:
             msg: >-
-              mapped_drive on fops.blackstone.mil failed with the known
-              fresh-child-DC RPC/GPMI quirk (HRESULT 0x8007054B). Deploy
-              continues. Retry with `--tags mapped_drive_fops` after
-              fops-dc01 has been up for 15+ minutes.
+              MAPPED_DRIVE_FOPS_FAILED -- the mapped-drive GPO is NOT linked on
+              fops.blackstone.mil, so fops users do not get their mapped drive.
+              The deploy continues because this is a convenience feature, but
+              it did not work. Re-run with `--tags mapped_drive_fops` to see
+              the error, and do not assume the old warm-up theory: that was
+              disproven on 2026-09-18 when it failed six hours into a build.
   tags:
     - mapped_drive
     - mapped_drive_fops

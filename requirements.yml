@@ -1,6 +1,23 @@
 # Ansible Galaxy requirements for this overlay.
-# Install on the Ansible controller with:
-#   sudo HTTPS_PROXY=http://10.255.240.1:3128 ansible-galaxy collection install -r /etc/ansible/requirements.yml --force
+#
+# deploy.sh installs these at the start of every run, so a normal deploy needs
+# nothing done here by hand. To install manually, match how deploy.sh does it:
+#
+#   HTTPS_PROXY=http://10.255.240.1:3128 \
+#     ansible-galaxy collection install -r /etc/ansible/requirements.yml \
+#     -p /usr/share/ansible/collections
+#
+# `-p` is the part that matters, and this file used to omit it while also
+# saying `sudo`. Without -p, collections land in ~/.ansible/collections, which
+# is per-user. /tmp/deploy-script.sh runs deploy.sh from system cron AS ROOT,
+# so a copy installed by `simspace` is invisible to the deploy, and a copy
+# installed by root is invisible to anyone checking by hand as `simspace` --
+# `ansible-playbook --syntax-check` then fails with "couldn't resolve
+# module/action pfsensible.core.pfsense_setup" against a controller that
+# deploys perfectly well. That cost real time on 2026-09-18.
+#
+# /usr/share/ansible/collections is on the default search path for every user,
+# so one copy there serves both.
 ---
 collections:
   - name: pfsensible.core

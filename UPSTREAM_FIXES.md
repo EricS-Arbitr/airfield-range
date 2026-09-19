@@ -14,6 +14,65 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-18 · bug · roles/mapped_drive — DSC GPLink has no -Domain/-Server, so it depends on the DC locator
+
+**Supersedes the 2026-07-08 entry**, whose root-cause theory was wrong.
+
+**Symptom.** On the child PDC only, every task in the role succeeds and the last one fails:
+
+```
+TASK [mapped_drive : Link GPO to OU]
+fatal: [fops-dc01]: FAILED! => {"msg": "Failed to invoke DSC Set method: The specified
+domain either does not exist or could not be contacted. (Exception from HRESULT: 0x8007054B)"}
+```
+
+`GroupPolicy` creates the GPO and eight `GPRegistryValue` tasks set its values, all on the same host, in the same play, over the same connection. Only `GPLink` fails.
+
+**Detection.** It is wrapped in `block`/`rescue`, so it never appears as a deploy failure — the run is reported green with the GPO unlinked. Visible only by grepping the log for the task name.
+
+**Root cause.** `0x8007054B` is `ERROR_NO_SUCH_DOMAIN`. The DSC `GPLink` resource exposes no `-Domain` or `-Server` parameter, so `New-GPLink` resolves the target DN's domain through the DC locator. On a child DC whose primary DNS was pointed at the parent PDC for promotion, that lookup is the thing that fails — not RPC, not GPMI, and not warm-up. GPMC itself is demonstrably fine, because everything above it in the role works.
+
+**The 2026-07-08 theory is disproven.** That entry recorded this as a fresh-child-DC binding quirk curable by retrying "after fops-dc01 has been up for 15+ minutes". On 2026-09-18 it failed on attempts 2 **and** 3 of a deploy, the last roughly six hours in.
+
+**Fix (upstream).** Do not use the DSC GPLink resource against a domain the host may not be able to locate. Call `New-GPLink` with `-Domain` and `-Server` pinned.
+
+**Workaround (overlay).** The task is now a `win_shell` calling `Get-GPInheritance` / `New-GPLink` with both `-Domain` and `-Server` set to this host, which removes the locator from the path: the DC being configured is the DC being asked. Idempotency comes from checking `GpoLinks` for the GPO name rather than from DSC.
+
+The `block`/`rescue` in `site.yml` is kept as scaffolding until a cold build confirms the fix, and its message is now an unmissable `MAPPED_DRIVE_FOPS_FAILED` rather than a reassuring note about a known quirk. That wrapper is the reason this went unnoticed for months; a convenience feature that silently does not exist is worse than one that stops the deploy and says so.
+
+---
+
+## 2026-09-18 · bug · roles/dcpromo — the AD-services probe reported the worst case as the best one
+
+**Symptom.** None. The probe passed on hosts where the services did not exist.
+
+**Root cause.** The probe counted services whose status was not Running:
+
+```powershell
+$svc = Get-Service ADWS, NTDS, Netlogon -ErrorAction SilentlyContinue
+Write-Output ([string](($svc | Where-Object Status -ne 'Running').Count))
+```
+
+When `Get-Service` found **nothing** — the services absent entirely, which is what a failed promotion actually looks like — `$svc` was null, the filtered count was `0`, and `0` was the healthy value. A host with no AD at all scored identically to a fully promoted DC.
+
+Combined with the duplicate-`when` defect logged above, the child-DC health gate was doubly inert: the condition was discarded, and the value it would have read was wrong.
+
+**Fix.** Name each service, distinguish MISSING from Stopped, and emit a marker rather than a count. Retries added because the probe runs immediately after a reboot, where sampling once turns a slow NTDS start into a failure.
+
+**Also fixed: the guard.** `Wait for the child DC to finish promoting and come back` and the gate both required `dcpromo_child is changed`. The promotion task reboots from inside its own session, so it can return unreachable or failed rather than changed — and those are exactly the runs where waiting and checking matter. Both now use `is not skipped`.
+
+---
+
+## 2026-09-18 · gap · requirements.yml documented an install that deploy.sh cannot use
+
+**Symptom.** `ansible-playbook --syntax-check` fails with `couldn't resolve module/action 'pfsensible.core.pfsense_setup'` on a controller that deploys perfectly well.
+
+**Root cause.** Neither the documented command nor `deploy.sh` passed `-p`, so collections land in `~/.ansible/collections` — per-user. `/tmp/deploy-script.sh` runs `deploy.sh` from system cron **as root**, so the deploy's collections live in `/root/.ansible/collections`, invisible to anyone checking by hand as `simspace`. The documented command additionally said `sudo`, which meant a hand-install landed somewhere the *non-root* path could not see either. Both halves worked only by accident of which account ran last.
+
+**Fix.** Both `requirements.yml` and `deploy.sh` now install to `/usr/share/ansible/collections`, which is on the default search path for every user, with a fallback to the per-user default when that directory is not writable. `HTTPS_PROXY` is now overridable so the internal Nexus can take over without editing the script.
+
+---
+
 ## 2026-09-18 · bug · roles/dcpromo — duplicate `when` silently deleted the AD-services gate
 
 **Symptom.** None visible. That is the problem.

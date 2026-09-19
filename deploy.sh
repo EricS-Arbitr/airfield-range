@@ -117,8 +117,24 @@ echo "=== Checking for Ansible Galaxy collections ==="
 
 if [ -f requirements.yml ]; then
 	echo "=== Installing/refreshing Ansible Galaxy collections ==="
-	HTTPS_PROXY="http://10.255.240.1:3128" \
+	# Install to a SHARED path, not ~/.ansible/collections. This script runs
+	# from system cron as root via /tmp/deploy-script.sh, so a per-user install
+	# is invisible to anyone debugging by hand as `simspace` -- and vice versa.
+	# /usr/share/ansible/collections is on the default search path for every
+	# user, so one copy serves both. Falls back to the per-user default when
+	# that directory cannot be written, which is the case if deploy.sh is ever
+	# run as a non-root user.
+	GALAXY_DEST="/usr/share/ansible/collections"
+	if ! mkdir -p "$GALAXY_DEST" 2>/dev/null || [ ! -w "$GALAXY_DEST" ]; then
+		echo "NOTE: $GALAXY_DEST not writable; installing to the per-user path"
+		GALAXY_DEST=""
+	fi
+	# HTTPS_PROXY is overridable so the internal Nexus can take over without
+	# editing this script. The controller is currently the one machine in the
+	# range that still reaches outside for anything.
+	HTTPS_PROXY="${HTTPS_PROXY:-http://10.255.240.1:3128}" \
 		ansible-galaxy collection install -r requirements.yml \
+		${GALAXY_DEST:+-p "$GALAXY_DEST"} \
 		|| echo "WARN: galaxy install returned non-zero; continuing"
 fi
 

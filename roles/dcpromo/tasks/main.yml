@@ -265,10 +265,15 @@
     delay: 60
     sleep: 15
     timeout: 900
+  # `is not skipped`, not `is changed`. The promotion task reboots from inside
+  # its own session, so it can return unreachable or failed rather than
+  # changed -- and those are precisely the runs where waiting for the host to
+  # come back matters most. `is changed` skipped the wait in exactly the case
+  # it was written for.
   when:
     - parent_domain_name is defined
     - dcpromo_child is defined
-    - dcpromo_child is changed
+    - not (dcpromo_child is skipped)
 
 - name: Confirm AD services are actually running on the new child DC
   vars:
@@ -277,9 +282,33 @@
   ansible.windows.win_powershell:
     script: |
       $Ansible.Changed = $false
-      $svc = Get-Service ADWS, NTDS, Netlogon -ErrorAction SilentlyContinue
-      Write-Output ([string](($svc | Where-Object Status -ne 'Running').Count))
+      $want = @('ADWS', 'NTDS', 'Netlogon')
+      $bad = @()
+      foreach ($n in $want) {
+        $s = Get-Service -Name $n -ErrorAction SilentlyContinue
+        if (-not $s) {
+          $bad += "$n=MISSING"
+        } elseif ($s.Status -ne 'Running') {
+          $bad += "$n=$($s.Status)"
+        }
+      }
+      if ($bad.Count -eq 0) {
+        Write-Output "CHILD_DC_SERVICES_OK"
+      } else {
+        Write-Output ("CHILD_DC_SERVICES_BAD " + ($bad -join ' '))
+      }
   register: child_dc_services
+  # The old probe counted services whose Status was not Running. When
+  # Get-Service found NOTHING -- the services absent entirely, which is what a
+  # failed promotion actually looks like -- the count was 0 and the host was
+  # declared healthy. It reported the worst case as the best one. Name each
+  # service and distinguish MISSING from Stopped.
+  #
+  # Retries because this runs right after a reboot: NTDS and ADWS take time to
+  # start, and sampling once turns a slow start into a failure.
+  until: "'CHILD_DC_SERVICES_OK' in (child_dc_services.output | default([]) | join(' '))"
+  retries: 20
+  delay: 15
   changed_when: false
   # no_log: the command embeds domain_admin_password and Ansible echoes `cmd`
   # on failure. The DIAGNOSIS is preserved by the task below, which prints the
@@ -293,6 +322,11 @@
       AD services are not running on {{ inventory_hostname }} after promotion.
       probe output: {{ child_dc_services.output | default(['(none)']) | join(' ') }}
 
+      MISSING means the service does not exist on the host, which is what a
+      failed promotion looks like -- not a slow start. Check
+      C:\ProgramData\dcpromo-install.log, which the post-dcpromo snapshot
+      play collects.
+
       The credential is not shown. Read the play if you need the command.
   # ONE `when`, deliberately. This task carried two until 2026-09-18: a bare
   # `when:` with the service condition, followed by a `when:` list with the
@@ -304,5 +338,5 @@
   when:
     - parent_domain_name is defined
     - dcpromo_child is defined
-    - dcpromo_child is changed
-    - (child_dc_services.output[0] | default('9') | int) != 0
+    - not (dcpromo_child is skipped)
+    - "'CHILD_DC_SERVICES_OK' not in (child_dc_services.output | default([]) | join(' '))"
