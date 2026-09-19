@@ -29,7 +29,10 @@
       - (item.description | trim | length) <= 250
     fail_msg: >-
       Defend filter {{ item.id }} description is
-      {{ item.description | trim | length }} chars; Kibana's limit is 256.
+      {{ item.description | trim | length }} chars. Kibana rejects anything
+      over 256; this check stops at 250 to leave margin. `description` is
+      rendered in the Kibana UI -- put maintainer rationale in a YAML comment
+      beside the entry, not in the field.
     quiet: true
   loop: "{{ so_defend_exclusions }}"
   loop_control:
