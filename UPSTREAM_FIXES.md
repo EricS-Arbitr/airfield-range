@@ -14,6 +14,46 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-20 · bug · site.yml — the DomainDnsZones partition is absent, not late
+
+**Symptom.** The child PDC fails the partition gate on every cold build, regardless of how long the gate waits:
+
+```
+Probe said: DNSPART_NOT_READY zone ds=True scope=Legacy | partition-query-failed:
+Failed to get Directory Partition information for DomainDnsZones.fops.blackstone.mil
+on server FOPS-DC01.
+```
+
+**Root cause.** `Failed to get Directory Partition information` is the partition being **absent**, not merely un-enlisted on this server. The built-in DNS application partitions are supposed to be created during promotion and, for the child domain on this platform, are not. The zone therefore lands at `Legacy` scope in the domain NC, and `win_dns_zone` with `replication: domain` has nowhere to move it.
+
+**Waiting does not work, and this was established the expensive way.** The ceiling was raised from 600s to 1200s and then to 2400s. The 2400s run cost 35 minutes of extra wall clock and failed identically. A state that never changes does not yield to a longer poll — the number was the wrong thing to tune, and two builds were spent learning it.
+
+**Fix (upstream).** Promotion should create the built-in partitions. Where it does not, create them rather than wait.
+
+**Workaround (overlay).** The gate probes for five minutes, then runs `dnscmd /CreateBuiltinDirectoryPartitions /Domain`, restarts the DNS Server service so it re-enumerates its partitions, and re-probes. `dnscmd` and not a cmdlet because there is no cmdlet for the **built-in** partitions — `Add-DnsServerDirectoryPartition` creates custom ones. The failure message now prints the before, the dnscmd output and the after, and says plainly that waiting longer will not help.
+
+---
+
+## 2026-09-20 · gap · site.yml — nothing made the DCs advertise themselves before the joins
+
+**Symptom.** Two fops members per build fail all three join passes. Their configuration is provably correct:
+
+```
+DCLOCATOR_NOT_READY no-srv-records-for-fops.blackstone.mil
+dns=[Ethernet1=172.31.3.11/172.31.3.12]      <- fops-dc01, fops-dc02: correct
+ip=[172.31.5.82,10.255.240.144]              <- range + mgmt: correct
+```
+
+**Root cause.** The records they were looking for did not exist. No play ever forced or verified DC locator-record registration; every join ran on the assumption that the DCs had advertised themselves, and on a fresh build that assumption is sometimes false.
+
+**This invalidates the previous day's fix.** The 2026-09-20 repair added to `domain_member_retry` re-applies a member's declared IP and DNS on passes 2 and 3. It fired on both failing hosts, changed nothing — because nothing was wrong with them — and they failed anyway. Re-applying correct config cannot conjure a missing SRV record. The repair is kept: it is cheap, scoped to the failure path, and covers a real fault shape. But it was aimed at the wrong host, and only the probe output added the same day made that visible.
+
+**Fix.** A play between the DNS forwarders and the join plays: `nltest /dsregdns` on each PDC to force immediate registration rather than waiting for the Netlogon timer, then `Resolve-DnsName -Type SRV _ldap._tcp.dc._msdcs.<domain>` with `until:`/40×15s to prove the records actually resolve. Forcing registration and having it succeed are different claims, so the gate tests the second one.
+
+Failing here costs one task. Failing later cost fifteen members three join passes each, discovering the same fact one at a time.
+
+---
+
 ## 2026-09-20 · note · airfield deploys clean — 86 hosts, zero failures
 
 First fully successful cold build since the Splunk removal. Both domains promoted, users created, all four DCs enrolled in Fleet, every Fleet integration reporting data. Three attempts, 7h 55m wall clock, attempt 3 clean in 58m.

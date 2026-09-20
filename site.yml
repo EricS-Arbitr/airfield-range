@@ -846,22 +846,21 @@
   hosts: pdc
   gather_facts: false
   vars:
-    # 160 x 15s = 40 minutes. Was 40 (10 min) until 2026-09-20, when fops-dc01
-    # timed out with
-    #   DNSPART_NOT_READY zone ds=True scope=Legacy
-    # -- the zone AD-integrated but still in the domain NC, and
-    # DomainDnsZones.fops.blackstone.mil not yet created. It was present by the
-    # next attempt, which began 5h27m later, so all we know is that ten minutes
-    # was short and the true figure is somewhere below five hours.
+    # 20 x 15s = 5 minutes, then REPAIR. Waiting was tried at 10 minutes and
+    # again at 40, and neither worked, because the partition is not late -- it
+    # is absent. On 2026-09-20 fops-dc01 reported, after the full 2400s:
     #
-    # 40 minutes is chosen against that uncertainty, not against a measurement.
-    # The asymmetry makes it cheap: this is a POLL, not a sleep -- the probe
-    # runs immediately and every 15s until the partition appears, then the gate
-    # exits. A child DC ready in 30 seconds costs 30 seconds no matter what
-    # this number says. The only run that pays the full 40 minutes is one where
-    # the partition never arrives, and that run was going to fail anyway --
-    # it now fails having waited long enough to be believed.
-    dns_partition_retries: 160
+    #   DNSPART_NOT_READY zone ds=True scope=Legacy | partition-query-failed:
+    #   Failed to get Directory Partition information for
+    #   DomainDnsZones.fops.blackstone.mil on server FOPS-DC01.
+    #
+    # "Failed to get Directory Partition information" is the partition being
+    # ABSENT, not merely un-enlisted on this server. No ceiling fixes that. The
+    # short probe stays because the forest root answers it on the first try and
+    # a genuinely slow partition would land inside five minutes; past that, the
+    # tasks below create it.
+    dns_partition_retries: 20
+    dns_partition_repair_retries: 20
   pre_tasks:
     # Probe the partition rather than the zone: this is the precondition the
     # zone re-scope depends on, and it is readable without a credential.
@@ -902,30 +901,95 @@
       changed_when: false
       failed_when: false
 
+    # The built-in DNS application partitions are supposed to be created during
+    # promotion. When they are not -- observed on every cold airfield build for
+    # the child domain -- the documented remedy is to create them explicitly.
+    # This is `dnscmd`, not a PowerShell cmdlet, because there is no cmdlet for
+    # the BUILT-IN partitions: Add-DnsServerDirectoryPartition makes custom
+    # ones. Requires Enterprise Admins, which the connection already holds.
+    #
+    # failed_when: false because the re-probe below is what decides. dnscmd
+    # returns non-zero for "already exists" as well as for real failures, and
+    # treating those the same would fail a host that is fine.
+    - name: Create the built-in DNS application partitions
+      ansible.windows.win_shell: |
+        $out = & dnscmd /CreateBuiltinDirectoryPartitions /Domain 2>&1 | Out-String
+        Write-Output $out.Trim()
+      register: dns_partition_create
+      when: "'DNSPART_READY' not in (dns_partition.stdout | default(''))"
+      changed_when: "'DNSPART_READY' not in (dns_partition.stdout | default(''))"
+      failed_when: false
+
+    # The DNS Server service enumerates its directory partitions at startup, so
+    # a partition created underneath a running service is not picked up until
+    # it restarts.
+    - name: Restart the DNS Server service so it sees the new partition
+      ansible.windows.win_service:
+        name: DNS
+        state: restarted
+      when: "'DNSPART_READY' not in (dns_partition.stdout | default(''))"
+      failed_when: false
+
+    - name: Preflight — re-check the partition after creating it
+      ansible.windows.win_shell: |
+        $dom = "{{ domain_name }}"
+        $ready = $false
+        $detail = ""
+        try {
+          $z = Get-DnsServerZone -Name $dom -ErrorAction Stop
+          $detail = "zone ds=$($z.IsDsIntegrated) scope=$($z.ReplicationScope)"
+          if ($z.IsDsIntegrated -and "$($z.ReplicationScope)" -match 'Domain') { $ready = $true }
+        } catch {
+          $detail = "zone-query-failed: $($_.Exception.Message)"
+        }
+        if (-not $ready) {
+          try {
+            $p = Get-DnsServerDirectoryPartition -Name "DomainDnsZones.$dom" -ErrorAction Stop
+            $detail += " | partition state=$($p.State) flags=$($p.Flags)"
+            if ($p.State -eq 0) { $ready = $true }
+          } catch {
+            $detail += " | partition-query-failed: $($_.Exception.Message)"
+          }
+        }
+        if ($ready) { "DNSPART_READY $detail" } else { "DNSPART_NOT_READY $detail" }
+      register: dns_partition_after
+      until: "'DNSPART_READY' in (dns_partition_after.stdout | default(''))"
+      retries: "{{ dns_partition_repair_retries }}"
+      delay: 15
+      changed_when: false
+      failed_when: false
+      when: "'DNSPART_READY' not in (dns_partition.stdout | default(''))"
+
     # Fail HERE with the reason rather than inside the zone loop, where the
     # message names a DNS API call and not the thing that is actually missing.
     - name: Fail if the DomainDnsZones partition never enlisted
       ansible.builtin.fail:
         msg: |
-          {{ inventory_hostname }} did not enlist the DNS application partition
-          DomainDnsZones.{{ domain_name }} after
-          {{ (dns_partition_retries | int) * 15 }}s.
+          {{ inventory_hostname }} has no usable DNS application partition for
+          {{ domain_name }}, and creating it did not work.
 
-          Probe said: {{ dns_partition.stdout | default('(no output)') | trim }}
+          Before repair : {{ dns_partition.stdout | default('(no output)') | trim }}
+          dnscmd said   : {{ dns_partition_create.stdout | default('(did not run)') | trim }}
+          After repair  : {{ dns_partition_after.stdout | default('(did not run)') | trim }}
 
-          Neither signal held: the zone is not AD-integrated at Domain scope,
-          and DomainDnsZones.{{ domain_name }} is absent or unhealthy.
+          The run already waited {{ (dns_partition_retries | int) * 15 }}s, ran
+          `dnscmd /CreateBuiltinDirectoryPartitions /Domain`, restarted the DNS
+          Server service and waited a further
+          {{ (dns_partition_repair_retries | int) * 15 }}s. Waiting longer will
+          not help -- that was tried at 600s and at 2400s and the partition is
+          absent, not late.
 
-          Creating or re-scoping an AD-integrated zone on this server will fail
-          until the partition exists. Check, in order:
-            1. Get-DnsServerDirectoryPartition
-                 (DomainDnsZones.{{ domain_name }} should be listed, State 0,
-                  Flags containing Enlisted)
-            2. Register-DnsServerDirectoryPartition -Name DomainDnsZones.{{ domain_name }}
-                 (enlists this server if the partition exists but it is not joined)
-            3. repadmin /showrepl  -- a child DC that has not completed its
-               first inbound replication has no application partitions yet
-      when: "'DNSPART_READY' not in (dns_partition.stdout | default(''))"
+          Check, in order:
+            1. whether the credential has Enterprise Admins. Creating the
+               built-in partitions requires it, and dnscmd reports the refusal
+               in its output above.
+            2. repadmin /showrepl  -- a child DC that has not completed its
+               first inbound replication has no application partitions yet.
+            3. Get-DnsServerDirectoryPartition with no -Name, to see what this
+               server does have.
+      when:
+        - "'DNSPART_READY' not in (dns_partition.stdout | default(''))"
+        - "'DNSPART_READY' not in (dns_partition_after.stdout | default(''))"
   roles:
     - dns
   tags:
@@ -956,6 +1020,90 @@
   tags:
     - dns
     - dns_forwarder
+
+# =============================================================================
+# Domain controllers must ADVERTISE themselves before anything tries to join.
+#
+# Nothing in this playbook did that until 2026-09-20. Every member join ran on
+# the assumption that the DCs had registered their locator SRV records, and on
+# a fresh build that assumption is sometimes false. The cost was two fops
+# members per build failing all three join passes with
+#
+#   DCLOCATOR_NOT_READY no-srv-records-for-fops.blackstone.mil
+#   dns=[Ethernet1=172.31.3.11/172.31.3.12] ip=[172.31.5.82,10.255.240.144]
+#
+# -- a host whose resolvers and addresses were both CORRECT. The members were
+# fine. The records they were looking for did not exist yet. Re-applying member
+# network config, which is what the join role now does on passes 2 and 3, could
+# never have fixed that, and did not.
+#
+# `nltest /dsregdns` forces the DC to re-register its locator records
+# immediately rather than waiting for the Netlogon timer. Then we prove they
+# resolve, because forcing registration and having it succeed are different
+# claims.
+#
+# Placed after the DNS forwarders play and before the joins: the DCs are
+# serving by now, and the members have not started looking yet.
+# =============================================================================
+- name: Domain controllers — register and prove their locator records
+  hosts: pdc
+  gather_facts: false
+  vars:
+    dc_srv_retries: 40          # 40 x 15s = 10 minutes
+  tasks:
+    - name: Force this DC to register its locator records
+      ansible.windows.win_shell: |
+        $out = & nltest /dsregdns 2>&1 | Out-String
+        Write-Output $out.Trim()
+      register: dc_dsregdns
+      changed_when: false
+      failed_when: false
+
+    # Prove the records RESOLVE, not merely that registration was requested.
+    # A gate has to test what the step behind it needs, and what the join
+    # plays need is an answer from DNS.
+    - name: Prove this domain advertises a domain controller
+      ansible.windows.win_shell: |
+        $r = @(Resolve-DnsName -Type SRV -Name "_ldap._tcp.dc._msdcs.{{ domain_name }}" -ErrorAction SilentlyContinue |
+               Where-Object { $_.QueryType -eq 'SRV' -and $_.NameTarget })
+        if ($r.Count -gt 0) {
+          "DCSRV_READY " + (($r | ForEach-Object { $_.NameTarget }) -join ',')
+        } else {
+          "DCSRV_NOT_READY"
+        }
+      register: dc_srv
+      until: "'DCSRV_READY' in (dc_srv.stdout | default(''))"
+      retries: "{{ dc_srv_retries }}"
+      delay: 15
+      changed_when: false
+      failed_when: false
+
+    - name: Report the locator records this domain advertises
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} ({{ domain_name }}): {{ dc_srv.stdout | default('(no output)') | trim }}"
+
+    # Fail HERE rather than letting 15 members each spend three join passes
+    # discovering the same thing one at a time.
+    - name: Fail if this domain advertises no domain controller
+      ansible.builtin.fail:
+        msg: |
+          {{ domain_name }} has no _ldap._tcp.dc._msdcs SRV records after
+          {{ (dc_srv_retries | int) * 15 }}s, with registration forced.
+
+          nltest said: {{ dc_dsregdns.stdout | default('(no output)') | trim }}
+
+          Every member of this domain will fail to join, and each will spend
+          three passes finding that out. Check, in order:
+            1. Get-Service Netlogon   (registration is its job)
+            2. that the zone {{ domain_name }} exists and is writable on this
+               DC -- a Legacy-scoped or read-only zone accepts no dynamic
+               registration
+            3. Get-DnsServerZone -Name {{ domain_name }} | Select-Object
+               ZoneName, IsDsIntegrated, DynamicUpdate
+      when: "'DCSRV_READY' not in (dc_srv.stdout | default(''))"
+  tags:
+    - dns
+    - dc_srv_records
 
 # Pre-emptively strip 169.254.x.x APIPA addresses Windows assigns when the
 # DHCP→static handoff lags (most common on .3 host in every subnet during
