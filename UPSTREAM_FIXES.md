@@ -72,7 +72,15 @@ Fifteen minutes of locator waiting across three passes and the SRV records never
 
 **Gap.** The probe named the symptom and nothing about the cause, so the next step was still a guess.
 
-**Fix.** On `no-srv-records`, the probe now also reports the host's configured DNS servers per interface and its IPv4 addresses. A host pointed at the wrong resolver, or still holding an APIPA address, now says so in the failure itself.
+**Fix, part one — evidence.** On `no-srv-records` the probe now also reports the host's configured DNS servers per interface and its IPv4 addresses, so a host pointed at the wrong resolver or holding no production address says so in the failure itself.
+
+**Fix, part two — repair.** Passes 2 and 3 now re-assert the network configuration the host declares in `network_interfaces` before probing again: the IPv4 addresses and the DNS servers, via the same two DSC resources `roles/common` uses, followed by a resolver-cache flush. A negative SRV lookup caches like any other, so without the flush the probe can keep returning the pre-repair answer.
+
+This is deliberately on the failure path only. A host that joins on pass 1 never runs any of it, and the 28 hosts that were always fine pay nothing.
+
+It repairs both shapes of the fault with one action, which matters because the evidence does not distinguish them: a production NIC that never took its static address cannot reach a DNS server at all, and one holding the wrong resolvers cannot resolve — and from the locator's side those look identical. DSC changes only what does not match, so re-applying correct config is a no-op.
+
+**A correction to the record.** The 2026-09-18 entry attributed this failure mode to herd load against a single DC, and an earlier note here claimed nothing in the playbook sets member DNS. Both are wrong. `roles/common` applies IP, gateway and DNS from `network_interfaces` via `xIPAddress` / `xDNSServerAddress` long before the join plays — it simply does not use `Set-DnsClientServerAddress`, which is what a grep for the cmdlet missed. The fault is that the config does not survive or does not apply on one random host per build, not that it was never set.
 
 ---
 

@@ -7,6 +7,65 @@
 # be the obvious tool but is not guaranteed present on every client image, so
 # this resolves the locator SRV set directly and opens the three sockets the
 # join uses.
+# Only from pass 2 on. A reboot before the FIRST attempt would add ~5 minutes
+# to every host on every deploy to fix a state that is almost never wrong.
+- name: "Join pass {{ join_pass }} — reboot before re-attempting"
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+  when: join_pass | int > 1
+
+# Re-assert the network config this host DECLARES, before probing again.
+#
+# Pass 1 failing means something about this host is wrong, and the evidence
+# says it is the network. On 2026-09-20 bs-supply01 reported
+# DCLOCATOR_NOT_READY no-srv-records-for-blackstone.mil through all three
+# passes while the other 28 hosts in the same play joined normally; 2026-09-18
+# lost bs-hq02, soc-analyst05 and bs-supply04 the same way. A DIFFERENT random
+# host each build, which is a per-boot race rather than a broken machine.
+#
+# `common` already applies exactly this from network_interfaces, with the same
+# two DSC resources, early in the run. Re-applying it here is idempotent -- DSC
+# changes only what does not match -- and repairs both shapes of the fault: a
+# production NIC that never took its static address (so it cannot reach a DNS
+# server at all) and one holding the wrong resolvers.
+#
+# Scoped to the failure path on purpose. Hosts that join on pass 1 never run
+# any of this.
+- name: "Join pass {{ join_pass }} — re-apply declared IPv4 addresses"
+  ansible.windows.win_dsc:
+    resource_name: xIPAddress
+    InterfaceAlias: "{{ item.name }}"
+    IPAddress: "{{ item.ipv4.address }}/{{ (item.ipv4.address ~ '/' ~ item.ipv4.netmask) | ipaddr('prefix') }}"
+    AddressFamily: "IPv4"
+  loop: "{{ network_interfaces | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - join_pass | int > 1
+    - item.ipv4 is defined
+    - item.ipv4.address is defined
+    - item.ipv4.netmask is defined
+
+- name: "Join pass {{ join_pass }} — re-apply declared DNS servers"
+  ansible.windows.win_dsc:
+    resource_name: xDNSServerAddress
+    InterfaceAlias: "{{ item.name }}"
+    AddressFamily: "IPv4"
+    Address: "{{ item.dns }}"
+  loop: "{{ network_interfaces | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - join_pass | int > 1
+    - item.dns is defined
+
+# A negative lookup is cached like any other. Without this the probe below can
+# keep returning no-srv-records from cache after the resolvers are corrected.
+- name: "Join pass {{ join_pass }} — flush the DNS resolver cache"
+  ansible.windows.win_shell: Clear-DnsClientCache
+  changed_when: false
+  when: join_pass | int > 1
+
 - name: "Join pass {{ join_pass }} — preflight: a {{ domain_name }} DC answers"
   ansible.windows.win_shell: |
     $ErrorActionPreference = 'SilentlyContinue'
@@ -56,13 +115,6 @@
   delay: 15
   changed_when: false
   failed_when: false
-
-# Only from pass 2 on. A reboot before the FIRST attempt would add ~5 minutes
-# to every host on every deploy to fix a state that is almost never wrong.
-- name: "Join pass {{ join_pass }} — reboot before re-attempting"
-  ansible.windows.win_reboot:
-    reboot_timeout: 600
-  when: join_pass | int > 1
 
 # Deliberately non-fatal: the module frequently loses the connection mid-join
 # because the host reconfigures its network identity. `Verify domain

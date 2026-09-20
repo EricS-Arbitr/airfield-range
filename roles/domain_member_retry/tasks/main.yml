@@ -60,15 +60,22 @@
       Last locator probe: {{ dc_locator.stdout | default('(never ran)') | trim }}
 
       DCLOCATOR_NOT_READY means no DC advertised in DNS answered LDAP/389,
-      Kerberos/88 and SMB/445 from this host. Check, in order:
-        1. this host's DNS server -- a member pointed at anything other than a
-           DC for {{ domain_name }} cannot resolve the locator SRV records:
-             Get-DnsClientServerAddress
-        2. the SRV records themselves:
+      Kerberos/88 and SMB/445 from this host. The probe reports this host's
+      resolvers and IPv4 addresses inline above -- read those first.
+
+      Passes 2 and 3 already re-applied the IPv4 addresses and DNS servers
+      this host declares in `network_interfaces`, and flushed the resolver
+      cache, so a host that still cannot locate a DC is NOT simply a NIC that
+      came up late. Check, in order:
+        1. whether the declared values are themselves right:
+             network_interfaces in host_vars/{{ inventory_hostname }}.yml
+           against what the probe reported.
+        2. whether the DCs are serving DNS at all -- if several hosts failed
+           together, look at the DC, not at them:
              Resolve-DnsName _ldap._tcp.dc._msdcs.{{ domain_name }} -Type SRV
-        3. a leftover 169.254.x.x APIPA address (the `strip_apipa` play above
-           clears these, but a late DHCP handoff can re-add one):
-             Get-NetIPAddress -AddressFamily IPv4
+        3. routing between this subnet and the DC subnet. The probe opens
+           389, 88 and 445, so a firewall or missing route looks identical to
+           a DNS fault from here.
 
       DCLOCATOR_READY followed by a join failure is a different problem: the
       DC answered, so look at the credential and at the computer object --
