@@ -37,7 +37,11 @@ Probe said: DNSPART_NOT_READY zone ds=True scope=Legacy
 
 The gate correctly refused to proceed. Ten minutes was simply short: the partition was present by the next attempt.
 
-**Fix.** `dns_partition_retries` 40 → 80 (20 minutes). A ceiling, not a delay — a DC ready in 30 seconds costs 30 seconds.
+**Fix.** `dns_partition_retries` 40 → 160, a 40-minute ceiling.
+
+The number is chosen against uncertainty, not against a measurement: the partition was absent at ten minutes and present by the next attempt, which began 5h27m later, so all we actually know is that the true figure lies somewhere in between. The asymmetry is what makes a generous value cheap. This is a **poll, not a sleep** — the probe runs immediately and again every 15s until the partition appears, then the gate exits, so a child DC ready in 30 seconds costs 30 seconds regardless of the ceiling. The only run that pays the full 40 minutes is one where the partition never arrives, and that run was going to fail anyway; it now fails having waited long enough for the failure to mean something.
+
+The gate's failure message computes the figure from the variable rather than hardcoding it, so the two cannot drift apart.
 
 ---
 

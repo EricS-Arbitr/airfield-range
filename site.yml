@@ -846,15 +846,22 @@
   hosts: pdc
   gather_facts: false
   vars:
-    # 80 x 15s = 20 minutes. Was 40 until 2026-09-20, when fops-dc01 timed out
-    # at ten minutes with
+    # 160 x 15s = 40 minutes. Was 40 (10 min) until 2026-09-20, when fops-dc01
+    # timed out with
     #   DNSPART_NOT_READY zone ds=True scope=Legacy
     # -- the zone AD-integrated but still in the domain NC, and
     # DomainDnsZones.fops.blackstone.mil not yet created. It was present by the
-    # next attempt, so ten minutes was simply short: a new child domain can
-    # take longer than that to create and enlist its application partition.
-    # A ceiling, not a delay -- a DC that is ready in 30s costs 30s.
-    dns_partition_retries: 80
+    # next attempt, which began 5h27m later, so all we know is that ten minutes
+    # was short and the true figure is somewhere below five hours.
+    #
+    # 40 minutes is chosen against that uncertainty, not against a measurement.
+    # The asymmetry makes it cheap: this is a POLL, not a sleep -- the probe
+    # runs immediately and every 15s until the partition appears, then the gate
+    # exits. A child DC ready in 30 seconds costs 30 seconds no matter what
+    # this number says. The only run that pays the full 40 minutes is one where
+    # the partition never arrives, and that run was going to fail anyway --
+    # it now fails having waited long enough to be believed.
+    dns_partition_retries: 160
   pre_tasks:
     # Probe the partition rather than the zone: this is the precondition the
     # zone re-scope depends on, and it is readable without a credential.
