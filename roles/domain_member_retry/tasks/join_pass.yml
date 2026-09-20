@@ -14,7 +14,18 @@
     $srv = @(Resolve-DnsName -Type SRV -Name "_ldap._tcp.dc._msdcs.$dom" -ErrorAction SilentlyContinue |
              Where-Object { $_.QueryType -eq 'SRV' -and $_.NameTarget })
     if ($srv.Count -eq 0) {
-      "DCLOCATOR_NOT_READY no-srv-records-for-$dom"
+      # Report the DNS configuration with the failure. On 2026-09-20
+      # bs-supply01 returned no-srv-records through all three passes -- a
+      # persistent DNS fault on that host, not the DC load this probe was
+      # written for. The probe said WHAT failed and nothing about WHY, so the
+      # next step was a guess. These two lines make it evidence.
+      $dns = (Get-DnsClientServerAddress -AddressFamily IPv4 |
+              Where-Object { $_.ServerAddresses } |
+              ForEach-Object { "$($_.InterfaceAlias)=$($_.ServerAddresses -join '/')" }) -join ' '
+      $ips = (Get-NetIPAddress -AddressFamily IPv4 |
+              Where-Object { $_.IPAddress -notlike '127.*' } |
+              ForEach-Object { $_.IPAddress }) -join ','
+      "DCLOCATOR_NOT_READY no-srv-records-for-$dom dns=[$dns] ip=[$ips]"
     } else {
       $ready = $null
       foreach ($r in $srv) {

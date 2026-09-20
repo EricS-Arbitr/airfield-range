@@ -14,6 +14,68 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-20 · note · airfield deploys clean — 86 hosts, zero failures
+
+First fully successful cold build since the Splunk removal. Both domains promoted, users created, all four DCs enrolled in Fleet, every Fleet integration reporting data. Three attempts, 7h 55m wall clock, attempt 3 clean in 58m.
+
+Attempts 1 and 2 still failed, for the causes below.
+
+---
+
+## 2026-09-20 · bug · site.yml dns gate — ten minutes is not enough for a new child domain
+
+**Symptom.** The forest root builds; the child PDC times out on the partition gate:
+
+```
+TASK [Fail if the DomainDnsZones partition never enlisted]
+fops-dc01 did not enlist the DNS application partition
+DomainDnsZones.fops.blackstone.mil after 600s.
+Probe said: DNSPART_NOT_READY zone ds=True scope=Legacy
+```
+
+**Root cause.** Not the gate logic — the gate was right. `scope=Legacy` means the zone is AD-integrated but still stored in the domain NC rather than an application partition, which is where a child-domain zone lands when DNS creates it before `DomainDnsZones.<child>` exists. `win_dns_zone` with `replication: domain` then has nowhere to move it to, which is the 2026-09-18 failure this gate was built to prevent.
+
+The gate correctly refused to proceed. Ten minutes was simply short: the partition was present by the next attempt.
+
+**Fix.** `dns_partition_retries` 40 → 80 (20 minutes). A ceiling, not a delay — a DC ready in 30 seconds costs 30 seconds.
+
+---
+
+## 2026-09-20 · bug · roles/domain_member_retry — the failure named the wrong host
+
+**Symptom.**
+
+```
+TASK [domain_member_retry : Fail if bs-hq01 never joined blackstone.mil]
+fatal: [bs-supply01]: FAILED!
+```
+
+The task name says `bs-hq01`. The host that failed is `bs-supply01`.
+
+**Root cause.** The task name contained `{{ inventory_hostname }}`. Ansible renders a task name once per play, not once per host, so it froze on whichever host templated it first. A failure banner that names the wrong machine sends you to the wrong machine.
+
+**Fix.** The name no longer names a host. The `msg` body still does, where it renders per-host and is correct.
+
+---
+
+## 2026-09-20 · gap · roles/domain_member_retry — the locator probe said what, not why
+
+**Symptom.** `bs-supply01` failed all three join passes:
+
+```
+Last locator probe: DCLOCATOR_NOT_READY no-srv-records-for-blackstone.mil
+```
+
+Fifteen minutes of locator waiting across three passes and the SRV records never resolved. 28 of 29 hosts in the same play joined normally.
+
+**What this tells us.** The 2026-09-18 diagnosis of this failure mode was herd load against a single DC. That was wrong, or at least not the whole story: this host could not resolve the locator records at all, which is a DNS fault on the host rather than a busy DC. The probe added on 2026-09-18 is what made the difference visible — the old blind join could not have distinguished them.
+
+**Gap.** The probe named the symptom and nothing about the cause, so the next step was still a guess.
+
+**Fix.** On `no-srv-records`, the probe now also reports the host's configured DNS servers per interface and its IPv4 addresses. A host pointed at the wrong resolver, or still holding an APIPA address, now says so in the failure itself.
+
+---
+
 ## 2026-09-19 · bug · roles/create_users — waits for LDAP, then uses ADWS
 
 **Symptom.** On a freshly promoted child DC, every `Create Users` item fails:

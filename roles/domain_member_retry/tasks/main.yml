@@ -45,7 +45,13 @@
 
 # Fail HERE, naming what the probe last saw, rather than letting the bare
 # module error stand as the whole explanation.
-- name: Fail if {{ inventory_hostname }} never joined {{ domain_name }}
+# NO {{ inventory_hostname }} in the task NAME. Ansible renders a task name
+# once for the play, not per host, so on 2026-09-20 this printed
+#   TASK [domain_member_retry : Fail if bs-hq01 never joined blackstone.mil]
+# while failing bs-supply01. A failure message that names the wrong host sends
+# you to the wrong machine. The host is in the msg body, where it renders
+# per-host and is correct.
+- name: Fail if this host never joined {{ domain_name }}
   ansible.builtin.fail:
     msg: |
       {{ inventory_hostname }} did not join {{ domain_name }} in
