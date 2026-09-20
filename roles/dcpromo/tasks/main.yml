@@ -116,7 +116,7 @@
 
 - name: Reboot before promotion to clear any pending role change
   ansible.windows.win_reboot:
-    reboot_timeout: 900
+    reboot_timeout: 1800
   when: >-
     (rsat_adds.reboot_required | default(false)) or
     (rsat_dns.reboot_required | default(false)) or
@@ -377,6 +377,22 @@
         Write-Output ("CHILD_DC_SERVICES_BAD " + ($bad -join ' '))
       }
   register: child_dc_services
+  # CHILD PATH ONLY. This task forces ansible_user to
+  # <SHORTDOMAIN>\Administrator, which is correct for a promoted child DC and
+  # wrong for the forest root: `microsoft.ad.domain` notifies the reboot
+  # handler, which does not run until the END of the play, so within the play
+  # bs-dc01 is promoted but NOT rebooted -- local SAM gone, domain not serving.
+  # Connecting as BLACKSTONE\Administrator there returns UNREACHABLE, and on
+  # 2026-09-19 that dropped the forest root out of attempt 1 entirely.
+  #
+  # ignore_unreachable because `until:` cannot retry an UNREACHABLE result and
+  # `failed_when: false` does not catch one either -- without this the host
+  # leaves the play silently and the gate below never gets to say why.
+  when:
+    - parent_domain_name is defined
+    - dcpromo_child is defined
+    - not (dcpromo_child is skipped)
+  ignore_unreachable: true
   # The old probe counted services whose Status was not Running. When
   # Get-Service found NOTHING -- the services absent entirely, which is what a
   # failed promotion actually looks like -- the count was 0 and the host was

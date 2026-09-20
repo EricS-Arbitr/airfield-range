@@ -14,6 +14,63 @@ Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Sym
 
 ---
 
+## 2026-09-19 · bug · roles/create_users — waits for LDAP, then uses ADWS
+
+**Symptom.** On a freshly promoted child DC, every `Create Users` item fails:
+
+```
+failed: [fops-dc01] (item={'name': 'simspace', ...}) => {"msg": "Unhandled exception while
+executing module: Unable to find a default server with Active Directory Web Services running."}
+```
+
+Thirteen items, thirteen failures, and the host drops out of every play below — including Fleet enrollment, so the deploy dies much later at the Fleet coverage gate naming a host whose real problem was hours upstream.
+
+**Root cause, part one — the gate tests the wrong service.** The role opens with a wait on `127.0.0.1:389`. Everything below it talks to **ADWS**, not LDAP: `microsoft.ad.user` and `microsoft.ad.group` both go through the AD PowerShell stack, as do the `Get-/Set-ADDefaultDomainPasswordPolicy` calls. ADWS starts *after* AD DS, so port 389 answering proves something true and irrelevant. Same defect shape as 2026-09-03.
+
+**Root cause, part two — the modules ask the locator for a DC.** `microsoft.ad.user` and `microsoft.ad.group` with no `domain_server` ask the DC locator for a default server. A freshly promoted DC cannot reliably locate *itself*. The role already knew this: the password-policy tasks pin `-Server $env:COMPUTERNAME` with a comment explaining exactly why (2026-07-14). The module tasks never got the same treatment.
+
+**Fix (upstream).** Gate on ADWS, and pin every AD call to the DC the play is running on.
+
+**Workaround (overlay).** A `Get-ADDomain -Server $env:COMPUTERNAME` probe with `until:`/40×15s after the LDAP wait, plus a `fail` task naming what to check. `$env:COMPUTERNAME` is then captured once and passed as `domain_server` to all four `microsoft.ad.user` / `microsoft.ad.group` tasks, matching what the shell tasks already do.
+
+---
+
+## 2026-09-19 · bug · roles/handlers — reboot ceiling too short for domain controllers
+
+**Symptom.** Two DCs fail out of a run having rebooted perfectly well:
+
+```
+fatal: [bs-dc01]: FAILED! => {"changed": true, "elapsed": 608,
+"msg": "Timed out waiting for last boot time check (timeout=600.0)", "rebooted": true}
+```
+
+`"rebooted": true` — the reboot worked. The handler simply stopped waiting.
+
+**Root cause.** The shared `Reboot Windows` handler used `reboot_timeout: 600`. A member workstation is back in two or three minutes. A domain controller on its first boot after promotion has to bring up NTDS, Netlogon, ADWS and SYSVOL replication before it answers, and routinely takes longer than ten minutes.
+
+**Fix.** 1800. This is a ceiling, not a delay — a host that returns in 90 seconds still takes 90 seconds — so raising it costs nothing and removes a whole class of false failure. The pre-promotion reboot in `roles/dcpromo` is raised to match, since a host that has just installed AD-Domain-Services may run servicing on the way back up.
+
+---
+
+## 2026-09-19 · bug · roles/dcpromo — the child-DC service probe ran on the forest root
+
+**Symptom.** The forest root goes UNREACHABLE mid-play and leaves the deploy:
+
+```
+TASK [dcpromo : Confirm AD services are actually running on the new child DC]
+fatal: [bs-dc01]: UNREACHABLE! => {"censored": "... no_log: true ..."}
+```
+
+**Root cause.** The task sets `ansible_user` to `<SHORTDOMAIN>\Administrator`, which is correct for a promoted child DC and wrong for the forest root. `microsoft.ad.domain` notifies the reboot handler, and handlers do not run until the END of the play — so within the play the forest root is promoted but **not rebooted**: local SAM gone, domain not yet serving. Connecting as `BLACKSTONE\Administrator` in that window returns UNREACHABLE.
+
+The task had no `when:` at all, so it ran on both promotion paths despite being named, credentialed and written for one.
+
+Compounding it: `until:` cannot retry an UNREACHABLE result and `failed_when: false` does not catch one, so the host left the play silently and the gate below it never got to report anything.
+
+**Fix.** Guarded to the child path (`parent_domain_name is defined`, promotion not skipped) and given `ignore_unreachable: true` so an unreachable child DC is reported by the gate rather than vanishing.
+
+---
+
 ## 2026-09-19 · bug · roles/dcpromo — microsoft.ad.domain installs AD-DS and promotes in the same task
 
 **Symptom.** The forest root fails on every deploy.sh attempt, in minutes, and the range dies with it:

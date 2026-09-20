@@ -27,9 +27,23 @@
   ansible.builtin.reboot:
     reboot_timeout: 120
 
+# 1800, not 600. A member workstation is back in two or three minutes; a
+# domain controller on its first boot after promotion has to bring up NTDS,
+# Netlogon, ADWS and SYSVOL replication before it answers, and routinely takes
+# longer than ten minutes. On 2026-09-19 bs-dc01 and bs-dc02 both hit
+#
+#   Timed out waiting for last boot time check (timeout=600.0)
+#   "rebooted": true, "elapsed": 608
+#
+# ...having actually rebooted fine. The handler gave up six hundred seconds in
+# and both DCs failed out of the run over a wait that was simply too short.
+#
+# This is a CEILING, not a delay: a host that comes back in 90 seconds still
+# takes 90 seconds. Raising it costs nothing and removes a whole class of
+# false failure.
 - name: Reboot Windows
   ansible.windows.win_reboot:
-    reboot_timeout: 600
+    reboot_timeout: 1800
 
 - name: reload unbound
   community.docker.docker_container_exec:

@@ -11,6 +11,54 @@
     port: 389
     timeout: 600
 
+# LDAP answering does not mean ADWS is answering. Every task below this line
+# talks to Active Directory Web Services, not LDAP -- microsoft.ad.user and
+# microsoft.ad.group both go through the AD PowerShell stack, and so do the
+# Get-/Set-ADDefaultDomainPasswordPolicy calls. ADWS starts AFTER AD DS.
+#
+# On 2026-09-19 fops-dc01 passed the LDAP wait above and then failed every
+# single Create Users item with
+#
+#   Unable to find a default server with Active Directory Web Services running.
+#
+# ...which dropped it from every play below this one and cost the deploy. The
+# port-389 wait proved something true and irrelevant. Gate on what the next
+# step actually uses.
+- name: wait for ADWS on this DC
+  ansible.windows.win_shell: |
+    try {
+      $d = Get-ADDomain -Server $env:COMPUTERNAME -ErrorAction Stop
+      if ($d.DNSRoot) { "LOCAL_ADWS_READY" } else { "LOCAL_ADWS_NOT_READY" }
+    } catch { "LOCAL_ADWS_NOT_READY" }
+  register: local_adws
+  until: "'LOCAL_ADWS_READY' in (local_adws.stdout | default(''))"
+  retries: 40
+  delay: 15
+  changed_when: false
+  failed_when: false
+
+- name: Fail if this DC never answered ADWS
+  ansible.builtin.fail:
+    msg: |
+      {{ inventory_hostname }} did not answer Active Directory Web Services
+      locally after 600s. Every user and group task below needs ADWS, so
+      none of them can run.
+
+      Check, in order:
+        1. Get-Service ADWS        (should be Running)
+        2. Get-Service NTDS        (ADWS will not start before AD DS is up)
+        3. Get-ADDomain -Server $env:COMPUTERNAME
+  when: "'LOCAL_ADWS_READY' not in (local_adws.stdout | default(''))"
+
+# Pin every AD module call below to THIS DC, the same way the password-policy
+# shell tasks already pin -Server. Without it the modules ask the DC locator
+# for a default server, which is what produced the ADWS failure above -- a
+# freshly promoted DC cannot reliably locate itself.
+- name: Identify the local DC by computer name
+  ansible.windows.win_shell: $env:COMPUTERNAME
+  register: local_dc
+  changed_when: false
+
 # Both Get-/Set-ADDefaultDomainPasswordPolicy default to querying the
 # CURRENT USER's domain, not the local DC's. That breaks when Ansible
 # authenticates with a parent-forest EA credential (e.g. blackstone.mil\
@@ -38,6 +86,7 @@
     password: "{{ item.password }}"
     password_never_expires: yes
     state: present
+    domain_server: "{{ local_dc.stdout | trim }}"
   loop: "{{ DomainUsers }}"
   when:
     - DomainUsers is defined
@@ -48,6 +97,7 @@
     groups:
       set: "{{ item.groups }}"
     state: present
+    domain_server: "{{ local_dc.stdout | trim }}"
   loop: "{{ DomainUsers }}"
   when:
     - item.groups is defined
@@ -64,6 +114,7 @@
     identity: "{{ item.1 }}"
     members:
       add: ["{{ item.0.name }}"]
+    domain_server: "{{ local_dc.stdout | trim }}"
   with_subelements:
     - "{{ DomainUsers }}"
     - groups
@@ -78,3 +129,4 @@
     identity: "Domain Admins"
     members:
       add: ["{{ domain_admin }}"]
+    domain_server: "{{ local_dc.stdout | trim }}"
