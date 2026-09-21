@@ -59,6 +59,31 @@
     - join_pass | int > 1
     - item.dns is defined
 
+# Re-pin the default-gateway ARP entry.
+#
+# This is the fault the re-applied IP and DNS above cannot touch. On 2026-09-21
+# fops-ops01 failed all three passes with correct resolvers
+# (dns=[Ethernet1=172.31.3.11/172.31.3.12]), a correct address
+# (ip=[172.31.6.11,...]) and both DCs provably advertising their locator
+# records -- DCSRV_READY for fops.blackstone.mil was printed before the join
+# plays ran. Configuration was right at both ends and the member still could
+# not resolve, which leaves the path between them.
+#
+# roles/init says exactly this: an impostor MAC answers ARP for the gateway
+# address, ANSWERS ICMP so the gateway looks healthy, and "presents as DNS
+# failures, domain joins failing, Fleet enrolment failing". The DCs are on
+# 172.31.3.x and these members are not, so every lookup has to route.
+#
+# init pins this once. Re-running it here matters because init's own notes
+# record entries reverting to the impostor MAC inside a single run with no
+# reboot, and because that task fails OPEN when it cannot prove a probe target
+# is off-subnet -- so a host can finish init legitimately unpinned.
+- name: "Join pass {{ join_pass }} — re-pin the default-gateway ARP entry"
+  ansible.builtin.include_role:
+    name: init
+    tasks_from: gw_arp
+  when: join_pass | int > 1
+
 # A negative lookup is cached like any other. Without this the probe below can
 # keep returning no-srv-records from cache after the resolvers are corrected.
 - name: "Join pass {{ join_pass }} — flush the DNS resolver cache"
@@ -84,7 +109,17 @@
       $ips = (Get-NetIPAddress -AddressFamily IPv4 |
               Where-Object { $_.IPAddress -notlike '127.*' } |
               ForEach-Object { $_.IPAddress }) -join ','
-      "DCLOCATOR_NOT_READY no-srv-records-for-$dom dns=[$dns] ip=[$ips]"
+      $addrs = @(Get-DnsClientServerAddress -AddressFamily IPv4 |
+                 ForEach-Object { $_.ServerAddresses }) |
+               Where-Object { $_ } | Select-Object -Unique
+      $reach = foreach ($a in $addrs) {
+        $t = New-Object System.Net.Sockets.TcpClient
+        $up = $false
+        try { $up = $t.ConnectAsync($a, 53).Wait(3000) } catch { $up = $false } finally { $t.Dispose() }
+        if ($up) { "$a=open" } else { "$a=UNREACHABLE" }
+      }
+      $r = ($reach -join ' ')
+      "DCLOCATOR_NOT_READY no-srv-records-for-$dom dns=[$dns] ip=[$ips] resolver53=[$r]"
     } else {
       $ready = $null
       foreach ($r in $srv) {

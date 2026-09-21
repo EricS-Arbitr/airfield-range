@@ -10,7 +10,38 @@ Severity key:
 - **enhancement** — works but could be more robust or ergonomic
 - **platform** — SimSpace platform-side issue, not Ansible
 
-Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Symptom → Detection (if non-obvious) → Fix (upstream) → Workaround (overlay).
+Format: `## 2026-09-21 · bug · roles/domain_member_retry — the member is fine, the path is not
+
+**Symptom.** One fops member per cold build fails all three join passes:
+
+```
+fops-ops01 did not join fops.blackstone.mil in 3 passes.
+Last locator probe: DCLOCATOR_NOT_READY no-srv-records-for-fops.blackstone.mil
+  dns=[Ethernet1=172.31.3.11/172.31.3.12]   <- correct: fops-dc01, fops-dc02
+  ip=[172.31.6.11,10.255.240.177]           <- correct: range + mgmt
+```
+
+**What is now ruled out.** Both ends were provably healthy. The DC-locator play added the same day printed, *before* the join plays ran:
+
+```
+fops-dc01 (fops.blackstone.mil): DCSRV_READY fops-dc01.fops.blackstone.mil
+```
+
+So the records existed and were resolvable from the DC. The member's resolvers and addresses were correct, and passes 2 and 3 re-applied both from `network_interfaces` and changed nothing, because nothing was wrong with them. Configuration is right at both ends. What is left is the path between them.
+
+**Root cause (strongly indicated, not yet proven).** The members are on `172.31.5.x` / `172.31.6.x`; the DCs are on `172.31.3.x`. Every lookup has to route. `roles/init` documents an impostor MAC that answers ARP for the gateway address on whatever segment it appears on, **answers ICMP** so the gateway looks healthy, and — its words — *"presents as DNS failures, domain joins failing, Fleet enrolment failing."* That is this failure exactly.
+
+Two things make a host reach the join plays unpinned despite init running the repair: init's own notes record entries reverting to the impostor MAC inside a single run with no reboot, and the task fails **open** when it cannot prove a probe target is off-subnet, which is correct behaviour — an unpinned gateway is the status quo, a wrongly pinned one is an isolated host.
+
+**Fix.** The ARP repair is extracted to `roles/init/tasks/gw_arp.yml` and `domain_member_retry` includes it on join passes 2 and 3, alongside the IP and DNS re-application already there. It is idempotent; init runs the identical logic on every host every build.
+
+**And the probe now settles it either way.** On `no-srv-records` it opens TCP 53 to each configured resolver and reports `resolver53=[172.31.3.11=UNREACHABLE ...]` or `=open`. Those are different faults with different fixes and have been indistinguishable until now: a resolver that cannot be reached is a routing or ARP problem, one that answers with no records is a DC problem. The next occurrence says which.
+
+**Prior diagnoses of this failure, both wrong.** 2026-09-18 attributed it to herd load against a single DC; 2026-09-20 to the member's own network configuration. Each was disproved by the evidence the previous fix added — which is the only reason the search has narrowed rather than circled.
+
+---
+
+## YYYY-MM-DD · <severity> · <target path / heading>` followed by Symptom → Detection (if non-obvious) → Fix (upstream) → Workaround (overlay).
 
 ---
 
