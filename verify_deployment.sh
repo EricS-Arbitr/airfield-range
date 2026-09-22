@@ -112,6 +112,30 @@ check_pf_shell() {
   fi
 }
 
+# Query Elasticsearch on the SO manager and grep the raw response.
+#
+# SEPARATE FROM check_pf_shell BECAUSE OF --become. so-elasticsearch-query
+# requires root; run unprivileged it produces NOTHING on stdout and exits
+# quietly. Section 9 was written with check_pf_shell on 2026-09-22 and every
+# dataset check failed on a healthy grid, because empty output is
+# indistinguishable from an empty index. playbooks/75-endpoint.yml has used
+# `become: true` for these queries all along.
+#
+# The command is kept deliberately quote-light -- one single-quoted URL, no
+# $( ), no variable assignment -- because it crosses ansible's free-form
+# argument parsing, which counts quotes and does not know it is looking at a
+# shell pipeline.
+check_so() {
+  local cmd="$1" expect="$2" label="$3"
+  local out
+  out=$(A soc-so-manager -m ansible.builtin.shell -a "$cmd" --become --one-line)
+  if echo "$out" | grep -qE "$expect"; then
+    pass "$label"
+  else
+    fail "$label" "$out"
+  fi
+}
+
 # Count Windows hosts in a group that satisfy a PowerShell predicate.
 # The PS one-liner should print a single token per host that grep can match.
 count_ps_predicate() {
@@ -477,51 +501,86 @@ check_pf_shell is-inet \
 # So these ask the datastore, with counts.
 section "9. Security Onion — Fleet integrations ingesting"
 
-# --- One check per integration, by its own verify field -------------------
-# Fields match roles/so_fleet_integrations/defaults/main.yml. Querying the
-# FIELD and not just the datastream is the point: an index can exist, and
-# receive documents, while the pipeline that should populate url.path or
-# source.ip is doing nothing.
-for ds_field in \
-  "logs-nginx.access-default:url.path:nginx on bs-www" \
-  "logs-squid.log-default:source.ip:squid on bs-proxy" \
-  "logs-pfsense.log-default:source.ip:pfSense firewalls" \
-  "logs-vyos-default:log.file.path:VyOS routers"
-do
-  ds="${ds_field%%:*}"; rest="${ds_field#*:}"
-  fld="${rest%%:*}"; lbl="${rest#*:}"
-  check_pf_shell soc-so-manager \
-    "n=\$(so-elasticsearch-query \"$ds/_search?q=$fld:*&size=0&filter_path=hits.total\" 2>/dev/null | grep -o '\"value\":[0-9]*' | head -1 | cut -d: -f2); [ -n \"\$n\" ] && [ \"\$n\" -gt 0 ] && echo DATA_OK_\$n || echo DATA_NONE" \
-    'DATA_OK_' \
-    "$lbl: documents present in $ds"
-done
-
-# --- BOTH firewalls, not just one -----------------------------------------
-# Until 2026-09-16 a single pfsense integration collapsed both firewalls into
-# one source, so every document looked like it came from the same box and the
-# dataset count looked perfectly healthy. Per-firewall attribution is the only
-# thing that catches that, and a total count never will.
+# PREFLIGHT, AND IT GATES THE REST.
 #
-# Free-text q= rather than a field-qualified query: the hostname lands in
-# observer.hostname or host.hostname depending on the pipeline, and for a
-# coverage check "does this datastream contain documents mentioning this
-# firewall" is the question worth asking.
-for fw in bs-edge-fw bs-ops-fw; do
-  check_pf_shell soc-so-manager \
-    "n=\$(so-elasticsearch-query \"logs-pfsense.log-default/_search?q=$fw&size=0&filter_path=hits.total\" 2>/dev/null | grep -o '\"value\":[0-9]*' | head -1 | cut -d: -f2); [ -n \"\$n\" ] && [ \"\$n\" -gt 0 ] && echo FW_OK_\$n || echo FW_NONE" \
-    'FW_OK_' \
-    "pfSense: $fw attributed in logs-pfsense.log-default"
-done
+# Every check below reports "no documents" when it cannot query at all, and
+# those two states need different people looking at them. On 2026-09-22 this
+# section reported all six datasets empty on a grid that was ingesting
+# normally -- the queries were running unprivileged and returning nothing.
+# Six confident failures pointing at the wrong thing.
+#
+# So: prove the mechanism first. A cluster-health response means the tool
+# runs, the credentials work and Elasticsearch is up; anything below it is
+# then a real statement about data.
+so_query_ok=0
+if A soc-so-manager -m ansible.builtin.shell \
+     -a 'so-elasticsearch-query _cluster/health' --become --one-line 2>/dev/null \
+     | grep -qE '"status":"(green|yellow)"'; then
+  pass "soc-so-manager: Elasticsearch answers (query mechanism works)"
+  so_query_ok=1
+else
+  fail "soc-so-manager: cannot query Elasticsearch — every dataset check below would report 'no documents' whether or not data exists. Fix this first; do NOT go looking at the log sources."
+fi
 
-# --- Ingest pipeline errors --------------------------------------------
-# Where the 2026-09-16 regression would reappear. A document that fails its
-# pipeline still lands in the datastream, so it inflates every count above
-# while carrying none of the parsed fields -- the dataset looks busy and is
-# useless. Zero is the only acceptable answer.
-check_pf_shell soc-so-manager \
-  "n=\$(so-elasticsearch-query \"logs-*/_search?q=error.message:*&size=0&filter_path=hits.total\" 2>/dev/null | grep -o '\"value\":[0-9]*' | head -1 | cut -d: -f2); [ \"\${n:-0}\" -eq 0 ] && echo PIPELINE_CLEAN || echo PIPELINE_ERRORS_\$n" \
-  'PIPELINE_CLEAN' \
-  "no ingest-pipeline errors across logs-*"
+if [ "$so_query_ok" -eq 1 ]; then
+  # --- One check per integration, by its own verify field ------------------
+  # Fields match roles/so_fleet_integrations/defaults/main.yml. Querying the
+  # FIELD and not just the datastream is the point: an index can exist, and
+  # receive documents, while the pipeline that should populate url.path or
+  # source.ip does nothing.
+  #
+  # The expect pattern is "value":<non-zero>. No shell arithmetic, no $( ) --
+  # the regex does the comparing, which keeps the command simple enough to
+  # survive ansible's free-form argument parsing intact.
+  check_so \
+    'so-elasticsearch-query logs-nginx.access-default/_search?q=url.path:*&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "nginx on bs-www: documents present in logs-nginx.access-default"
+
+  check_so \
+    'so-elasticsearch-query logs-squid.log-default/_search?q=source.ip:*&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "squid on bs-proxy: documents present in logs-squid.log-default"
+
+  check_so \
+    'so-elasticsearch-query logs-pfsense.log-default/_search?q=source.ip:*&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "pfSense firewalls: documents present in logs-pfsense.log-default"
+
+  check_so \
+    'so-elasticsearch-query logs-vyos-default/_search?q=log.file.path:*&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "VyOS routers: documents present in logs-vyos-default"
+
+  # --- BOTH firewalls, not just one ---------------------------------------
+  # Until 2026-09-16 a single pfsense integration collapsed both firewalls
+  # into one source, so every document looked like it came from the same box
+  # and the dataset count looked perfectly healthy. Per-firewall attribution
+  # is the only thing that catches that; a total never will.
+  check_so \
+    'so-elasticsearch-query logs-pfsense.log-default/_search?q=bs-edge-fw&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "pfSense: bs-edge-fw attributed in logs-pfsense.log-default"
+
+  check_so \
+    'so-elasticsearch-query logs-pfsense.log-default/_search?q=bs-ops-fw&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "pfSense: bs-ops-fw attributed in logs-pfsense.log-default"
+
+  # --- Ingest pipeline errors ---------------------------------------------
+  # Where the 2026-09-16 regression would reappear. A document that fails its
+  # pipeline still lands in the datastream, so it inflates every count above
+  # while carrying none of the parsed fields -- the dataset looks busy and is
+  # useless.
+  #
+  # NOTE the inverted sense: this one passes on ZERO, so it is the one check
+  # here that a blind query would pass. That is precisely why the preflight
+  # above gates it rather than letting it stand as reassurance.
+  check_so \
+    'so-elasticsearch-query logs-*/_search?q=error.message:*&size=0&filter_path=hits.total' \
+    '"value":0' \
+    "no ingest-pipeline errors across logs-*"
+fi
 
 # =========================================================================
 # Summary
