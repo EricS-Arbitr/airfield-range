@@ -567,19 +567,28 @@ if [ "$so_query_ok" -eq 1 ]; then
     '"value":[1-9]' \
     "pfSense: bs-ops-fw attributed in logs-pfsense.log-default"
 
-  # --- Ingest pipeline errors ---------------------------------------------
+  # --- Ingest pipeline errors, IN THESE FOUR DATASETS ----------------------
   # Where the 2026-09-16 regression would reappear. A document that fails its
   # pipeline still lands in the datastream, so it inflates every count above
   # while carrying none of the parsed fields -- the dataset looks busy and is
   # useless.
   #
+  # THE INDEX LIST IS THE POINT. This asked `logs-*` on 2026-09-22 and failed
+  # on a healthy grid: all 190 hits were in logs-elastic_agent.fleet_server,
+  # the Elastic Agent's own self-monitoring, recording its startup churn
+  # against Elasticsearch ("dial tcp [::1]:9200: connect: connection refused",
+  # "failed to fetch elasticsearch version") from before Elasticsearch was
+  # listening. Every one of the four integration datasets held zero. A check
+  # scoped wider than its own claim reports other people's noise as your
+  # regression.
+  #
   # NOTE the inverted sense: this one passes on ZERO, so it is the one check
   # here that a blind query would pass. That is precisely why the preflight
   # above gates it rather than letting it stand as reassurance.
   check_so \
-    'so-elasticsearch-query logs-*/_search?q=error.message:*&size=0&filter_path=hits.total' \
+    'so-elasticsearch-query logs-nginx.access-default,logs-squid.log-default,logs-pfsense.log-default,logs-vyos-default/_search?q=error.message:*&size=0&filter_path=hits.total' \
     '"value":0' \
-    "no ingest-pipeline errors across logs-*"
+    "no ingest-pipeline errors in the four integration datasets"
 fi
 
 # =========================================================================
