@@ -15,6 +15,22 @@
 # instead of taking the fleet with it, which is what made a high ceiling too
 # expensive to contemplate before.
 init_wait_timeout: 2400
+
+# --- Stability gate (see tasks/wait_stable.yml) ---------------------------
+# How long a host must have been up before the run will configure it. Past the
+# boot storm, short enough not to add real time to a healthy build: a host that
+# has been up three minutes when init reaches it waits zero seconds.
+init_stable_uptime: 180
+
+# 80 x 15s = 20 minutes of waiting for a host to settle. This is the budget for
+# a host that is REACHABLE but still rebooting or servicing.
+init_stable_retries: 80
+
+# And this is the budget for one that vanished mid-probe. Generous on purpose:
+# a customer watching the provisioning UI can see a bad workstation and
+# reprovision it, and this window is what lets the run pick it up instead of
+# failing and forcing another full attempt.
+init_stable_recover_timeout: 1800
 init_wait_delay: 30
 init_wait_sleep: 10
 

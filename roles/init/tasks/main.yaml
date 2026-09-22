@@ -47,6 +47,12 @@
 # different VMware MAC block (:98:) from every real router interface (:A8:) and
 # recurs across independent ranges, so only the platform vendor can remove the
 # cause.
+# Between "it answered" and "we start configuring it". See wait_stable.yml:
+# wait_for_connection returns on the first successful connection, which a host
+# mid-provisioning can give while still about to reboot.
+- name: Require the host to be stably up before configuring it
+  ansible.builtin.include_tasks: wait_stable.yml
+
 - name: Repair and pin the default-gateway ARP entry
   ansible.builtin.include_tasks: gw_arp.yml
 
