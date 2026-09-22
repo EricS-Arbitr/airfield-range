@@ -7,6 +7,11 @@
         name: "{{ inventory_hostname }}"
       register: res
 
+    # An explicit ceiling: win_reboot defaults to 600, which is the value that
+    # failed two members outright on 2026-09-22 (see roles/strip_apipa). A
+    # rename reboot lands early, when a freshly provisioned host is at its
+    # slowest.
     - name: Reboot
       ansible.windows.win_reboot:
+        reboot_timeout: 1800
       when: res.reboot_required

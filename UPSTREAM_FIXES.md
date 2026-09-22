@@ -10,7 +10,34 @@ Severity key:
 - **enhancement** — works but could be more robust or ergonomic
 - **platform** — SimSpace platform-side issue, not Ansible
 
-Format: `## 2026-09-21 · bug · roles/domain_member_retry — the member is fine, the path is not
+Format: `## 2026-09-22 · bug · reboot ceilings of 600s fail members on a cold build
+
+**Symptom.** Two members fail outright in attempt 1, then surface hours later at the Fleet coverage gate:
+
+```
+[FAILED] strip_apipa : Reboot if autoconfig setting changed
+      hosts: fops-ops08, fops-ops05
+      msg  : Timed out waiting for last boot time check (timeout=600.0)
+```
+
+**Root cause.** `win_reboot` defaults to `reboot_timeout: 600`, and several tasks either set it explicitly or inherited it. Ten minutes is not a cold Windows boot on freshly provisioned hardware. The reboot itself works; the task stops waiting.
+
+**Previously half-fixed, and the half that was missed is the point.** The shared `Reboot Windows` handler went 600 → 1800 on 2026-09-19 after both DCs failed the same way. That change came with an audit of every `win_reboot` in the repo — which saw `strip_apipa` at 600 and concluded only domain controllers boot slowly enough to matter. Members are not fine. Three days later two of them failed on exactly that value.
+
+**Fix.** Every `win_reboot` in both repos is now 1800, explicitly, including the two that were relying on the default:
+
+| | |
+|---|---|
+| airfield | `strip_apipa`, `domain_member_retry/join_pass`, `common/hostname` (was implicit) |
+| ss-pp-stacked | `strip_apipa`, `splunk-forwarder/windows` (was implicit) |
+
+Already at 1800: `handlers`, `dcpromo`.
+
+**Why a generous ceiling is nearly free.** `win_reboot` returns as soon as the host answers, so a machine back in 90 seconds costs 90 seconds regardless of the setting. The ceiling is spent only on hosts that are genuinely slow — which are precisely the hosts a short one converts into failures. The asymmetry is the whole argument, and it applies to every timeout of this shape.
+
+---
+
+## 2026-09-21 · bug · roles/domain_member_retry — the member is fine, the path is not
 
 **Symptom.** One fops member per cold build fails all three join passes:
 

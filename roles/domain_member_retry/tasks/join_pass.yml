@@ -10,8 +10,11 @@
 # Only from pass 2 on. A reboot before the FIRST attempt would add ~5 minutes
 # to every host on every deploy to fix a state that is almost never wrong.
 - name: "Join pass {{ join_pass }} — reboot before re-attempting"
+  # 1800, matching the rest of the repo. A member that needs more than ten
+  # minutes to come back is slow, not broken, and failing it here costs the
+  # host its remaining join passes. See roles/strip_apipa 2026-09-22.
   ansible.windows.win_reboot:
-    reboot_timeout: 600
+    reboot_timeout: 1800
   when: join_pass | int > 1
 
 # Re-assert the network config this host DECLARES, before probing again.

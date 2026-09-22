@@ -8,9 +8,22 @@
     state: present
   register: autoconf_reg
 
+# 1800, matching every other reboot in this repo. 600 is not a cold Windows
+# boot on freshly provisioned hardware: on 2026-09-22 fops-ops05 and fops-ops08
+# both failed here with
+#     Timed out waiting for last boot time check (timeout=600.0)
+# and dropped out of the run, surfacing hours later at the Fleet coverage gate.
+#
+# A CEILING, NOT A DELAY -- win_reboot returns as soon as the host answers, so
+# a machine back in 90 seconds costs 90 seconds whatever this says. It is spent
+# only on hosts that are genuinely slow, and those are exactly the hosts a
+# short ceiling turns into failures.
+#
+# I audited these timeouts on 2026-09-19, saw 600 here, and reasoned that only
+# domain controllers boot slowly enough to matter. Members are not fine.
 - name: Reboot if autoconfig setting changed
   ansible.windows.win_reboot:
-    reboot_timeout: 600
+    reboot_timeout: 1800
   when: autoconf_reg.changed
 
 - name: Remove APIPA addresses from configured interfaces
