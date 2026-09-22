@@ -177,6 +177,30 @@ check_pf_shell bs-edge-fw \
 
 # =========================================================================
 # 3. Active Directory — blackstone.mil + fops.blackstone.mil
+# --- No Windows host is pinned to the impostor gateway MAC ----------------
+# Fleet-wide, not a spot check, because this fault picks hosts at random. One
+# MAC answers ARP for the default-gateway address on whatever segment it
+# appears on, and it ANSWERS ICMP -- so the gateway pings while nothing routes
+# off-subnet. It presents as DNS failures, domain joins failing and Fleet
+# enrolment failing, never as "the network is down".
+#
+# roles/init pins the real MAC as a Permanent neighbour entry on every Windows
+# host. This asks whether any host still holds the impostor, which is both a
+# regression check on that task and the fastest explanation available for a
+# host that is mysteriously half-built.
+# count_ps_predicate and A() already exist for exactly this shape -- reuse
+# them rather than reaching for `ansible` directly, which would bypass the
+# script's inventory and verbosity handling.
+arp_bad=$(count_ps_predicate windows \
+  'if (Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.LinkLayerAddress -eq "00-50-56-98-7D-D7" }) { "IMPOSTOR_MAC_PRESENT" } else { "GW_MAC_CLEAN" }' \
+  'IMPOSTOR_MAC_PRESENT')
+arp_total=$(n_hosts windows)
+if [ "${arp_bad:-0}" -eq 0 ]; then
+  pass "impostor gateway MAC absent from all $arp_total Windows hosts"
+else
+  fail "impostor gateway MAC present on $arp_bad of $arp_total Windows hosts — those hosts cannot route off-subnet"
+fi
+
 # =========================================================================
 section "3. Active Directory"
 
@@ -439,6 +463,65 @@ check_pf_shell is-inet \
   'docker exec email getent passwd bob.burke 2>&1 | head -1' \
   'bob.burke' \
   "is-inet: bob.burke unix user exists in email container (mailbox provisioned)"
+
+# =========================================================================
+# 9. Security Onion — the Fleet integrations are actually INGESTING
+# =========================================================================
+# Sections 5 and 6 prove the plumbing exists: rsyslog is listening, Sysmon is
+# running, agents are installed. None of that proves a document reached
+# Elasticsearch, and the gap between the two has been real here more than once
+# -- on 2026-08-07 Zeek was discarding 100% of frames while every service check
+# passed, and on 2026-09-16 29% of pfSense documents were grok failures that no
+# "is it running" check could see.
+#
+# So these ask the datastore, with counts.
+section "9. Security Onion — Fleet integrations ingesting"
+
+# --- One check per integration, by its own verify field -------------------
+# Fields match roles/so_fleet_integrations/defaults/main.yml. Querying the
+# FIELD and not just the datastream is the point: an index can exist, and
+# receive documents, while the pipeline that should populate url.path or
+# source.ip is doing nothing.
+for ds_field in \
+  "logs-nginx.access-default:url.path:nginx on bs-www" \
+  "logs-squid.log-default:source.ip:squid on bs-proxy" \
+  "logs-pfsense.log-default:source.ip:pfSense firewalls" \
+  "logs-vyos-default:log.file.path:VyOS routers"
+do
+  ds="${ds_field%%:*}"; rest="${ds_field#*:}"
+  fld="${rest%%:*}"; lbl="${rest#*:}"
+  check_pf_shell soc-so-manager \
+    "n=\$(so-elasticsearch-query \"$ds/_search?q=$fld:*&size=0&filter_path=hits.total\" 2>/dev/null | grep -o '\"value\":[0-9]*' | head -1 | cut -d: -f2); [ -n \"\$n\" ] && [ \"\$n\" -gt 0 ] && echo DATA_OK_\$n || echo DATA_NONE" \
+    'DATA_OK_' \
+    "$lbl: documents present in $ds"
+done
+
+# --- BOTH firewalls, not just one -----------------------------------------
+# Until 2026-09-16 a single pfsense integration collapsed both firewalls into
+# one source, so every document looked like it came from the same box and the
+# dataset count looked perfectly healthy. Per-firewall attribution is the only
+# thing that catches that, and a total count never will.
+#
+# Free-text q= rather than a field-qualified query: the hostname lands in
+# observer.hostname or host.hostname depending on the pipeline, and for a
+# coverage check "does this datastream contain documents mentioning this
+# firewall" is the question worth asking.
+for fw in bs-edge-fw bs-ops-fw; do
+  check_pf_shell soc-so-manager \
+    "n=\$(so-elasticsearch-query \"logs-pfsense.log-default/_search?q=$fw&size=0&filter_path=hits.total\" 2>/dev/null | grep -o '\"value\":[0-9]*' | head -1 | cut -d: -f2); [ -n \"\$n\" ] && [ \"\$n\" -gt 0 ] && echo FW_OK_\$n || echo FW_NONE" \
+    'FW_OK_' \
+    "pfSense: $fw attributed in logs-pfsense.log-default"
+done
+
+# --- Ingest pipeline errors --------------------------------------------
+# Where the 2026-09-16 regression would reappear. A document that fails its
+# pipeline still lands in the datastream, so it inflates every count above
+# while carrying none of the parsed fields -- the dataset looks busy and is
+# useless. Zero is the only acceptable answer.
+check_pf_shell soc-so-manager \
+  "n=\$(so-elasticsearch-query \"logs-*/_search?q=error.message:*&size=0&filter_path=hits.total\" 2>/dev/null | grep -o '\"value\":[0-9]*' | head -1 | cut -d: -f2); [ \"\${n:-0}\" -eq 0 ] && echo PIPELINE_CLEAN || echo PIPELINE_ERRORS_\$n" \
+  'PIPELINE_CLEAN' \
+  "no ingest-pipeline errors across logs-*"
 
 # =========================================================================
 # Summary
