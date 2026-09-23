@@ -69,6 +69,16 @@
     # ansible_play_hosts_all is every host the play started with;
     # ansible_play_hosts is those still alive. The difference is exactly the
     # set that went unreachable or failed inside init.
+    # THE THREE CAUSES ARE LISTED SEPARATELY ON PURPOSE. This message
+    # asserted a single cause -- "each waited for WinRM" -- until
+    # 2026-09-23, which is untrue of a host that fails the no-route
+    # classifier minutes earlier for an entirely different reason. On the
+    # 2026-09-22 ss-pp-stacked build both messages printed about pp-dc01,
+    # five minutes apart, saying different things.
+    #
+    # Keep the WHY out of the message itself: an operator reading this
+    # mid-run needs the three log strings, not the history of the
+    # paragraph.
     - name: Report Windows hosts that never came online
       ansible.builtin.debug:
         msg: |
@@ -77,9 +87,21 @@
 
             {{ (ansible_play_hosts_all | difference(ansible_play_hosts)) | sort | join(', ') }}
 
-          Each waited up to {{ init_wait_timeout }}s for WinRM and never
-          answered. They are excluded from every later play, so they will have
-          no AD join, no Sysmon and no Elastic Agent.
+          They are excluded from every later play, so they will have no AD
+          join, no Sysmon and no Elastic Agent.
+
+          WHY EACH ONE DROPPED IS NOT THE SAME, and this list does not say.
+          Grep the log for the host to find out:
+
+            "has no route from the controller"
+                never on the network at all -- ARP never resolved. A
+                platform-side problem: check the VM exists, is powered on, and
+                has its mgmt NIC on the right network.
+            "wait for Windows systems to be online"
+                on the network but never answered WinRM within
+                {{ init_wait_timeout }}s. Usually still provisioning.
+            "Require the host to be stably up"
+                answered, but kept rebooting or never settled.
 
           The deploy CONTINUES for the {{ ansible_play_hosts | length }} hosts that did come up, and
           will fail at the end-of-run coverage checks naming exactly what is
