@@ -369,8 +369,11 @@
 # deferred, and rebooting a healthy 14-container manager just to re-verify
 # it would be gratuitous — so gate it on the same condition.
 - name: Reboot the manager (SKIP_REBOOT=1 in answer file deferred it)
+  # 1800, matching every other reboot in this repo. Raised 2026-09-23 so
+  # there is ONE ceiling to reason about rather than three. A ceiling, not
+  # a delay: reboot returns as soon as the node answers.
   ansible.builtin.reboot:
-    reboot_timeout: 900
+    reboot_timeout: 1800
     connect_timeout: 60
     post_reboot_delay: 30
   when: not so_setup_can_skip

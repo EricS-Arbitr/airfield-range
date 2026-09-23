@@ -170,7 +170,11 @@
   ansible.builtin.package_facts:
     manager: auto
 
+# so-search timed out on the bare 600s default during the 2026-09-22
+# ss-pp-stacked build. This reboots a host whose netplan just changed, so the
+# machine is bringing its network back up as the clock runs.
 - name: reboot when changed
   ansible.builtin.reboot:
+    reboot_timeout: 1800
   when: netplan_config.changed
 
