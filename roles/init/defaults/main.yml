@@ -66,3 +66,4 @@ init_gw_probe_targets:
   - "172.31.7.13"      # soc-syslog       — off-subnet for all but SOC
   - "172.31.7.15"      # soc-so-manager   — off-subnet for all but SOC
   - "172.31.2.7"       # bs-dc01          — off-subnet for SOC
+init_noroute_retries: 120
