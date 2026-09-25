@@ -91,22 +91,30 @@
           join, no Sysmon and no Elastic Agent.
 
           WHY EACH ONE DROPPED IS NOT THE SAME, and this list does not say.
-          Grep the log for the host to find out:
+          Grep the log for the marker naming the host:
 
-            "has no route from the controller"
+            "INIT_DROP_NOROUTE"
                 never on the network at all -- ARP never resolved. A
                 platform-side problem: check the VM exists, is powered on, and
                 has its mgmt NIC on the right network.
-            "wait for Windows systems to be online"
-                on the network but never answered WinRM within
-                {{ init_wait_timeout }}s. Usually still provisioning.
-            "Require the host to be stably up"
-                answered, but kept rebooting or never settled.
+            "INIT_DROP_AUTH"
+                on the network with WinRM listening, and refusing us. Almost
+                always the wrong ansible_user for that host's image version --
+                1.1.0 images ship `simspace`, 1.2.x ship `xadmin`. The VM is
+                fine. Do not check the console; check the blueprint against the
+                group_vars file that sets ansible_user for its OS group.
+            "INIT_DROP_NOANSWER"
+                had a route when the run started, but 5985 never accepted a
+                connection within {{ init_wait_timeout }}s. Usually still
+                provisioning.
+
+          The settle gate is NOT in that list. It admits a host it cannot prove
+          settled rather than dropping it, and says so as INIT_STABLE_ADVISORY.
 
           The deploy CONTINUES for the {{ ansible_play_hosts | length }} hosts that did come up, and
           will fail at the end-of-run coverage checks naming exactly what is
-          missing. Confirm in the SimSpace console that these VMs are powered
-          on and finished booting, then re-run.
+          missing. Act on the marker above -- it names the owner of each
+          failure -- then re-run.
           ===================================================================
       run_once: true
       when: (ansible_play_hosts_all | difference(ansible_play_hosts)) | length > 0
