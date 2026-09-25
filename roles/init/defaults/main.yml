@@ -24,7 +24,7 @@ init_stable_uptime: 180
 
 # 80 x 15s = 20 minutes of waiting for a host to settle. This is the budget for
 # a host that is REACHABLE but still rebooting or servicing.
-init_stable_retries: 80
+init_stable_retries: 40
 
 # And this is the budget for one that vanished mid-probe. Generous on purpose:
 # a customer watching the provisioning UI can see a bad workstation and
