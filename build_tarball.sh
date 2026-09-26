@@ -323,6 +323,23 @@ if [ -x "$AIRFIELD_RANGE/verify_task_keywords.py" ] && command -v python3 >/dev/
   fi
 fi
 
+# A notify: that names a handler which does not exist is resolved at RUN TIME,
+# on the host, when the task reports changed -- so --syntax-check cannot see it
+# and it aborts the deploy mid-run. Measured 2026-09-26: airfield-stacked ran
+# 4h31m and died on "The requested handler 'Initialize Splunk' was not found",
+# because airfield-range had stripped Splunk from roles/handlers while
+# roles/splunk still notified it. `Restart Splunk Service` was missing too and
+# would have ended the next 4.5-hour attempt the same way.
+if [ -x "$AIRFIELD_RANGE/verify_handlers.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying notify targets resolve to a handler ==="
+  if ! python3 "$AIRFIELD_RANGE/verify_handlers.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball that will abort on a missing handler."
+    exit 1
+  fi
+fi
+
 if [ -x "$AIRFIELD_RANGE/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
   echo ""
   echo "=== Verifying Jinja var references ==="
