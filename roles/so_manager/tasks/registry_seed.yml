@@ -93,6 +93,12 @@
     url="{{ so_mirror_url }}/so-source/{{ item.remote }}"
     dst="/nsm/docker-registry/docker/{{ item.local }}"
     want=$(cat "${dst}.sha256")
+    # A missing or truncated .sha256 leaves $want EMPTY, and an empty $want
+    # compares equal to the empty $have you get when $dst does not exist -- so
+    # the final check below printed SEED_OK for a download that never happened,
+    # and so-setup then failed on artifacts this task had certified. `set -u`
+    # does not catch it: $want IS set, just set to nothing.
+    [ -n "$want" ] || { echo "SEED_FAILED {{ item.local }}: no checksum in ${dst}.sha256"; exit 1; }
     for pass in $(seq 1 {{ so_registry_download_passes }}); do
       if [ -f "$dst" ]; then
         have=$(sha256sum "$dst" | awk '{print $1}')
@@ -104,7 +110,7 @@
       curl -fsS --noproxy '*' --retry 5 --retry-delay 10 -C - -o "$dst" "$url" || true
     done
     have=$(sha256sum "$dst" 2>/dev/null | awk '{print $1}')
-    if [ "$have" = "$want" ]; then echo "SEED_OK {{ item.local }} on final pass"; exit 0; fi
+    if [ -n "$have" ] && [ "$have" = "$want" ]; then echo "SEED_OK {{ item.local }} on final pass"; exit 0; fi
     echo "SEED_FAILED {{ item.local }} got $(stat -c %s "$dst" 2>/dev/null || echo 0) bytes"
     echo "  expected sha256 $want"
     echo "  actual   sha256 ${have:-none}"
