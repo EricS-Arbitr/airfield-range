@@ -81,3 +81,31 @@
   listen: Restart email container
   ansible.builtin.shell: docker restart email
 
+
+# THE OVERLAY IS THE COMPLETE BASE SET, MINUS SPLUNK ON PURPOSE.
+# resolve_role_path selects ONE directory, so this file REPLACES
+# range-development-ansible/roles/handlers wholesale -- it never merges. A
+# handler the base role defines and this file omits does not fall back; a role
+# that notifies it aborts the deploy at run time, hours in, because Ansible
+# resolves notify targets on the host when a task reports changed.
+#
+# Not hypothetical. airfield-stacked copied roles/splunk in over THIS file and
+# ran 4h31m before dying on "The requested handler 'Initialize Splunk' was not
+# found". `Reload systemd` and `Restart network_mgr` below were missing for the
+# same reason; nothing had notified them yet.
+#
+# The three Splunk handlers the base role defines are DELIBERATELY absent: this
+# range is Security Onion only and Splunk is fully removed, so a Splunk handler
+# here would be dead code advertising a SIEM that is not deployed.
+# verify_handlers.py fails the build if anything ever notifies them, which is the
+# guard that makes leaving them out safe.
+- name: Reload systemd
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart network_mgr
+  become: true
+  ansible.builtin.systemd:
+    name: network_mgr.service
+    state: restarted
