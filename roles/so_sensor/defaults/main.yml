@@ -4,8 +4,14 @@ so_sensor_answer_name: "so-ansible-sensor"
 # original "similar to search" 20-minute value was a guess inherited from
 # another guess. A timeout that is too short does not just fail the task, it
 # kills so-setup partway through.
-so_sensor_install_timeout: 5400
+so_sensor_install_timeout: 10800   # 3h BACKSTOP, not a policy. 5400 killed a
+                            # healthy install mid-step on 2026-09-27; the
+                            # stall guard below is what fails a wedged one.
 so_sensor_poll_interval: 30
+
+# Fail if the so-setup log stops growing for this long while the process is
+# still alive. This, not the timeout, is what distinguishes wedged from slow.
+so_sensor_stall_seconds: 900
 so_sensor_setup_log: "/root/so-setup.log"
 so_sensor_installed_marker: "/opt/so/state/installed"
 

@@ -8,10 +8,16 @@ so_manager_answer_name: "so-ansible-manager"
 # How long we're willing to wait for `so-setup network` to complete before
 # giving up (seconds). Manager install with airgap package pulls is 20-30
 # min; add slack for slow proxies.
-so_manager_install_timeout: 5400   # 90 min (was 45 — real installs seen at 45+ min in dev)
+so_manager_install_timeout: 10800   # 3h BACKSTOP, not a policy. 5400 killed a
+                            # healthy install mid-step on 2026-09-27; the
+                            # stall guard below is what fails a wedged one.
 
 # Poll cadence while so-setup runs (seconds).
 so_manager_poll_interval: 30
+
+# Fail if the so-setup log stops growing for this long while the process is
+# still alive. This, not the timeout, is what distinguishes wedged from slow.
+so_manager_stall_seconds: 900
 
 # Log destination on the manager host.
 so_manager_setup_log: "/root/so-setup.log"

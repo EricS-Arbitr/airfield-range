@@ -7,8 +7,14 @@ so_search_answer_name: "so-ansible-search"
 # ansible's async wrapper KILLED so-setup mid-install, leaving a half-built
 # node with no salt key. Overshooting costs nothing -- the poll exits as soon
 # as the job finishes. Undershooting destroys the install.
-so_search_install_timeout: 5400
+so_search_install_timeout: 10800   # 3h BACKSTOP, not a policy. 5400 killed a
+                            # healthy install mid-step on 2026-09-27; the
+                            # stall guard below is what fails a wedged one.
 so_search_poll_interval: 30
+
+# Fail if the so-setup log stops growing for this long while the process is
+# still alive. This, not the timeout, is what distinguishes wedged from slow.
+so_search_stall_seconds: 900
 so_search_setup_log: "/root/so-setup.log"
 so_search_installed_marker: "/opt/so/state/installed"
 

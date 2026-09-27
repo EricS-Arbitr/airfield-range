@@ -186,6 +186,9 @@
 
 - name: Kick off so-setup network (bash-source env then invoke)
   ansible.builtin.shell: |
+    # A stale progress file from the previous attempt could read as an instant
+    # stall, so the poll below starts from a clean slate on every run.
+    rm -f /root/.so-setup-progress
     source /root/so-answers.env
     cd {{ so_source_dest }}/setup
     ./so-setup {{ so_setup_type }} > {{ so_search_setup_log }} 2>&1
@@ -196,31 +199,112 @@
   register: so_setup_async
   when: not so_setup_can_skip
 
-- name: Poll so-setup completion
-  ansible.builtin.async_status:
-    jid: "{{ so_setup_async.ansible_job_id }}"
-  register: so_setup_result
-  until: so_setup_result.finished
+# so-setup is supervised on PROGRESS, not on a deadline.
+#
+# MEASURED 2026-09-27 on ss-pp-so. The old poll was `async_status` with
+# `until: finished`, which can only answer "finished" or "not finished" -- a
+# wedged install and a slow one look identical for the entire window. Worse, that
+# window was also the KILL: `async: so_search_install_timeout` makes Ansible's wrapper
+# terminate the job when it expires. At 5400s so-setup was working normally --
+# no /root/failure, no /root/errors.log, steady salt states completing, already
+# at so-elastic-fleet-optional-integrations-load -- and was killed mid-step.
+# so_search_setup_marker was therefore never written, so the next attempt restarted
+# from zero and was killed at 90 minutes again. Three attempts, 4.5 hours, all
+# discarded, and the log reported nothing wrong because nothing was wrong.
+#
+# So the deadline is a backstop now, not a policy, and lack of progress is what
+# fails the run: if the log stops growing for so_search_stall_seconds, or so-setup
+# vanishes without writing the marker, this fails IMMEDIATELY with the log tail.
+# A slow install gets to finish; a wedged one is caught in 15 minutes, not 90.
+#
+# /root/failure and the completion marker are so-setup's OWN signals and outrank
+# anything inferred from the log or from the exit code, which is not trustworthy
+# (2026-07-28: it logged a fatal error and still exited 0).
+- name: Poll so-setup — done, progressing, or stalled
+  ansible.builtin.shell: |
+    set -u
+    log="{{ so_search_setup_log }}"
+    marker="{{ so_search_setup_marker }}"
+    state=/root/.so-setup-progress
+    stall={{ so_search_stall_seconds }}
+    now=$(date +%s)
+    size=$(stat -c %s "$log" 2>/dev/null || echo 0)
+
+    if [ -f /root/failure ]; then echo "SOSETUP_FAILED size=${size}"; exit 0; fi
+    if [ -f "$marker" ]; then echo "SOSETUP_DONE size=${size}"; exit 0; fi
+
+    prev_size=-1; prev_time=$now
+    if [ -s "$state" ]; then read -r prev_size prev_time < "$state" || true; fi
+    [ -n "$prev_size" ] || prev_size=-1
+    [ -n "$prev_time" ] || prev_time=$now
+    if [ "$size" != "$prev_size" ]; then
+      printf '%s %s\n' "$size" "$now" > "$state"
+      prev_time=$now
+    fi
+    idle=$(( now - prev_time ))
+
+    # [s] so pgrep does not match its own command line.
+    if pgrep -f '[s]o-setup' >/dev/null 2>&1; then
+      if [ "$idle" -ge "$stall" ]; then echo "SOSETUP_STALLED idle=${idle}s size=${size}"
+      else echo "SOSETUP_RUNNING idle=${idle}s size=${size}"; fi
+    else
+      echo "SOSETUP_VANISHED idle=${idle}s size=${size}"
+    fi
+  args:
+    executable: /bin/bash
+  register: so_setup_poll
+  # Requires a RECOGNISED verdict, not merely the absence of SOSETUP_RUNNING. A
+  # transient failure of this task -- attempt 2 hit "Timeout (12s) waiting for
+  # privilege escalation prompt" when the host was pinned -- leaves stdout empty,
+  # and an empty string does not contain SOSETUP_RUNNING either. Keying on absence
+  # would have ended the wait on a blip, with no verdict at all.
+  until: (so_setup_poll.stdout | default('')) is search('SOSETUP_(DONE|FAILED|STALLED|VANISHED)')
   retries: "{{ (so_search_install_timeout / so_search_poll_interval) | int }}"
   delay: "{{ so_search_poll_interval }}"
+  changed_when: false
+  failed_when: false
   when: not so_setup_can_skip
 
-- name: Report so-setup exit code + last log lines
+- name: Read the tail of the so-setup log
+  ansible.builtin.shell: tail -40 "{{ so_search_setup_log }}"
+  args:
+    executable: /bin/bash
+  register: so_setup_tail
+  changed_when: false
+  failed_when: false
+  when: not so_setup_can_skip
+
+- name: Report the so-setup verdict
   ansible.builtin.debug:
     msg: |
-      so-setup rc={{ so_setup_result.rc | default('unknown') }}
-      Last 20 log lines:
-      {{ so_setup_result.stdout_lines[-20:] | default(['<no stdout captured>']) | join('\n') }}
+      so-setup: {{ so_setup_poll.stdout | default('(no verdict)') | trim }}
+      Last 40 log lines:
+      {{ so_setup_tail.stdout | default('<no log captured>') }}
   when: not so_setup_can_skip
 
-- name: Fail if so-setup exited non-zero
+- name: Fail if so-setup did not complete
   ansible.builtin.fail:
     msg: |
-      so-setup returned {{ so_setup_result.rc }}. Full log at
-      {{ so_search_setup_log }} on {{ inventory_hostname }}.
+      so-setup did not complete on {{ inventory_hostname }}.
+
+      Verdict: {{ so_setup_poll.stdout | default('(none — the poll never returned one)') | trim }}
+
+      SOSETUP_STALLED   the process is alive but {{ so_search_setup_log }} stopped growing
+                        for {{ so_search_stall_seconds }}s. Wedged, not slow.
+      SOSETUP_VANISHED  the process is gone and {{ so_search_setup_marker }} was never
+                        written. Either it was killed, in which case
+                        so_search_install_timeout ({{ so_search_install_timeout }}s) is not
+                        enough on this platform, or it died without writing
+                        /root/failure.
+      SOSETUP_FAILED    so-setup wrote /root/failure. Read /root/errors.log.
+      (none)            the poll exhausted its retries, so so-setup was STILL
+                        MAKING PROGRESS after {{ so_search_install_timeout }}s. Raise
+                        so_search_install_timeout; nothing is broken.
+
+      Full log: {{ so_search_setup_log }}
   when:
     - not so_setup_can_skip
-    - so_setup_result.rc | default(1) != 0
+    - "'SOSETUP_DONE' not in (so_setup_poll.stdout | default(''))"
 
 # so-setup's exit code is NOT trustworthy. Verified 2026-07-28 on the
 # sensor: it logged "WARNING: Errors detected during setup" with a fatal
