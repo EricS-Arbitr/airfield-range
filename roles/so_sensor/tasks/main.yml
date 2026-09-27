@@ -647,8 +647,7 @@
 - name: Report SO's failure marker + errors.log (warning, not fatal)
   ansible.builtin.debug:
     msg: |
-      NOTE: SO wrote /root/failure on {{ inventory_hostname }} (so-setup
-      still exited {{ so_setup_result.rc | default('?') }}). Often benign on
+      NOTE: SO wrote /root/failure on {{ inventory_hostname }}. Often benign on
       this image — see so_manager/tasks/main.yml. Judge success by the Salt
       + so-status checks that follow.
 

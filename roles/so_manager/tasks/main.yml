@@ -368,8 +368,7 @@
 - name: Report SO's failure marker + errors.log (warning, not fatal)
   ansible.builtin.debug:
     msg: |
-      NOTE: SO wrote /root/failure on {{ inventory_hostname }} (so-setup
-      still exited {{ so_setup_result.rc | default('?') }}). This is often
+      NOTE: SO wrote /root/failure on {{ inventory_hostname }}. This is often
       benign on this image — the reinstall cleanup path logs an
       elastic-agent "notify Fleet: failed" because Fleet is not up yet.
       Judge success by the Salt + so-status checks that follow, not by this.
