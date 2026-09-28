@@ -17,7 +17,7 @@ so_manager_poll_interval: 30
 
 # Fail if the so-setup log stops growing for this long while the process is
 # still alive. This, not the timeout, is what distinguishes wedged from slow.
-so_manager_stall_seconds: 900
+so_manager_stall_seconds: 1800
 
 # Log destination on the manager host.
 so_manager_setup_log: "/root/so-setup.log"

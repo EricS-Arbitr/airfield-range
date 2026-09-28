@@ -14,7 +14,7 @@ so_search_poll_interval: 30
 
 # Fail if the so-setup log stops growing for this long while the process is
 # still alive. This, not the timeout, is what distinguishes wedged from slow.
-so_search_stall_seconds: 900
+so_search_stall_seconds: 1800
 so_search_setup_log: "/root/so-setup.log"
 so_search_installed_marker: "/opt/so/state/installed"
 

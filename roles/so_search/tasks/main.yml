@@ -248,20 +248,37 @@
     # returned SOSETUP_FAILED at 19 and 72 bytes off the stale marker.
     if [ -f "$marker" ]; then echo "SOSETUP_DONE size=${size}"; exit 0; fi
 
-    prev_size=-1; prev_time=$now
-    if [ -s "$state" ]; then read -r prev_size prev_time < "$state" || true; fi
-    [ -n "$prev_size" ] || prev_size=-1
+    # PROGRESS IS NOT JUST LOG BYTES. so-setup has late phases that produce no
+    # output for a long time while salt works underneath it, so a silent log says
+    # nothing about whether anything is happening. MEASURED 2026-09-28 on
+    # ss-pp-so: three attempts all reported STALLED at ~4.12 MB after 910s of
+    # silence, and an earlier run had reached 4,128,013 bytes -- about a kilobyte
+    # further -- and then logged "Done [59s]". The install was working; the
+    # detector was measuring the wrong thing.
+    #
+    # CPU time across the so-setup and salt processes is the second signal. A
+    # wedged process consumes none; a working-but-quiet one does. Progress is
+    # EITHER the log growing OR that counter advancing, so a silent phase doing
+    # real work no longer looks like a hang.
+    cpu=$(ps -eo cputimes=,args= 2>/dev/null |
+          awk '/[s]o-setup|[s]alt-call|[s]alt-minion|[s]alt-master/ { s += $1 } END { print s+0 }')
+    [ -n "$cpu" ] || cpu=0
+    fp="${size}:${cpu}"
+
+    prev_fp=""; prev_time=$now
+    if [ -s "$state" ]; then read -r prev_fp prev_time < "$state" || true; fi
+    [ -n "$prev_fp" ] || prev_fp=""
     [ -n "$prev_time" ] || prev_time=$now
-    if [ "$size" != "$prev_size" ]; then
-      printf '%s %s\n' "$size" "$now" > "$state"
+    if [ "$fp" != "$prev_fp" ]; then
+      printf '%s %s\n' "$fp" "$now" > "$state"
       prev_time=$now
     fi
     idle=$(( now - prev_time ))
 
     # [s] so pgrep does not match its own command line.
     if pgrep -f '[s]o-setup' >/dev/null 2>&1; then
-      if [ "$idle" -ge "$stall" ]; then echo "SOSETUP_STALLED idle=${idle}s size=${size}"
-      else echo "SOSETUP_RUNNING idle=${idle}s size=${size}"; fi
+      if [ "$idle" -ge "$stall" ]; then echo "SOSETUP_STALLED idle=${idle}s size=${size} cpu=${cpu}"
+      else echo "SOSETUP_RUNNING idle=${idle}s size=${size} cpu=${cpu}"; fi
     else
       # THE PROCESS EXITED. That is ALL this poll is competent to say, and all it
       # needs to say. Whether so-setup actually WORKED is decided by the four
