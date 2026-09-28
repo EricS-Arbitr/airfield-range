@@ -500,9 +500,15 @@
 
 - name: Kick off so-setup network (bash-source env then invoke)
   ansible.builtin.shell: |
-    # A stale progress file from the previous attempt could read as an instant
-    # stall, so the poll below starts from a clean slate on every run.
-    rm -f /root/.so-setup-progress
+    # START FROM A CLEAN SLATE, AND KEEP THE EVIDENCE.
+    # The redirect below truncates the log, so the previous attempt's log is
+    # moved aside first -- attempt 1's 4.4 MB log was destroyed by attempt 2's
+    # kickoff on 2026-09-28, which is exactly when it was needed. SO's own
+    # markers are cleared too: a /root/failure left by the previous attempt made
+    # the poll report THAT attempt's outcome instead of this one's.
+    [ -f {{ so_sensor_setup_log }} ] && mv -f {{ so_sensor_setup_log }} {{ so_sensor_setup_log }}.prev
+    [ -f /root/errors.log ] && mv -f /root/errors.log /root/errors.log.prev
+    rm -f /root/.so-setup-progress /root/failure
     source /root/so-answers.env
     cd {{ so_source_dest }}/setup
     ./so-setup {{ so_setup_type }} > {{ so_sensor_setup_log }} 2>&1
@@ -544,7 +550,16 @@
     now=$(date +%s)
     size=$(stat -c %s "$log" 2>/dev/null || echo 0)
 
-    if [ -f /root/failure ]; then echo "SOSETUP_FAILED size=${size}"; exit 0; fi
+    # THE COMPLETION MARKER OUTRANKS /root/failure, and /root/failure is not by
+    # itself a verdict. UPSTREAM_FIXES 2026-07-28: so-setup writes that marker for
+    # benign cleanup noise -- an elastic-agent "notify Fleet: failed" logged while
+    # Fleet is still coming up -- which is why this role reports it as a WARNING
+    # further down and judges success by the Salt and so-status checks instead.
+    # The first version of this poll checked it FIRST and treated it as fatal,
+    # contradicting that, and worse: a marker left by a PREVIOUS attempt decided
+    # the next one before so-setup had done anything. Measured 2026-09-28 on
+    # ss-pp-so -- attempt 1 failed 4.4 MB into the log, attempts 2 and 3 then
+    # returned SOSETUP_FAILED at 19 and 72 bytes off the stale marker.
     if [ -f "$marker" ]; then echo "SOSETUP_DONE size=${size}"; exit 0; fi
 
     prev_size=-1; prev_time=$now
@@ -561,6 +576,9 @@
     if pgrep -f '[s]o-setup' >/dev/null 2>&1; then
       if [ "$idle" -ge "$stall" ]; then echo "SOSETUP_STALLED idle=${idle}s size=${size}"
       else echo "SOSETUP_RUNNING idle=${idle}s size=${size}"; fi
+    elif [ -f /root/failure ]; then
+      # Gone, no completion marker, and SO says it failed. Now it is a verdict.
+      echo "SOSETUP_FAILED idle=${idle}s size=${size}"
     else
       echo "SOSETUP_VANISHED idle=${idle}s size=${size}"
     fi
