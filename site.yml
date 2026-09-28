@@ -614,11 +614,84 @@
     - dcpromo
     - dcpromo_forest
 
+# NON-FATAL BY DESIGN, AND STILL A FAILED DEPLOY.
+#
+# This play targets ONE host. When every host in a play fails, Ansible prints
+# NO MORE HOSTS LEFT and aborts the entire playbook — so on 2026-09-28 a single
+# VM that could not finish a reboot inside 1800s ended the run at play 18 of 64.
+# Eighty-six other hosts got `init` and `common` and nothing else, after 6h36m
+# and three attempts.
+#
+# The block below keeps this host out of the FAILED state so the remaining 46
+# plays still run and the rest of the range is built. The deploy is NOT
+# downgraded to a pass: the "Deferred failure gate" play at the end of site.yml
+# fails the run, naming this. Deferred, not forgiven — a green run that silently
+# lacks a child domain would be far worse than a slow one that says so.
+#
+# ignore_unreachable is on the block because the 2026-09-28 attempts failed BOTH
+# ways: attempt 2 UNREACHABLE (read timeout), attempt 3 FAILED (reboot timeout).
+# `rescue` catches only the second. An unreachable host reaches neither branch,
+# so it never records child_dcpromo_ok, and the gate treats a missing fact as a
+# failure — which is why the gate tests for the SUCCESS fact rather than looking
+# for a failure flag.
 - name: dcpromo (child domain — fops.blackstone.mil)
   hosts: pdc_fops
   gather_facts: false
-  roles:
-    - dcpromo
+  tasks:
+    # Runs ON THE CONTROLLER via delegate_to, so it records this host as being
+    # in scope even when the host itself is unreachable — which is precisely the
+    # case the gate most needs to catch. It also makes "not promoted" the
+    # default, so success has to be positively proven.
+    #
+    # Scope matters because deploy.sh retries with --limit @retry: if this host
+    # succeeded in attempt 1 it is absent from attempts 2 and 3, and a gate that
+    # read a missing fact as failure would fail every retry.
+    - name: Assume the child domain is not promoted until proven otherwise
+      ansible.builtin.set_fact:
+        child_dcpromo_ok: false
+      delegate_to: localhost
+      ignore_unreachable: true
+
+    - name: Promote the child domain
+      ignore_unreachable: true
+      block:
+        - name: Run the dcpromo role against the child PDC
+          ansible.builtin.include_role:
+            name: dcpromo
+
+        - name: Record that the child domain was promoted
+          ansible.builtin.set_fact:
+            child_dcpromo_ok: true
+
+      rescue:
+        - name: Record why the child domain was not promoted
+          ansible.builtin.set_fact:
+            child_dcpromo_error: >-
+              {{ ansible_failed_result.msg | default('(no message captured)') | trim }}
+
+        - name: Report the child-domain failure loudly
+          ansible.builtin.debug:
+            msg: |
+              ==================================================================
+              CHILD DOMAIN NOT PROMOTED — {{ inventory_hostname }}
+              ==================================================================
+              {{ child_dcpromo_error }}
+
+              THE DEPLOY CONTINUES so the other hosts still get built, and it
+              WILL FAIL at the end in "Deferred failure gate". This is not a
+              warning you can ignore.
+
+              What will be missing or broken until this succeeds:
+                - fops.blackstone.mil does not exist, so every fops-* host
+                  stays in a workgroup and its domain join fails
+                - the cross-forest trust cannot be created
+                - anything keyed on the child domain — DNS records, GPOs,
+                  Fleet enrolment for fops hosts — has nothing to key on
+
+              On 2026-09-28 the cause was platform-side: this VM rebooted and
+              did not answer within 1800s. Check that first, in the console,
+              before looking at the playbook.
+              ==================================================================
   tags:
     - dcpromo
     - dcpromo_child
@@ -1823,3 +1896,52 @@
 # AFTER 75-endpoint: it reassigns the agents that phase enrols, so there has
 # to be an agent to reassign.
 - import_playbook: playbooks/80-fleet-integrations.yml
+
+# =========================================================================
+# Deferred failure gate
+# =========================================================================
+# Phases that are allowed to continue past their own failure record it as a
+# fact, and this play turns those records back into a failed deploy. Without
+# it, "non-fatal" would quietly mean "passes", which is the worst of both.
+#
+# Runs on localhost so it cannot itself be defeated by an unreachable range
+# host — the thing it exists to report on.
+#
+# It tests for the SUCCESS fact rather than a failure flag on purpose: a host
+# that went unreachable never ran either branch of the block, so it records
+# nothing at all. Absence of proof is treated as failure.
+- name: Deferred failure gate
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - always
+  tasks:
+    - name: Collect child PDCs that were never promoted
+      ansible.builtin.set_fact:
+        unpromoted_child_pdcs: "{{ unpromoted_child_pdcs | default([]) + [item] }}"
+      loop: "{{ groups['pdc_fops'] | default([]) }}"
+      # `is defined` is the scope test: a host excluded by --limit never ran the
+      # delegated task above, so it has no fact and is correctly ignored here.
+      # A host that DID run and is still false — failed or unreachable — is not.
+      when:
+        - hostvars[item].child_dcpromo_ok is defined
+        - not (hostvars[item].child_dcpromo_ok | bool)
+
+    - name: Fail the deploy because the child domain was never promoted
+      ansible.builtin.fail:
+        msg: |
+          ==================================================================
+          DEPLOY INCOMPLETE — the child domain was never promoted
+          ==================================================================
+          Not promoted: {{ unpromoted_child_pdcs | join(', ') }}
+
+          Everything else in this run was built and configured. This failure
+          was deliberately deferred to here so one host could not stop the
+          other 86 — see the dcpromo(child) play in site.yml.
+
+          Read the "CHILD DOMAIN NOT PROMOTED" report earlier in this run for
+          the actual error. Re-running deploy.sh will retry the promotion
+          without redoing the work that already succeeded.
+          ==================================================================
+      when: unpromoted_child_pdcs | default([]) | length > 0
