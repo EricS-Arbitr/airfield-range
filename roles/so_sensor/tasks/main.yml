@@ -576,11 +576,22 @@
     if pgrep -f '[s]o-setup' >/dev/null 2>&1; then
       if [ "$idle" -ge "$stall" ]; then echo "SOSETUP_STALLED idle=${idle}s size=${size}"
       else echo "SOSETUP_RUNNING idle=${idle}s size=${size}"; fi
-    elif [ -f /root/failure ]; then
-      # Gone, no completion marker, and SO says it failed. Now it is a verdict.
-      echo "SOSETUP_FAILED idle=${idle}s size=${size}"
     else
-      echo "SOSETUP_VANISHED idle=${idle}s size=${size}"
+      # THE PROCESS EXITED. That is ALL this poll is competent to say, and all it
+      # needs to say. Whether so-setup actually WORKED is decided by the four
+      # checks that already follow: the /root/failure warning, Salt installed,
+      # the registry repo count, and so-status green. Those test what the next
+      # step needs; this only tests whether the thing is still running.
+      #
+      # This poll used to claim more. It waited for {{ so_sensor_setup_marker }} to appear -- but
+      # that marker is written by THIS ROLE about twelve tasks further down, as a
+      # record that the verification passed. It cannot exist while the poll is
+      # still running, so SOSETUP_DONE was unreachable on any first install and
+      # the run ended in a verdict of failure no matter how well so-setup had
+      # gone. Measured 2026-09-28 on ss-pp-so: so-setup logged "Done [59s]",
+      # so-status reported all 14 containers up and "ready to make your
+      # adversaries cry", and the play had already been failed by this task.
+      echo "SOSETUP_FINISHED idle=${idle}s size=${size}"
     fi
   args:
     executable: /bin/bash
@@ -590,7 +601,7 @@
   # privilege escalation prompt" when the host was pinned -- leaves stdout empty,
   # and an empty string does not contain SOSETUP_RUNNING either. Keying on absence
   # would have ended the wait on a blip, with no verdict at all.
-  until: (so_setup_poll.stdout | default('')) is search('SOSETUP_(DONE|FAILED|STALLED|VANISHED)')
+  until: (so_setup_poll.stdout | default('')) is search('SOSETUP_(DONE|FINISHED|STALLED)')
   retries: "{{ (so_sensor_install_timeout / so_sensor_poll_interval) | int }}"
   delay: "{{ so_sensor_poll_interval }}"
   changed_when: false
@@ -623,12 +634,10 @@
 
       SOSETUP_STALLED   the process is alive but {{ so_sensor_setup_log }} stopped growing
                         for {{ so_sensor_stall_seconds }}s. Wedged, not slow.
-      SOSETUP_VANISHED  the process is gone and {{ so_sensor_setup_marker }} was never
-                        written. Either it was killed, in which case
-                        so_sensor_install_timeout ({{ so_sensor_install_timeout }}s) is not
-                        enough on this platform, or it died without writing
-                        /root/failure.
-      SOSETUP_FAILED    so-setup wrote /root/failure. Read /root/errors.log.
+      SOSETUP_FINISHED  the process exited. NOT a failure -- the checks after
+                        this one judge whether it worked. If you are reading
+                        this with FINISHED in the verdict, the condition on this
+                        task is wrong.
       (none)            the poll exhausted its retries, so so-setup was STILL
                         MAKING PROGRESS after {{ so_sensor_install_timeout }}s. Raise
                         so_sensor_install_timeout; nothing is broken.
@@ -636,7 +645,10 @@
       Full log: {{ so_sensor_setup_log }}
   when:
     - not so_setup_can_skip
-    - "'SOSETUP_DONE' not in (so_setup_poll.stdout | default(''))"
+    # ONLY a wedge, or no verdict at all, is fatal here. SOSETUP_FINISHED means
+    # the process exited, and the outcome checks below get to judge whether it
+    # succeeded -- which is their job, not this one's.
+    - "not ((so_setup_poll.stdout | default('')) is search('SOSETUP_(DONE|FINISHED)'))"
 
 # so-setup's exit code is NOT trustworthy. Verified 2026-07-28: it logged
 # "WARNING: Errors detected during setup" with a fatal NetworkManager
