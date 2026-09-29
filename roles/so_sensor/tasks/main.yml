@@ -508,10 +508,14 @@
     # the poll report THAT attempt's outcome instead of this one's.
     [ -f {{ so_sensor_setup_log }} ] && mv -f {{ so_sensor_setup_log }} {{ so_sensor_setup_log }}.prev
     [ -f /root/errors.log ] && mv -f /root/errors.log /root/errors.log.prev
-    rm -f /root/.so-setup-progress /root/failure
+    rm -f /root/.so-setup-progress /root/failure /root/.so-setup.pid
     source /root/so-answers.env
     cd {{ so_source_dest }}/setup
-    ./so-setup {{ so_setup_type }} > {{ so_sensor_setup_log }} 2>&1
+    # Backgrounded so the PID can be recorded. The poll identifies so-setup
+    # by THIS pid, never by matching a string against process command lines.
+    ./so-setup {{ so_setup_type }} > {{ so_sensor_setup_log }} 2>&1 &
+    echo $! > /root/.so-setup.pid
+    wait $!
   args:
     executable: /bin/bash
   async: "{{ so_sensor_install_timeout }}"
@@ -574,9 +578,34 @@
     # wedged process consumes none; a working-but-quiet one does. Progress is
     # EITHER the log growing OR that counter advancing, so a silent phase doing
     # real work no longer looks like a hang.
-    cpu=$(ps -eo cputimes=,args= 2>/dev/null |
-          awk '/[s]o-setup|[s]alt-call|[s]alt-minion|[s]alt-master/ { s += $1 } END { print s+0 }')
+    # LIVENESS BY PID, NOT BY STRING MATCH. `pgrep -f so-setup` matched this
+    # poll's OWN command line, because the script contains /root/so-setup.log --
+    # the [s] trick only stops the pattern matching itself, not the other three
+    # occurrences beside it. MEASURED 2026-09-29 on ss-pp-so: so-setup died at
+    # 13:11 leaving /root/failure, and at 15:17 the poll still reported RUNNING
+    # because the only process it could find was itself. It had been watching a
+    # corpse for two hours, and would have for three per attempt.
+    alive=0; cpu=0
+    if [ -s /root/.so-setup.pid ]; then
+      sopid=$(cat /root/.so-setup.pid 2>/dev/null)
+      # Confirm the pid is still so-setup and not a recycled number.
+      if [ -n "$sopid" ] && kill -0 "$sopid" 2>/dev/null &&
+         ps -p "$sopid" -o args= 2>/dev/null | grep -q 'so-setup'; then
+        alive=1
+        # CPU of so-setup's PROCESS GROUP only -- it and everything it spawned.
+        # The previous version summed salt-minion and salt-master too. Those are
+        # permanent daemons: their CPU advances every second forever, so the
+        # fingerprint always changed, idle was always 0, and STALLED could never
+        # fire. The detector was dead from the moment it was written.
+        pg=$(ps -o pgid= -p "$sopid" 2>/dev/null | tr -d ' ')
+        if [ -n "$pg" ]; then
+          cpu=$(ps -eo pgid=,cputimes= 2>/dev/null |
+                awk -v g="$pg" '$1 == g { s += $2 } END { print s+0 }')
+        fi
+      fi
+    fi
     [ -n "$cpu" ] || cpu=0
+
     fp="${size}:${cpu}"
 
     prev_fp=""; prev_time=$now
@@ -589,8 +618,7 @@
     fi
     idle=$(( now - prev_time ))
 
-    # [s] so pgrep does not match its own command line.
-    if pgrep -f '[s]o-setup' >/dev/null 2>&1; then
+    if [ "$alive" = "1" ]; then
       if [ "$idle" -ge "$stall" ]; then echo "SOSETUP_STALLED idle=${idle}s size=${size} cpu=${cpu}"
       else echo "SOSETUP_RUNNING idle=${idle}s size=${size} cpu=${cpu}"; fi
     else
