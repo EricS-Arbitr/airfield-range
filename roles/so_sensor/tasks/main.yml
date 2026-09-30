@@ -132,10 +132,31 @@
     path: /etc/salt/pki/minion/minion_master.pub
   register: so_grid_member
 
+# minion_master.pub proves the salt KEY is accepted; it does NOT prove the node
+# is a FUNCTIONAL grid member. so-minion -o=add can accept the key and then die
+# before writing the per-minion pillar (soc-sensor-edge, airfield-stacked
+# 2026-09-29: attempt 1 failed at exactly `so-minion -o=add`). A node left in
+# that partial-join state has minion_master.pub but no pillar, so every
+# state.apply fails to RENDER pillar ("Specified SLS 'minions.<node>_sensor' is
+# not available"). Gate the early nudge on the PILLAR, not the key — else this
+# apply loops 40× and kills the whole run here, before the grid-join block far
+# below gets the chance to regenerate the pillar. The pillar is the real
+# membership signal; minion_master.pub is only the key.
+- name: GRE firewall — does this node's per-minion pillar exist on the manager?
+  ansible.builtin.stat:
+    path: "/opt/so/saltstack/local/pillar/minions/{{ inventory_hostname }}_{{ so_role }}.sls"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: so_grid_pillar
+
+- name: GRE firewall — decide whether the early nudge is safe to apply now
+  ansible.builtin.set_fact:
+    so_gre_apply_ok: "{{ so_grid_member.stat.exists and so_grid_pillar.stat.exists }}"
+
 - name: GRE firewall — apply firewall state on this sensor
   ansible.builtin.command: "sudo salt-call state.apply firewall queue=True"
   become: true
-  when: so_grid_member.stat.exists
+  when: so_gre_apply_ok
   register: gre_fw_apply
   changed_when: gre_fw_apply.rc == 0
   # Same highstate-scheduler collision as the grid-join firewall apply.
@@ -154,7 +175,7 @@
   changed_when: false
   register: ipt_syntax
   failed_when: ipt_syntax.rc != 0
-  when: so_grid_member.stat.exists
+  when: so_gre_apply_ok
 
 - name: GRE firewall — verify the tun0 FORWARD drop is in the running ruleset
   ansible.builtin.shell: |
@@ -163,7 +184,7 @@
   changed_when: false
   register: tun_drop_check
   failed_when: tun_drop_check.rc != 0
-  when: so_grid_member.stat.exists
+  when: so_gre_apply_ok
 
 - name: GRE firewall — verify proto 47 is now accepted in INPUT
   ansible.builtin.shell: |
@@ -172,14 +193,16 @@
   changed_when: false
   register: gre_rule_check
   failed_when: gre_rule_check.rc != 0
-  when: so_grid_member.stat.exists
+  when: so_gre_apply_ok
 
 - name: GRE firewall — report
   ansible.builtin.debug:
     msg: >-
       {{ 'GRE accepted in INPUT: ' ~ gre_rule_check.stdout_lines
-         if so_grid_member.stat.exists
-         else 'Fresh node — manager-side override written; first highstate will apply it.' }}
+         if so_gre_apply_ok
+         else 'Not a healthy grid member yet (fresh, or key accepted but pillar
+               missing) — manager-side override written; grid-join below and the
+               first highstate will apply it.' }}
 
 # --- GRE tunnel — LIFETIME INVARIANT, must precede the end_host probe ----
 # Moved above the idempotency probe 2026-08-04. It was below it, so an
@@ -790,6 +813,37 @@
   # install is the expected no-op, not a failure.
   failed_when: false
   when: not so_setup_can_skip
+
+# A salt key accepted while the per-minion pillar is MISSING is a broken
+# partial join: an earlier so-minion -o=add accepted the key and died before
+# writing the pillar (soc-sensor-edge, airfield-stacked 2026-09-29 — attempt 1
+# failed at exactly that step). so-minion -o=add will NOT regenerate the pillar
+# while the key is already accepted — it reports "does not match any unaccepted
+# keys" and does nothing — so the ONLY way to regenerate it is to delete the
+# minion here and let the reboot below re-submit its key as unaccepted for a
+# clean re-add. This is the remediation the early GRE-apply guard
+# (so_gre_apply_ok) now defers to instead of failing on. Gated on the pillar
+# being ABSENT so a healthy member is never torn down, and run regardless of
+# so_setup_can_skip because a partial join is precisely the case the
+# fresh-so-setup key-delete above skips.
+- name: Grid join — does this minion's per-minion pillar exist on the manager?
+  ansible.builtin.stat:
+    path: "/opt/so/saltstack/local/pillar/minions/{{ inventory_hostname }}_{{ so_role }}.sls"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: so_pillar_pre_join
+
+- name: Grid join — tear down a broken partial join so the pillar regenerates
+  ansible.builtin.command: "sudo /usr/sbin/so-minion -o=delete -m={{ inventory_hostname }}_{{ so_role }}"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: so_min_del
+  changed_when: so_min_del.rc == 0
+  failed_when:
+    - so_min_del.rc != 0
+    - "'does not exist' not in (so_min_del.stdout + so_min_del.stderr)"
+    - "'does not match' not in (so_min_del.stdout + so_min_del.stderr)"
+  when: not so_pillar_pre_join.stat.exists
 
 # Reboot FIRST so salt-minion restarts fresh + auto-submits its key to
 # master. Grid-join tasks below wait for that key to appear before trying
