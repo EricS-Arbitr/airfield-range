@@ -1898,6 +1898,22 @@
 - import_playbook: playbooks/80-fleet-integrations.yml
 
 # =========================================================================
+# OT tier — fuel farm (POL) subsystem
+# =========================================================================
+# Deploys LAST, as the final tier before the gate. Ansible reaches the OT
+# hosts over mgmt, but the fuel roles configure services that bind the OT
+# production NICs and speak Modbus across the Purdue chain, so the VyOS +
+# pfSense network tier (incl. bs-modbus-gateway) has to be up first — it is
+# by this point. Running after the SIEM tiers also means the grid the fuel
+# hosts' Elastic Agents enrol into already exists.
+#
+# This was a standalone root-level playbook (deliberately so since
+# 2026-07-08) until the OT tier was ready to bolt onto the core deploy; now
+# wired in. The file is unchanged and still runnable on its own for OT-only
+# iterations:  ansible-playbook fuel_farm_playbook.yml
+- import_playbook: fuel_farm_playbook.yml
+
+# =========================================================================
 # Deferred failure gate
 # =========================================================================
 # Phases that are allowed to continue past their own failure record it as a

@@ -24,8 +24,10 @@ set -euo pipefail
 
 AIRFIELD_RANGE="$(cd "$(dirname "$0")" && pwd)"
 # Both playbooks contribute to role discovery. site.yml is the primary
-# deploy; fuel_farm_playbook.yml is a standalone OT sub-deploy (per user
-# direction 2026-07-08) whose roles must also ship in the tarball.
+# deploy and now imports fuel_farm_playbook.yml as its final (OT) tier, so
+# its roles are reachable either way; fuel_farm_playbook.yml stays listed
+# here because it is also runnable on its own for OT-only iterations, and
+# listing it keeps discovery correct for that standalone path too.
 PLAYBOOKS=("$AIRFIELD_RANGE/site.yml")
 [ -f "$AIRFIELD_RANGE/fuel_farm_playbook.yml" ] && PLAYBOOKS+=("$AIRFIELD_RANGE/fuel_farm_playbook.yml")
 # Everything site.yml pulls in with `import_playbook`. WITHOUT THIS the SO
