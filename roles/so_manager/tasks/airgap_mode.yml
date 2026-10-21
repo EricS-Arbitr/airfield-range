@@ -89,14 +89,34 @@
   loop_control:
     label: "{{ item.name }}"
 
-- name: Airgap — extract each content repo to its airgap path
+- name: Airgap — ensure each content repo's airgap dir exists
+  ansible.builtin.file:
+    path: "{{ item.dest }}"
+    state: directory
+    owner: socore
+    group: socore
+    mode: "0755"
+  loop: "{{ so_airgap_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Extract straight into item.dest with --strip-components=1 so the tarball's
+# top-level directory NAME does not matter. SO's content tarballs come in two
+# shapes -- a clean "<repo>/" dir (git-clone-then-tar, the on-controller mirror
+# path) and a GitHub-archive "<repo>-<sha>/" dir (how securityonion-yara is
+# staged in Nexus). Only the stripped contents must land at item.dest, which is
+# the path the airgap check and SO's file:// pillars expect. Same --strip pattern
+# the ETOPEN step above uses.
+- name: Airgap — extract each content repo to its airgap path (strip the top dir)
   ansible.builtin.unarchive:
     src: "/root/{{ item.name }}.tar.gz"
-    dest: "{{ item.dest | dirname }}"
+    dest: "{{ item.dest }}"
     remote_src: true
     owner: socore
     group: socore
-    creates: "{{ item.dest }}/.git"
+    extra_opts:
+      - --strip-components=1
+    creates: "{{ item.dest }}/LICENSE"
   loop: "{{ so_airgap_repos }}"
   loop_control:
     label: "{{ item.name }}"

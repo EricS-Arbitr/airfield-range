@@ -183,6 +183,22 @@
     path: "{{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
   register: so_source_tarball
 
+# NEXUS SOURCING: when so_source_artifact_url is set, download the pinned SO
+# source tarball from Nexus (ng_raw) instead of cloning github. Via the mgmt
+# proxy; internal CA so validate_certs is off.
+- name: Fetch SO source snapshot from Nexus (when so_source_artifact_url set)
+  ansible.builtin.get_url:
+    url: "{{ so_source_artifact_url }}"
+    dest: "{{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+    mode: "0644"
+    validate_certs: false
+  environment:
+    HTTPS_PROXY: "{{ so_mirror_proxy }}"
+    HTTP_PROXY: "{{ so_mirror_proxy }}"
+  when:
+    - so_source_artifact_url | length > 0
+    - not so_source_tarball.stat.exists
+
 - name: Clone SO source at pinned SHA (temp dir; only runs if snapshot missing)
   ansible.builtin.git:
     repo: "{{ so_git_repo }}"
@@ -193,7 +209,9 @@
   environment:
     HTTPS_PROXY: "{{ so_mirror_proxy }}"
     HTTP_PROXY: "{{ so_mirror_proxy }}"
-  when: not so_source_tarball.stat.exists
+  when:
+    - so_source_artifact_url | length == 0
+    - not so_source_tarball.stat.exists
 
 - name: Tar the SO source snapshot into the mirror (excluding .git for size)
   ansible.builtin.command: >
@@ -202,7 +220,9 @@
     -C /tmp/so_source_build .
   args:
     creates: "{{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
-  when: not so_source_tarball.stat.exists
+  when:
+    - so_source_artifact_url | length == 0
+    - not so_source_tarball.stat.exists
 
 - name: Fix ownership on SO source tarball
   ansible.builtin.file:

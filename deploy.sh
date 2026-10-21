@@ -152,9 +152,11 @@ if [ -f requirements.yml ]; then
 	# HTTPS_PROXY is overridable so the internal Nexus can take over without
 	# editing this script. The controller is currently the one machine in the
 	# range that still reaches outside for anything.
+	# --ignore-certs: requirements.yml points at the in-platform Nexus, which is
+	# reached via the proxy and presents an internal-CA cert.
 	HTTPS_PROXY="${HTTPS_PROXY:-http://10.255.240.1:3128}" \
 		ansible-galaxy collection install -r requirements.yml \
-		${GALAXY_DEST:+-p "$GALAXY_DEST"} \
+		${GALAXY_DEST:+-p "$GALAXY_DEST"} --ignore-certs \
 		|| echo "WARN: galaxy install returned non-zero; continuing"
 fi
 

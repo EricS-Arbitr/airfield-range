@@ -1,31 +1,33 @@
 # Ansible Galaxy requirements for this overlay.
 #
+# NEXUS SOURCING (2026-10-21): collections are pulled as built-artifact tarballs
+# from the in-platform Nexus (ng_raw/galaxy) instead of galaxy.ansible.com. Nexus
+# is reachable ONLY through the mgmt proxy and presents an internal-CA cert, so
+# deploy.sh installs these with HTTPS_PROXY set AND --ignore-certs.
+#
 # deploy.sh installs these at the start of every run, so a normal deploy needs
 # nothing done here by hand. To install manually, match how deploy.sh does it:
 #
 #   HTTPS_PROXY=http://10.255.240.1:3128 \
 #     ansible-galaxy collection install -r /etc/ansible/requirements.yml \
-#     -p /usr/share/ansible/collections
+#     -p /usr/share/ansible/collections --ignore-certs
 #
-# `-p` is the part that matters, and this file used to omit it while also
-# saying `sudo`. Without -p, collections land in ~/.ansible/collections, which
-# is per-user. /tmp/deploy-script.sh runs deploy.sh from system cron AS ROOT,
-# so a copy installed by `simspace` is invisible to the deploy, and a copy
-# installed by root is invisible to anyone checking by hand as `simspace` --
-# `ansible-playbook --syntax-check` then fails with "couldn't resolve
-# module/action pfsensible.core.pfsense_setup" against a controller that
-# deploys perfectly well. That cost real time on 2026-09-18.
+# `-p` is the part that matters (see the 2026-09-18 note): /usr/share/ansible/
+# collections is on every user's search path, so one copy serves both the
+# root-cron deploy and a hand check as `simspace`.
 #
-# /usr/share/ansible/collections is on the default search path for every user,
-# so one copy there serves both.
+# NOT listed (still from the RC_NG_Ansible base image, not yet on Nexus):
+#   community.postgresql (fuel_db), community.crypto (email) -- add here once
+#   uploaded to ng_raw/galaxy.
 ---
 collections:
-  - name: pfsensible.core
-    version: ">=0.7.1"
-  # `ipaddr` — already a hard dependency of roles/common, which computes every
-  # host's netplan prefix with it, and now of playbooks/75-endpoint.yml, which
-  # uses it for real CIDR containment against the two OT /29s. It was working
-  # only because the RC_NG_Ansible controller image happens to ship it; stated
-  # here so a controller that does not fails at install time instead of 900
-  # lines into a deploy.
-  - name: ansible.utils
+  - name: https://nexus.dev.ng.simspace.lan/repository/ng_raw/galaxy/pfsensible-core-0.7.1.tar.gz
+  # ipaddr (common netplan prefix + 75-endpoint CIDR containment)
+  - name: https://nexus.dev.ng.simspace.lan/repository/ng_raw/galaxy/ansible-utils-6.1.1.tar.gz
+  - name: https://nexus.dev.ng.simspace.lan/repository/ng_raw/galaxy/ansible-windows-3.8.0.tar.gz
+  - name: https://nexus.dev.ng.simspace.lan/repository/ng_raw/galaxy/community-windows-3.3.0.tar.gz
+  - name: https://nexus.dev.ng.simspace.lan/repository/ng_raw/galaxy/microsoft-ad-1.12.1.tar.gz
+  - name: https://nexus.dev.ng.simspace.lan/repository/ng_raw/galaxy/community-general-13.4.0.tar.gz
+  - name: https://nexus.dev.ng.simspace.lan/repository/ng_raw/galaxy/community-docker-5.3.0.tar.gz
+  - name: https://nexus.dev.ng.simspace.lan/repository/ng_raw/galaxy/vyos-vyos-6.0.0.tar.gz
+  - name: https://nexus.dev.ng.simspace.lan/repository/ng_raw/galaxy/ansible-netcommon-8.6.2.tar.gz

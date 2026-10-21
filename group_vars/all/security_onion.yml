@@ -31,6 +31,11 @@ so_git_ref: "55af7eb541f086c4e7d6d3182fb2bc4fbc2b9e21"   # 2.4/main HEAD @ 2026-
 so_git_branch: "2.4/main"
 so_git_repo: "https://github.com/Security-Onion-Solutions/securityonion.git"
 
+# NEXUS SOURCING (2026-10-21): when set, the controller downloads the pinned SO
+# source tarball from the in-platform Nexus (ng_raw, via the mgmt proxy, internal
+# CA so validate_certs is off) instead of cloning github. Empty = git-clone.
+so_source_artifact_url: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/so/source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+
 # Only working install mode on Ubuntu — `so-setup iso` is CentOS/Rocky only.
 so_setup_type: "network"
 
@@ -184,6 +189,11 @@ so_airgap_pillar_file: "/opt/so/saltstack/local/pillar/global/adv_global.sls"
 
 # `url` is retained for provenance only — with so_airgap_mode true these are
 # staged from the bundle, never cloned. See so_apt_mirror/tasks/airgap_content.yml.
+# NEXUS SOURCING (2026-10-21): when set, each airgap content repo tarball is
+# downloaded from Nexus ng_raw (<base>/<name>.tar.gz, via the mgmt proxy) instead
+# of being cloned from github and re-tarred on the controller. Empty = git-clone.
+so_airgap_artifact_base: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/so/content"
+
 so_airgap_repos:
   - name: securityonion-resources
     url: "https://github.com/Security-Onion-Solutions/securityonion-resources"
@@ -341,6 +351,13 @@ so_registry_artifact_url: ""
 so_registry_image_version: "2.4.211"
 so_registry_registry_version: "3.0.0"
 so_registry_elasticsearch_version: "9.0.8"
+
+# NEXUS SOURCING (2026-10-21): the registry base the CONTROLLER pulls the SO
+# images FROM when building the on-range registry. Default is ghcr.io (internet
+# via proxy); set to the in-platform Nexus docker registry to pull from there
+# (via the mgmt proxy; internal CA, so build_so_registry passes --src-tls-verify=false).
+# The on-range registry the GRID pulls from is unchanged.
+so_registry_source: "nexus-docker.dev.ng.simspace.lan/security-onion-solutions"
 
 # Versioned on the mirror so a stale blob cannot masquerade as a current one.
 # Renamed to registry.tar / registry_image.tar on the node, because those are

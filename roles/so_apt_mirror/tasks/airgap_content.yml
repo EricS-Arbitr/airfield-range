@@ -28,6 +28,28 @@
     state: directory
     mode: '0755'
 
+# NEXUS SOURCING: when so_airgap_artifact_base is set, pull each content repo
+# tarball straight from Nexus ng_raw (<base>/<name>.tar.gz) instead of cloning
+# github + re-tarring on the controller. Reached via the mgmt proxy; internal
+# CA so validate_certs is off. Idempotent (get_url skips when dest exists).
+- name: Airgap content — fetch each repo tarball from Nexus (when so_airgap_artifact_base set)
+  ansible.builtin.get_url:
+    url: "{{ so_airgap_artifact_base }}/{{ item.name }}.tar.gz"
+    dest: "{{ so_mirror_root }}/so-source/{{ item.name }}.tar.gz"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+    validate_certs: false
+  environment:
+    http_proxy: "{{ so_upstream_proxy }}"
+    https_proxy: "{{ so_upstream_proxy }}"
+    HTTP_PROXY: "{{ so_upstream_proxy }}"
+    HTTPS_PROXY: "{{ so_upstream_proxy }}"
+  loop: "{{ so_airgap_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: so_airgap_artifact_base | length > 0
+
 - name: Airgap content — clone each SO content repo (via mgmt-plane proxy)
   ansible.builtin.shell: |
     set -e
@@ -44,6 +66,7 @@
   loop: "{{ so_airgap_repos }}"
   loop_control:
     label: "{{ item.name }}"
+  when: so_airgap_artifact_base | length == 0
   register: airgap_clone
 
 - name: Airgap content — tar each repo into the mirror (keeps .git)
@@ -58,6 +81,7 @@
   loop: "{{ so_airgap_repos }}"
   loop_control:
     label: "{{ item.name }}"
+  when: so_airgap_artifact_base | length == 0
 
 - name: Airgap content — smoke test each tarball is served over HTTP
   ansible.builtin.uri:

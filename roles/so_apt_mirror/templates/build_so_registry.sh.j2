@@ -25,6 +25,13 @@ set -euo pipefail
 BUILD="{{ so_registry_build_dir }}"
 MIRROR="{{ so_mirror_root }}/so-source"
 REG_VER="{{ so_registry_registry_version }}"
+# NEXUS SOURCING: the registry base the controller pulls the SO images FROM.
+# Default ghcr.io (internet via proxy); set so_registry_source to the in-platform
+# Nexus docker registry to pull from there instead. When the source is the
+# internal Nexus (self-signed/internal CA), skopeo must skip source-side TLS
+# verification; ghcr.io has a public cert, so it stays strict there.
+SRC="{{ so_registry_source }}"
+case "$SRC" in *nexus*|*.simspace.lan*) SRC_TLS="--src-tls-verify=false" ;; *) SRC_TLS="" ;; esac
 
 export HTTP_PROXY="{{ so_upstream_proxy }}"  HTTPS_PROXY="{{ so_upstream_proxy }}"
 export http_proxy="{{ so_upstream_proxy }}"  https_proxy="{{ so_upstream_proxy }}"
@@ -38,9 +45,9 @@ mkdir -p "$BUILD/store"
 
 # --- 1. the registry image itself, as a docker-archive -------------------
 echo "=== 1/4 fetching registry:${REG_VER} ==="
-skopeo copy --retry-times 3 \
-  "docker://ghcr.io/security-onion-solutions/registry:${REG_VER}" \
-  "docker-archive:${BUILD}/registry_image.tar:ghcr.io/security-onion-solutions/registry:${REG_VER}"
+skopeo copy --retry-times 3 $SRC_TLS \
+  "docker://${SRC}/registry:${REG_VER}" \
+  "docker-archive:${BUILD}/registry_image.tar:${SRC}/registry:${REG_VER}"
 
 # --- 2. stand up a throwaway registry to receive the image set -----------
 echo "=== 2/4 starting build registry ==="
@@ -53,7 +60,7 @@ docker load -i "${BUILD}/registry_image.tar"
 # and the manager's live path is /nsm/docker-registry/docker/registry/v2/...
 docker run -d --name so-registry-build -p 127.0.0.1:5000:5000 \
   -v "${BUILD}/store":/var/lib/registry \
-  "ghcr.io/security-onion-solutions/registry:${REG_VER}" >/dev/null
+  "${SRC}/registry:${REG_VER}" >/dev/null
 
 for _ in $(seq 1 30); do
   curl -sf http://127.0.0.1:5000/v2/ >/dev/null 2>&1 && break
@@ -66,8 +73,8 @@ echo "=== 3/4 copying {{ so_registry_images | length }} images ==="
 n=0
 {% for img in so_registry_images %}
 echo "--- COPY {{ img }}"
-skopeo copy --retry-times 3 --dest-tls-verify=false \
-  "docker://ghcr.io/security-onion-solutions/{{ img }}" \
+skopeo copy --retry-times 3 --dest-tls-verify=false $SRC_TLS \
+  "docker://${SRC}/{{ img }}" \
   "docker://127.0.0.1:5000/security-onion-solutions/{{ img }}"
 n=$((n+1))
 {% endfor %}
