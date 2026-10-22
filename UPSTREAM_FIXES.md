@@ -10,7 +10,21 @@ Severity key:
 - **enhancement** — works but could be more robust or ergonomic
 - **platform** — SimSpace platform-side issue, not Ansible
 
-Format: `## 2026-09-22 · bug · reboot ceilings of 600s fail members on a cold build
+Format: `## YYYY-MM-DD · severity · short title`, then **Symptom** → **Root cause** → **Fix**.
+
+---
+
+## 2026-10-22 · bug · roles/dns — record writes have no retry while a child DC's DNS partition settles
+
+**Symptom.** A cold airfield-range build failed after all 3 deploy attempts. `fops-dc01` (the `fops.blackstone.mil` child DC) failed in the `dns` play — attempt 1 at the DomainDnsZones partition gate, attempts 2 and 3 at `dns : Manage Internal DNS Records`. By attempt 3 only the last 3 records in the batch (`fops-app01/02/03`) still failed to add. Because the host dropped at the dns task, it never reached the endpoint phase, never got its Elastic Agent, and the run failed ~1 h later at the Fleet coverage gate on `soc-so-manager` ("Missing: fops-dc01").
+
+**Root cause.** On a freshly promoted child DC the DomainDnsZones application partition enlists late. The existing partition gate (`site.yml` `dns` play pre_tasks) handles that — it passed on attempts 2/3. But once the partition is enlisted, the DNS server still needs a few more seconds to accept writes against it, and `Manage Internal DNS Records` had **no `until`/`retries`** (the `Create Forward/Reverse Lookup Zones` tasks right above it already retry 6×15s). So a tail-of-batch write that hit the server mid-stabilization failed the whole looped task, dropping the host from every later play. Diagnostics taken after the run confirmed the DC was fully healthy — `repadmin /showrepl` all successful (incl. `DC=DomainDnsZones,DC=fops,…`), partition State 0, zone `IsDsIntegrated`/Domain-scoped — the 3 records were simply never written.
+
+**Fix (overlay, both airfield repos).** `roles/dns/tasks/main.yml` — add `register: dns_record` + `until: dns_record is succeeded` + `retries: 6` + `delay: 15` to `Manage Internal DNS Records`, matching the zone tasks above it. `until` on a looped task retries each item independently, so one slow record rides out the ~90 s convergence window without failing its siblings or the host. Applied to `airfield-range` and `airfield-stacked` (identical-base `dns` role). The already-deployed range is recovered out-of-band with `ansible-playbook site.yml --limit fops-dc01,soc-so-manager`.
+
+---
+
+## 2026-09-22 · bug · reboot ceilings of 600s fail members on a cold build
 
 **Symptom.** Two members fail outright in attempt 1, then surface hours later at the Fleet coverage gate:
 

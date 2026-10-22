@@ -49,12 +49,25 @@
     ttl: "{{ item.ttl | default(omit) }}"
     state: "{{ item.state | default('present') }}"
   loop: "{{ internal_dns_records | default([]) }}"
-  when: 
+  when:
     - internal_dns_records is defined
     - item.name is defined
     - item.type is defined
     - item.value is defined
     - item.zone is defined
+  # Retry each record the way the zone tasks above already do. A freshly
+  # promoted child DC (fops-dc01) passes the DomainDnsZones partition gate, then
+  # rejects writes near the tail of the batch for a few more seconds while the
+  # DNS server finishes stabilizing on the just-enlisted partition. Without a
+  # retry, one tail-of-batch write fails the whole task, the host drops from
+  # every later play (endpoint, fleet), and the deploy fails hours later at the
+  # Fleet coverage gate. Observed cold 2026-10-22: fops-app01/02/03 (the last 3
+  # records) were the only residue; replication, partition and zone were all
+  # healthy. 6 x 15s rides out the convergence window per item.
+  register: dns_record
+  until: dns_record is succeeded
+  retries: 6
+  delay: 15
 
 - name: Add WPAD A record
   community.windows.win_dns_record:
