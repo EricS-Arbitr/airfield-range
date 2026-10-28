@@ -1,0 +1,6 @@
+---
+- name: Restart atc-weather
+  ansible.builtin.systemd:
+    name: atc-weather
+    state: restarted
+    daemon_reload: true

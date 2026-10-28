@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+# readsb network-only: no SDR, pull the local ATC feed. Design §4B.
+# No --net-sbs-port here: the FEED owns {{ atc_feed_sbs_port }}; readsb only
+# CONNECTS to it (sbs_in via the net-connector) and must not also try to bind it.
+RECEIVER_OPTIONS="--net-only"
+DECODER_OPTIONS="--max-range 300{% if atc_readsb_disable_aircraft_db %} --db-file none{% endif %}"
+NET_OPTIONS="--net --net-connector {{ atc_readsb_net_connector }} --net-heartbeat 60 --net-ro-size 1200 --net-ro-interval 0.05 --net-json-port 30047"
+JSON_OPTIONS="--write-json {{ atc_readsb_json_dir }} --write-json-every 1"

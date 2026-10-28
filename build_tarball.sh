@@ -30,6 +30,7 @@ AIRFIELD_RANGE="$(cd "$(dirname "$0")" && pwd)"
 # listing it keeps discovery correct for that standalone path too.
 PLAYBOOKS=("$AIRFIELD_RANGE/site.yml")
 [ -f "$AIRFIELD_RANGE/fuel_farm_playbook.yml" ] && PLAYBOOKS+=("$AIRFIELD_RANGE/fuel_farm_playbook.yml")
+[ -f "$AIRFIELD_RANGE/atc_playbook.yml" ] && PLAYBOOKS+=("$AIRFIELD_RANGE/atc_playbook.yml")
 # Everything site.yml pulls in with `import_playbook`. WITHOUT THIS the SO
 # roles are invisible to discovery and ship in no tarball at all -- the
 # archive builds clean, reports "41 roles bundled", and the deploy dies on
@@ -171,6 +172,9 @@ chmod +x "$STAGE/deploy.sh"
 if [ -f "$AIRFIELD_RANGE/fuel_farm_playbook.yml" ]; then
   cp "$AIRFIELD_RANGE/fuel_farm_playbook.yml" "$STAGE/"
 fi
+if [ -f "$AIRFIELD_RANGE/atc_playbook.yml" ]; then
+  cp "$AIRFIELD_RANGE/atc_playbook.yml" "$STAGE/"
+fi
 # site.yml's `import_playbook` paths are relative to site.yml, so this
 # directory has to land beside it at the same depth.
 if [ -d "$AIRFIELD_RANGE/playbooks" ]; then
@@ -183,6 +187,10 @@ fi
 if [ -f "$AIRFIELD_RANGE/verify_fuel_farm.sh" ]; then
   cp "$AIRFIELD_RANGE/verify_fuel_farm.sh" "$STAGE/"
   chmod +x "$STAGE/verify_fuel_farm.sh"
+fi
+if [ -f "$AIRFIELD_RANGE/verify_atc.sh" ]; then
+  cp "$AIRFIELD_RANGE/verify_atc.sh" "$STAGE/"
+  chmod +x "$STAGE/verify_atc.sh"
 fi
 if [ -f "$AIRFIELD_RANGE/deploy-diagnostic.sh" ]; then
   cp "$AIRFIELD_RANGE/deploy-diagnostic.sh" "$STAGE/"
@@ -355,8 +363,10 @@ TAR_PATHS=(roles host_vars group_vars hosts site.yml deploy.sh)
 [ -d "playbooks" ] && TAR_PATHS+=(playbooks)
 [ -d "rules" ] && TAR_PATHS+=(rules)
 [ -f "fuel_farm_playbook.yml" ] && TAR_PATHS+=(fuel_farm_playbook.yml)
+[ -f "atc_playbook.yml" ] && TAR_PATHS+=(atc_playbook.yml)
 [ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
 [ -f "verify_fuel_farm.sh" ] && TAR_PATHS+=(verify_fuel_farm.sh)
+[ -f "verify_atc.sh" ] && TAR_PATHS+=(verify_atc.sh)
 [ -f "deploy-diagnostic.sh" ] && TAR_PATHS+=(deploy-diagnostic.sh)
 [ -f "fetch-fops-log.sh" ] && TAR_PATHS+=(fetch-fops-log.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)

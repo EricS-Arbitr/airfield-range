@@ -1914,6 +1914,16 @@
 - import_playbook: fuel_farm_playbook.yml
 
 # =========================================================================
+# Flight Control Center tier — Air Traffic Control subsystem
+# =========================================================================
+# ADS-B feed -> readsb -> tar1090 scope + Flight Data Processor on atc-radar,
+# the METAR/TAF/ATIS feed on atc-weather, the CWP kiosk on atc-station, and
+# display shortcuts on the flight workstations. Runs after the network tier
+# (so the FCC subnet 172.31.5.0/24 is routed) and is runnable on its own:
+#   ansible-playbook atc_playbook.yml
+- import_playbook: atc_playbook.yml
+
+# =========================================================================
 # Deferred failure gate
 # =========================================================================
 # Phases that are allowed to continue past their own failure record it as a

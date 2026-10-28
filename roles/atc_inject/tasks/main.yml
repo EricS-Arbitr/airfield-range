@@ -1,0 +1,68 @@
+---
+# Stage + run the ADS-B feed engine as a systemd service.
+
+- name: Create the feed directory
+  ansible.builtin.file:
+    path: "{{ atc_feed_dir }}"
+    state: directory
+    owner: "{{ atc_user }}"
+    group: "{{ atc_user }}"
+    mode: "0755"
+
+- name: Create the shared ATC venv
+  ansible.builtin.command: "python3 -m venv {{ atc_venv }}"
+  args:
+    creates: "{{ atc_venv }}/bin/python"
+
+- name: Install feed pip dependencies (from Nexus ng_pypi when air-gapped)
+  ansible.builtin.pip:
+    name: "{{ atc_feed_requirements }}"
+    virtualenv: "{{ atc_venv }}"
+    extra_args: >-
+      {{ ('--index-url ' ~ atc_pip_index_url ~ ' --trusted-host ' ~ atc_pip_trusted_host)
+         if atc_pip_index_url | length > 0 else '' }}
+  environment:
+    HTTPS_PROXY: "{{ inet_proxy }}"
+    HTTP_PROXY: "{{ inet_proxy }}"
+  when: atc_feed_requirements | length > 0
+
+- name: Stage the feed engine
+  ansible.builtin.copy:
+    src: "feed/atc_feed.py"
+    dest: "{{ atc_feed_dir }}/atc_feed.py"
+    owner: "{{ atc_user }}"
+    group: "{{ atc_user }}"
+    mode: "0755"
+  notify: Restart atc-feed
+
+- name: Stage the flight schedule (bundled in the role; regenerate via sim-data/atc)
+  ansible.builtin.copy:
+    src: "schedule.json"
+    dest: "{{ atc_feed_dir }}/schedule.json"
+    owner: "{{ atc_user }}"
+    group: "{{ atc_user }}"
+    mode: "0644"
+  notify: Restart atc-feed
+
+- name: Render the feed config
+  ansible.builtin.template:
+    src: "config.json.j2"
+    dest: "{{ atc_feed_dir }}/config.json"
+    owner: "{{ atc_user }}"
+    group: "{{ atc_user }}"
+    mode: "0644"
+  notify: Restart atc-feed
+
+- name: Install the feed systemd unit
+  ansible.builtin.template:
+    src: "atc-feed.service.j2"
+    dest: "/etc/systemd/system/atc-feed.service"
+    mode: "0644"
+  notify: Restart atc-feed
+
+- name: Enable + start the feed
+  ansible.builtin.systemd:
+    name: atc-feed
+    enabled: true
+    state: started
+    daemon_reload: true

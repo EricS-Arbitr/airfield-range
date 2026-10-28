@@ -1,0 +1,56 @@
+---
+- name: Create the weather directory
+  ansible.builtin.file:
+    path: "{{ atc_weather_dir }}"
+    state: directory
+    owner: "{{ atc_user }}"
+    group: "{{ atc_user }}"
+    mode: "0755"
+
+- name: Create the shared ATC venv
+  ansible.builtin.command: "python3 -m venv {{ atc_venv }}"
+  args:
+    creates: "{{ atc_venv }}/bin/python"
+
+- name: Install weather pip dependencies (ng_pypi when air-gapped)
+  ansible.builtin.pip:
+    name: "{{ atc_weather_requirements }}"
+    virtualenv: "{{ atc_venv }}"
+    extra_args: >-
+      {{ ('--index-url ' ~ atc_pip_index_url ~ ' --trusted-host ' ~ atc_pip_trusted_host)
+         if atc_pip_index_url | length > 0 else '' }}
+  environment:
+    HTTPS_PROXY: "{{ inet_proxy }}"
+    HTTP_PROXY: "{{ inet_proxy }}"
+
+- name: Stage the METAR feed
+  ansible.builtin.copy:
+    src: "weather/metar_feed.py"
+    dest: "{{ atc_weather_dir }}/metar_feed.py"
+    owner: "{{ atc_user }}"
+    group: "{{ atc_user }}"
+    mode: "0755"
+  notify: Restart atc-weather
+
+- name: Render the weather config
+  ansible.builtin.template:
+    src: "weather-config.json.j2"
+    dest: "{{ atc_weather_dir }}/config.json"
+    owner: "{{ atc_user }}"
+    group: "{{ atc_user }}"
+    mode: "0644"
+  notify: Restart atc-weather
+
+- name: Install the weather systemd unit
+  ansible.builtin.template:
+    src: "atc-weather.service.j2"
+    dest: "/etc/systemd/system/atc-weather.service"
+    mode: "0644"
+  notify: Restart atc-weather
+
+- name: Enable + start the weather feed
+  ansible.builtin.systemd:
+    name: atc-weather
+    enabled: true
+    state: started
+    daemon_reload: true

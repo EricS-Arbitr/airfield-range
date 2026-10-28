@@ -1,0 +1,36 @@
+---
+# Kiosk display: a fullscreen browser on boot showing the FDP ops page
+# (combined radar + strips — one page, not two tabs; design §2).
+
+- name: Install a .deb browser (NOT a snap — snaps need the store, break air-gap)
+  ansible.builtin.apt:
+    name: firefox
+    state: present
+  # TODO(design §6): on 22.04 `firefox` is the snap transition package. Stage
+  # the Mozilla apt repo (.deb) mirrored to Nexus and pin an APT preference so
+  # this installs a real .deb, not the snap. Until then the kiosk may pull the
+  # snap (works in dev-with-egress, fails air-gapped).
+
+- name: Create the autostart directory
+  ansible.builtin.file:
+    path: "/home/{{ atc_cwp_autologin_user }}/.config/autostart"
+    state: directory
+    owner: "{{ atc_cwp_autologin_user }}"
+    group: "{{ atc_cwp_autologin_user }}"
+    mode: "0755"
+
+- name: Autostart the kiosk browser full-screen
+  ansible.builtin.copy:
+    dest: "/home/{{ atc_cwp_autologin_user }}/.config/autostart/atc-kiosk.desktop"
+    owner: "{{ atc_cwp_autologin_user }}"
+    group: "{{ atc_cwp_autologin_user }}"
+    mode: "0644"
+    content: |
+      [Desktop Entry]
+      Type=Application
+      Name=ATC CWP Kiosk
+      Exec=firefox --kiosk {{ atc_cwp_url }}
+      X-GNOME-Autostart-enabled=true
+  # TODO: suppress the GNOME initial-setup wizard (drop
+  # ~/.config/gnome-initial-setup-done) like airfield-range does; confirm the
+  # Desktop image autologins, or enable it here.

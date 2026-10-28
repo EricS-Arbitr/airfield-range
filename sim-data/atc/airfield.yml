@@ -1,0 +1,17 @@
+# Blackstone Auxiliary Field — FICTIONAL. Coordinates, identifiers and runway
+# data are invented for the range and must NOT be mapped to any real-world
+# airfield or nav database. (Mirror of group_vars/atc.yml atc_airfield; kept
+# here so the schedule generator can read it standalone.)
+airfield:
+  ident_icao: "KBAX"
+  ident_faa:  "BAX"
+  name:       "Blackstone Auxiliary Field"
+  lat:         38.5000
+  lon:        -78.5000
+  field_elev_ft: 520
+  mag_var_deg:  -9.0
+  pattern_alt_ft_agl: 1000
+  runways:
+    - { ident: "02/20", true_hdg: 20,  length_ft: 8000, surface: "asphalt" }
+    - { ident: "11/29", true_hdg: 110, length_ft: 5000, surface: "asphalt" }
+  nav_fixes: []

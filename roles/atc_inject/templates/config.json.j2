@@ -1,0 +1,12 @@
+{
+  "mode": "{{ atc_feed_mode }}",
+  "bind": "{{ atc_feed_bind }}",
+  "sbs_port": {{ atc_feed_sbs_port }},
+  "beast_port": {{ atc_feed_beast_port }},
+  "rate_hz": {{ atc_feed_rate_hz }},
+  "exercise_epoch": "{{ atc_exercise_epoch }}",
+  "cycle_seconds": {{ atc_cycle_seconds }},
+  "cycle_wrap_gap_seconds": {{ atc_cycle_wrap_gap_seconds }},
+  "schedule": "{{ atc_feed_dir }}/schedule.json",
+  "airfield": {{ atc_airfield | to_json }}
+}

@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+[Unit]
+Description=ATC weather (METAR/TAF) feed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ atc_user }}
+ExecStart={{ atc_venv }}/bin/python {{ atc_weather_dir }}/metar_feed.py --config {{ atc_weather_dir }}/config.json
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+---
+# atc_cwp — controller working position kiosk on atc-station (Ubuntu Desktop).
+# The ops page is served by the FDP on atc-radar.
+atc_cwp_url: "http://{{ atc_radar_ip }}:{{ atc_fdp_port }}/"
+atc_cwp_autologin_user: "simspace"

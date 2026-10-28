@@ -1,0 +1,6 @@
+---
+- name: Restart atc-feed
+  ansible.builtin.systemd:
+    name: atc-feed
+    state: restarted
+    daemon_reload: true

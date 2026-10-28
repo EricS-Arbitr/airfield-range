@@ -1,0 +1,107 @@
+---
+# ============================================================================
+# atc.yml — single source of truth for the ATC subsystem (airfield-range).
+# Applies to the [atc] group: atc-radar, atc-station, atc-weather.
+# Consumed by roles atc_inject, atc_core, atc_weather, atc_cwp.
+# Ported from the ATC dev range (vCity/ATC); see systems/atc build sheet.
+# ============================================================================
+
+# --- Sourcing mode ----------------------------------------------------------
+# DEV sourcing for now (owner decision): readsb/tar1090/tiles/pip come from
+# upstream through the mgmt-plane proxy. Air-gap/Nexus is a later flip — the
+# toggles below (atc_readsb_install_method, atc_tar1090_install_method,
+# atc_pip_index_url, atc_tiles_src) switch each source to ng_raw / ng_pypi.
+inet_proxy: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"   # 10.255.240.1:3128
+
+# --- Host addressing (prod IPs; mgmt IPs live in host_vars) -----------------
+atc_radar_ip:   "172.31.5.10"     # atc-radar   — feed + readsb + tar1090 + FDP
+atc_station_ip: "172.31.5.12"     # atc-station — CWP kiosk + display
+atc_weather_ip: "172.31.5.11"     # atc-weather — METAR/TAF feed
+
+# Prod NIC is eth1 (mgmt is eth0, position FIRST). Netplan (common role) gives
+# eth1 a real /24 here, so the dev on-link-route workaround is NOT needed.
+atc_prod_interface: "eth1"
+atc_prod_subnet: "172.31.5.0/24"
+
+# --- Install paths ----------------------------------------------------------
+atc_root: "/opt/atc"
+atc_venv: "/opt/atc/venv"
+atc_user: "atc"                   # service account (created by atc_playbook pre-play)
+
+# --- Python sourcing (dev = PyPI via proxy; air-gap = ng_pypi) --------------
+atc_pip_index_url: ""             # "" → default PyPI; set to ng_pypi for air-gap
+atc_pip_trusted_host: ""          # set to the Nexus host when atc_pip_index_url is set
+
+# --- Exercise clock (epoch-based; survives restarts; range-wide) ------------
+# Keep identical across any coupled system (weather here; the fuel link later)
+# so movements line up. 48 h to match the airfield replay convention.
+atc_exercise_epoch: "2026-01-01T00:00:00Z"
+atc_cycle_seconds: 172800         # 48 h
+atc_cycle_wrap_gap_seconds: 60
+
+# --- ADS-B feed -------------------------------------------------------------
+# Primary = Beast DF17 on :30005 (real frames); SBS/BaseStation :30003 is a
+# secondary human-readable output. Feed binds 0.0.0.0, multi-client.
+atc_feed_bind: "0.0.0.0"
+atc_feed_beast_port: 30005
+atc_feed_sbs_port: 30003
+atc_feed_rate_hz: 1
+atc_primary_radar_enabled: false
+
+# --- readsb -----------------------------------------------------------------
+# DEV installs readsb from upstream over the proxy; AIR-GAP flips to nexus_deb
+# + a pinned ng_raw .deb. Ansible owns /etc/default/readsb in both paths.
+atc_readsb_install_method: "upstream_script"   # upstream_script (dev) | nexus_deb (air-gap)
+atc_readsb_install_url: "https://github.com/wiedehopf/adsb-scripts/raw/master/readsb-install.sh"
+atc_readsb_deb_url: ""            # air-gap: the ng_raw .deb URL once staged
+atc_readsb_net_connector: "127.0.0.1,{{ atc_feed_beast_port }},beast_in"
+atc_readsb_disable_aircraft_db: true   # AE… hex codes must NOT map to real airframes
+
+# --- tar1090 ----------------------------------------------------------------
+atc_tar1090_install_method: "upstream_script"   # upstream_script (dev) | nexus (air-gap)
+atc_tar1090_install_url: "https://github.com/wiedehopf/tar1090/raw/master/install.sh"
+atc_tar1090_web: "lighttpd"
+atc_tar1090_config: "/usr/local/share/tar1090/html/config.js"
+atc_tar1090_default_zoom: 11
+atc_tar1090_range_rings_nm: [10, 20, 40]
+# Offline basemap: ATC hosts have no browser egress, so OSM won't load. tar1090's
+# built-in offline layer serves tiles from the dir below (lighttpd ALIASes
+# /tar1090/osm_tiles_offline/ to it). DEV fetches a bounded tileset via the proxy;
+# AIR-GAP stages the same {z}/{x}/{y}.png tree from ng_raw and points atc_tiles_src
+# at it. ESRI World Imagery is the keyless dev source (satellite; © Esri/Maxar).
+atc_tar1090_offline_tiles: true
+atc_tar1090_tiles_dir: "/usr/local/share/osm_tiles_offline"
+atc_tar1090_tiles_url: "/tar1090/osm_tiles_offline/{z}/{x}/{y}.png"
+atc_tiles_src: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+atc_tiles_bbox: { lat_min: 37.0, lat_max: 40.0, lon_min: -80.0, lon_max: -77.0 }
+atc_tiles_zoom_min: 6
+atc_tiles_zoom_max: 11
+
+# --- Flight Data Processor --------------------------------------------------
+atc_fdp_port: 8080
+# Deliberate range vulnerabilities — DEFAULT SECURE. Each is marked
+# `# RANGE-VULN:` in code and documented in the instructor answer key.
+atc_vulns_enabled: false
+# Fuel-requisition link — OFF for now. The approved design links a HEAVY landing
+# to a fuel_sim external-order poll; that is a later item (needs the fuel farm).
+atc_fuel_requisition_enabled: false
+atc_fuel_requisition_url: ""
+
+# --- Weather (sibling; ATC consumes METAR/TAF/ATIS at the display) ----------
+atc_weather_port: 8081
+atc_weather_protocol: "http"
+
+# --- Airfield parameters (FICTIONAL — not a real field) ---------------------
+atc_airfield:
+  ident_icao: "KBAX"
+  ident_faa:  "BAX"
+  name:       "Blackstone Auxiliary Field"
+  lat:         38.5000
+  lon:        -78.5000
+  field_elev_ft: 520
+  mag_var_deg:  -9.0
+  pattern_alt_ft_agl: 1000
+  runways:
+    - { ident: "02/20", true_hdg: 20,  length_ft: 8000, surface: "asphalt" }
+    - { ident: "11/29", true_hdg: 110, length_ft: 5000, surface: "asphalt" }
+  nav_fixes: []
