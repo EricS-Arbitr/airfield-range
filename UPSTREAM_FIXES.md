@@ -14,6 +14,16 @@ Format: `## YYYY-MM-DD · severity · short title`, then **Symptom** → **Root 
 
 ---
 
+## 2026-10-29 · bug · ATC roles build a venv without ensuring python3-venv
+
+**Symptom.** Cold airfield-range deploy (ATC subsystem incorporated) failed on attempt 3 at `atc_inject : Create the shared ATC venv` on `atc-radar`: `python3 -m venv /opt/atc/venv` exited 1 with *"ensurepip is not available … apt install python3.10-venv"*. The host dropped at that task, so `atc_core` (readsb + FDP) never ran. Attempts 1–2 had failed earlier on an unrelated, self-clearing `so_fleet_integrations` timing gate (`pfsense-bs-ops-fw` collected nothing until pfSense logs arrived + parsed), which is why `atc_inject` was only reached on attempt 3.
+
+**Root cause.** All three venv-using ATC roles (`atc_inject`, `atc_core/fdp`, `atc_weather`) run `python3 -m venv {{ atc_venv }}` with no prior `python3-venv` install. On the dev range this worked because the dev `common` role installed `python3-venv` + `python3-pip` as base packages. That `common` role was intentionally dropped in the airfield port (airfield has its own `common`, which does not install them), so the Ubuntu 22.04 ATC image — which ships python3 without ensurepip — had no way to build a venv. Only `atc-radar` surfaced it first (atc_inject runs ahead of everything); the gap existed on every venv-using ATC host.
+
+**Fix (airfield roles, self-contained).** Added an idempotent apt prereq (`python3-venv`, `python3-pip`, `update_cache: true`, 3×5 s retry for proxy flakiness) immediately before the `python3 -m venv` task in `roles/atc_inject/tasks/main.yml`, `roles/atc_core/tasks/fdp.yml`, and `roles/atc_weather/tasks/main.yml`. apt reaches the archive through the `platform_proxy` apt config (`/etc/apt/apt.conf.d/95platform-proxy`), which `atc_playbook.yml` applies first. Kept in the roles rather than re-adding a `common` dependency so each role stays runnable standalone. Recover the already-deployed range out-of-band with `ansible-playbook atc_playbook.yml` after the controller pulls the refreshed tarball.
+
+---
+
 ## 2026-10-22 · bug · roles/dns — record writes have no retry while a child DC's DNS partition settles
 
 **Symptom.** A cold airfield-range build failed after all 3 deploy attempts. `fops-dc01` (the `fops.blackstone.mil` child DC) failed in the `dns` play — attempt 1 at the DomainDnsZones partition gate, attempts 2 and 3 at `dns : Manage Internal DNS Records`. By attempt 3 only the last 3 records in the batch (`fops-app01/02/03`) still failed to add. Because the host dropped at the dns task, it never reached the endpoint phase, never got its Elastic Agent, and the run failed ~1 h later at the Fleet coverage gate on `soc-so-manager` ("Missing: fops-dc01").

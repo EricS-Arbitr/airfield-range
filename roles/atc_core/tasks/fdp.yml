@@ -10,6 +10,18 @@
     group: "{{ atc_user }}"
     mode: "0755"
 
+- name: Ensure venv + pip support (base image ships python3 without ensurepip)
+  ansible.builtin.apt:
+    name:
+      - python3-venv
+      - python3-pip
+    state: present
+    update_cache: true
+  register: _atc_venv_apt
+  retries: 3
+  delay: 5
+  until: _atc_venv_apt is succeeded
+
 - name: Create the shared ATC venv
   ansible.builtin.command: "python3 -m venv {{ atc_venv }}"
   args:
