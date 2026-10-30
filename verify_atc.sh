@@ -49,7 +49,7 @@ chk "tar1090 served"      atc-radar "wget -qO- http://localhost/tar1090/ | grep 
 echo "-- weather --"
 chk "weather METAR"       atc-weather "wget -qO- http://localhost:$WX/metar | grep -q station"
 chk "weather TAF"         atc-weather "wget -qO- http://localhost:$WX/taf | grep -q TAF"
-chk "FDP weather proxy"   atc-radar   "wget -qO- http://localhost:$FDP/api/weather | grep -q '\"ok\": true'"
+chk "FDP weather proxy"   atc-radar   "wget -qO- http://localhost:$FDP/api/weather | grep -Eq '\"ok\": ?true'"
 
 echo "-- cross-host (prod subnet) --"
 chk "prod subnet route"   atc-station "ip route | grep -q 172.31.5.0/24"
@@ -61,7 +61,9 @@ chk "kiosk autostart"     atc-station "test -f /home/simspace/.config/autostart/
 chk "browser present"     atc-station "command -v firefox"
 
 echo "-- flight workstations (display shortcut) --"
-out=$(ansible fops-flight01 -m win_stat -a "path=C:\\Users\\Public\\Desktop\\ATC Operations.url" 2>/dev/null)
+# JSON args form: the filename has a space, which the key=value form would
+# split into a second (bogus) module arg, truncating the path at "ATC".
+out=$(ansible fops-flight01 -m win_stat -a '{"path": "C:\\Users\\Public\\Desktop\\ATC Operations.url"}' 2>/dev/null)
 if printf '%s' "$out" | grep -q '"exists": true'; then ok "fops-flight01 ATC shortcut"; else no "fops-flight01 ATC shortcut"; fi
 
 echo
