@@ -1,9 +1,174 @@
 ---
+# Tell "still booting" apart from "not on the network" apart from "refusing our
+# credentials" BEFORE spending the long wait on it.
+#
+# wait_for_connection cannot distinguish any of them: it retries until the
+# ceiling whatever the reason, then fails with the same message. But they are
+# different states with different owners. A host that is booting will be ready
+# if you wait. A host with no route is not there at all. A host that rejects the
+# credentials will never succeed no matter how long anyone waits, and it is an
+# inventory problem, not a platform one.
+#
+# MEASURED, 2026-09-20. pp-bp-wkstn-4 failed all three attempts of a 7h25m
+# build with the identical error:
+#
+#   [Errno 113] No route to host -- 10.255.240.122:5985
+#
+# Identical in attempt 3, five hours after attempt 1. That VM was never on the
+# network. Raising init_wait_timeout from 900 to 2400 -- which is correct for
+# hosts that are genuinely slow -- would have made this host burn 40 minutes
+# per attempt instead of 15, adding over an hour to a run that was going to
+# fail regardless.
+#
+# MEASURED, 2026-09-25. The five [winserver2022] hosts -- pp-dc01, pp-dc02,
+# pp-dcs-ctrl, pp-file, pp-sql -- were reported as "DID NOT COME ONLINE" while
+# they were powered on and answering. wait_for_connection simply cannot say
+# whether it never reached the port or reached it and was refused, so the
+# report sent the operator to the SimSpace console to check VMs that were fine.
+# That is what INIT_DROP_AUTH below exists to stop.
+#
+# So: probe the port from the controller, read the ERRNO, and let each outcome
+# fail with its own name.
+- name: Classify reachability from the controller before waiting
+  ansible.builtin.include_tasks: winrm_port_probe.yml
+  vars:
+    init_port_probe_name: Classify reachability from the controller before waiting
+    init_port_probe_retries: "{{ init_noroute_retries }}"
+
+# WINRM_REFUSED and WINRM_TIMEOUT both mean the host is ON the network and not
+# answering yet, which is exactly what the long wait below is for. Only
+# EHOSTUNREACH gets stopped here.
+- name: Fail fast if this host is not on the network at all
+  ansible.builtin.fail:
+    msg: |
+      INIT_DROP_NOROUTE {{ inventory_hostname }} ({{ ansible_host }}) has no
+      route from the controller after {{ (init_noroute_retries | int) * 15 }}s.
+
+      Probe said: {{ winrm_reach.stdout | default('(no output)') | trim }}
+
+      This is NOT a slow boot. A booting host refuses the connection or times
+      out; EHOSTUNREACH means ARP never resolved, so there is nothing on that
+      address to answer. Waiting longer will not help -- on 2026-09-20 this
+      exact error repeated identically across three attempts spanning 7h25m.
+
+      This is a platform-side problem, not an Ansible one. Check, in order:
+        1. that the VM exists in the blueprint and is powered on
+        2. that its mgmt NIC is attached to the right network
+        3. that its mgmt address really is {{ ansible_host }}
+  when: "'WINRM_NOROUTE' in (winrm_reach.stdout | default(''))"
+
+# Overlay of the base `init` role. Task names deliberately unchanged so log
+# output stays comparable with the base role; only the timings differ.
+# See defaults/main.yml for why, and UPSTREAM_FIXES 2026-08-07.
+#
+# Registered rather than left to fail on its own, so that the two tasks below
+# can say WHICH of its two causes applied. On its own this task reports only
+# that a connection never succeeded.
 - name: wait for Windows systems to be online
   ansible.builtin.wait_for_connection:
-    timeout: 1800
-    delay: 30
-    sleep: 10
+    timeout: "{{ init_wait_timeout }}"
+    delay: "{{ init_wait_delay }}"
+    sleep: "{{ init_wait_sleep }}"
+  register: init_online
+  ignore_errors: true
+
+# A fresh reading, not the one taken up to 40 minutes ago at the top of the
+# role. What the port is doing NOW is what distinguishes the two causes.
+- name: Re-probe the port to explain why the wait gave up
+  when: init_online is failed
+  ansible.builtin.include_tasks: winrm_port_probe.yml
+  vars:
+    init_port_probe_name: Re-probe the port to explain why the wait gave up
+    init_port_probe_retries: 1
+
+# THE DISTINCTION THAT MATTERS. If 5985 is OPEN, the host is on the network and
+# WinRM is listening and willing to talk -- so a connection that still never
+# succeeded was REFUSED, not missed, and credentials are the overwhelmingly
+# likely reason. Sending the operator to the console to check whether the VM is
+# powered on, as the old message did, wastes a whole test cycle.
+- name: Fail with the reason this host never came online
+  when: init_online is failed
+  ansible.builtin.fail:
+    msg: |
+      {% if 'WINRM_OPEN' in (winrm_reach.stdout | default('')) %}
+      INIT_DROP_AUTH {{ inventory_hostname }} ({{ ansible_host }}) is ON the
+      network and WinRM IS listening, but no session could be established in
+      {{ init_wait_timeout }}s.
+
+      TCP 5985 is open right now, so this is not a slow boot and not a missing
+      VM. The host is refusing us. In order of likelihood:
+
+        1. WRONG CREDENTIALS FOR THIS IMAGE. Ansible tried user
+           `{{ ansible_user | default('(unset)') }}`. Every SimSpace image
+           refresh has moved this: 1.1.0 ships `simspace`, 1.2.x ships
+           `xadmin`. Check this host's image version in the blueprint against
+           the group_vars file that sets ansible_user for its OS group.
+        2. The account exists but the password is stale in vault.
+        3. WinRM is listening but its listener or auth config rejects NTLM.
+
+      Do NOT check whether the VM is powered on. It is.
+      {% else %}
+      INIT_DROP_NOANSWER {{ inventory_hostname }} ({{ ansible_host }}) never
+      answered WinRM within {{ init_wait_timeout }}s.
+
+      Port probe says: {{ winrm_reach.stdout | default('(no output)') | trim }}
+
+      The host had a route when the run started, so the VM exists, but 5985 is
+      not accepting connections now. Usually still provisioning -- sysprep,
+      first-boot servicing or the range agent. Confirm in the SimSpace console
+      that it has finished booting, then re-run.
+      {% endif %}
+
+# =========================================================================
+# Repair AND PIN the default-gateway ARP entry before anything routes
+# =========================================================================
+# MEASURED. One MAC, 00:50:56:98:7D:D7, answers ARP for the default-gateway
+# address on whatever segment it appears on. Seen on four subnets across three
+# independent ranges, always Windows-only -- Linux on the same wire ignores
+# unsolicited ARP for an address it did not ask about (arp_accept=0) while
+# Windows accepts the reply and overwrites its cache. Confirmed on Server 2019
+# and Windows 10, so it is not version-specific.
+#
+# IT ANSWERS ICMP. The gateway pings, so any check that stops at "can I reach
+# my gateway" reports healthy while nothing routes off-subnet. It presents as
+# DNS failures, domain joins failing, Fleet enrolment failing -- and the router
+# meanwhile shows the host's own ARP entry going STALE, because it never
+# receives a packet.
+#
+# A FLUSH ALONE IS NOT ENOUGH, which an earlier version of this task assumed.
+# On 2026-08-27 one flush appeared to hold across all 45 hosts and the
+# conclusion drawn was that the entry is planted once at boot. It is not: on
+# 2026-08-31 hosts repaired by this very task had reverted to the impostor MAC
+# by the end of the same run, with NO reboot (uptime 3 days on both a reverted
+# host and a healthy one). The impostor re-announces, so the entry must be
+# PINNED, not merely corrected.
+#
+# A Permanent neighbour entry cannot be overwritten by a forged reply.
+# Verified on win-hunt-3 2026-08-31: State=Permanent, off-subnet reachability
+# restored. Note that verifying a pin requires reading State -- reading
+# LinkLayerAddress alone cannot distinguish a pinned entry from a dynamic one
+# that happened to re-learn correctly, which is how an earlier manual attempt
+# was mistakenly believed to have worked.
+#
+# SAFETY. Pinning the wrong MAC would isolate the host, so the pin is only
+# written after the learned MAC is confirmed NOT blocklisted AND an off-subnet
+# host is confirmed reachable, and it is removed again if reachability breaks
+# afterwards. The probe target is the host's own configured DNS server: in
+# every range these roles serve, that is off-subnet, so it proves routing
+# rather than merely proving the gateway answers.
+#
+# This is a workaround for a platform behaviour. 00:50:56:98:7D:D7 is in a
+# different VMware MAC block (:98:) from every real router interface (:A8:) and
+# recurs across independent ranges, so only the platform vendor can remove the
+# cause.
+# Between "it answered" and "we start configuring it". See wait_stable.yml:
+# wait_for_connection returns on the first successful connection, which a host
+# mid-provisioning can give while still about to reboot.
+- name: Require the host to be stably up before configuring it
+  ansible.builtin.include_tasks: wait_stable.yml
+
+- name: Repair and pin the default-gateway ARP entry
+  ansible.builtin.include_tasks: gw_arp.yml
 
 - name: Ping test to verify connectivity
   win_ping:

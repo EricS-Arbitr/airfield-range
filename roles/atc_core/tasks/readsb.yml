@@ -1,0 +1,61 @@
+---
+# readsb — network-only decoder pulling the local feed. Ansible owns the
+# config in BOTH paths. DEV installs from upstream over the internet (the range
+# has egress); AIR-GAP installs a pinned .deb from Nexus ng_raw. Toggle with
+# atc_readsb_install_method.
+
+# --- DEV: upstream install (wiedehopf readsb installer) ---------------------
+- name: Fetch the upstream readsb installer (dev; range has egress)
+  ansible.builtin.get_url:
+    url: "{{ atc_readsb_install_url }}"
+    dest: /usr/local/src/readsb-install.sh
+    mode: "0755"
+  environment:
+    https_proxy: "{{ inet_proxy }}"
+    http_proxy: "{{ inet_proxy }}"
+  when: atc_readsb_install_method == "upstream_script"
+
+- name: Install readsb from upstream (builds + installs; idempotent via creates)
+  ansible.builtin.command: bash /usr/local/src/readsb-install.sh
+  args:
+    creates: /usr/bin/readsb
+  environment:
+    https_proxy: "{{ inet_proxy }}"
+    http_proxy: "{{ inet_proxy }}"
+    DEBIAN_FRONTEND: noninteractive
+  when: atc_readsb_install_method == "upstream_script"
+
+# --- AIR-GAP: pinned .deb from Nexus ng_raw ---------------------------------
+- name: Stage the readsb .deb from Nexus ng_raw (air-gap)
+  ansible.builtin.get_url:
+    url: "{{ atc_readsb_deb_url }}"
+    dest: /tmp/readsb.deb
+    validate_certs: false
+  environment:
+    https_proxy: "{{ inet_proxy }}"
+  when:
+    - atc_readsb_install_method == "nexus_deb"
+    - atc_readsb_deb_url | length > 0
+  register: _readsb_deb
+
+- name: Install readsb from the .deb (air-gap)
+  ansible.builtin.apt:
+    deb: /tmp/readsb.deb
+  when:
+    - atc_readsb_install_method == "nexus_deb"
+    - _readsb_deb is defined and _readsb_deb is changed
+
+# --- Config (always Ansible-owned) ------------------------------------------
+- name: Write /etc/default/readsb (network-only, pull the local feed)
+  ansible.builtin.template:
+    src: readsb.default.j2
+    dest: /etc/default/readsb
+    mode: "0644"
+  notify: Restart readsb
+
+- name: Ensure readsb is enabled + running
+  ansible.builtin.systemd:
+    name: readsb
+    enabled: true
+    state: started
+  failed_when: false

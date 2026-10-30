@@ -84,19 +84,46 @@
     ValueType: DWord
     Ensure: Present
 
-- name: Link GPO to OU
-  ansible.windows.win_dsc:
-    resource_name: GPLink
-    GPOName: "Mapped Network Drives"
-    # Build the domain DN from `domain_name` so it works for any depth:
-    #   blackstone.mil       -> DC=blackstone,DC=mil
-    #   fops.blackstone.mil  -> DC=fops,DC=blackstone,DC=mil
-    # Old form (`DC={{ short_domain_name }},DC={{ domain_tld_name }}`) only
-    # supported a single-label subdomain + single-label TLD -- fops.yml
-    # doesn't set `domain_tld_name` because there's no clean single-label
-    # value for a child domain. See UPSTREAM_FIXES.md 2026-07-08.
-    Path: "DC={{ domain_name.split('.') | join(',DC=') }}"
-    Enabled: "Yes"
-    Enforced: "No"
-    Order: 1
-    Ensure: Present
+# New-GPLink directly rather than the DSC GPLink resource, because the DSC
+# resource takes no -Domain or -Server and therefore resolves the target DN
+# through the DC locator. On a child DC that lookup fails and the resource
+# reports "The specified domain either does not exist or could not be
+# contacted. (HRESULT 0x8007054B)" -- while every GroupPolicy and
+# GPRegistryValue task above it succeeds on the same host in the same run.
+# GPMC is fine; it is the locator call inside New-GPLink that is not.
+#
+# The 2026-07-08 entry recorded this as a fresh-child-DC warm-up quirk to be
+# retried after 15 minutes. That is disproven: on 2026-09-18 it failed on
+# attempts 2 AND 3 of a deploy, the last of them roughly six hours in.
+#
+# -Domain and -Server both pinned to this host removes the locator from the
+# path: the DC being configured is the DC being asked.
+#
+# The domain DN is built from `domain_name` so it works at any depth:
+#   blackstone.mil       -> DC=blackstone,DC=mil
+#   fops.blackstone.mil  -> DC=fops,DC=blackstone,DC=mil
+# The old `DC={{ short_domain_name }},DC={{ domain_tld_name }}` form only
+# supported a single-label subdomain plus single-label TLD, and fops.yml sets
+# no `domain_tld_name` because a child domain has no clean single-label value.
+- name: Link GPO to the domain root
+  ansible.windows.win_shell: |
+    $ErrorActionPreference = 'Stop'
+    Import-Module GroupPolicy
+    $gpo    = "Mapped Network Drives"
+    $target = "DC={{ domain_name.split('.') | join(',DC=') }}"
+    $dom    = "{{ domain_name }}"
+    $srv    = "$($env:COMPUTERNAME).$dom"
+    $inh = Get-GPInheritance -Target $target -Domain $dom -Server $srv
+    if ($inh.GpoLinks | Where-Object { $_.DisplayName -eq $gpo }) {
+      Write-Output "GPLINK_PRESENT target=$target server=$srv"
+    } else {
+      New-GPLink -Name $gpo -Target $target -Domain $dom -Server $srv `
+                 -LinkEnabled Yes -Enforced No -Order 1 | Out-Null
+      Write-Output "GPLINK_CREATED target=$target server=$srv"
+    }
+  register: gplink
+  changed_when: "'GPLINK_CREATED' in gplink.stdout"
+
+- name: Report the GPO link state
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: {{ gplink.stdout | trim }}"

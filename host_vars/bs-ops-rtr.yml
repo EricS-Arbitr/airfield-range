@@ -54,3 +54,40 @@ extra_static_routes_remove:
     next_hop: "172.31.6.1"           # own eth3 IP (FOU)
 
 remove_vyos_bgp: true
+
+# =========================================================================
+# Security Onion GRE mirror — pairs with soc-sensor-fops
+# =========================================================================
+# Added 2026-08-11 with the SO blueprint additions. vyos_mirror builds a GRE
+# tunnel to the sensor and installs `tc mirred` rules that copy each source
+# interface into it. Suricata + Zeek on the sensor bind to tun0.
+#
+# ** VERIFY INTERFACE NUMBERING ON THE LIVE DEVICE FIRST. ** Blueprint NIC
+# order did not match VyOS ethN on the so-ansible dev range
+# (PORTING_GUIDE 9.9). `show interfaces` on bs-ops-rtr and reconcile before
+# deploying. The addresses below are drafted from this file's own
+# network_interfaces, which is what the blueprint SHOULD produce.
+#
+# eth0 172.31.1.10 (from core-rtr) and eth4 172.31.1.13 (to ops-fw) are transit /30s -- deliberately NOT mirrored. Mirroring the transit that
+# carries the tunnel is how you build a feedback loop.
+vyos_mirror_source_interfaces:
+  - eth1   # 172.31.3.1  Flight-Ops-Services
+  - eth2   # 172.31.5.1  Flight-Control-Center
+  - eth3   # 172.31.6.1  Flight-Ops-Users
+
+# ** DRAFT — VERIFY. ** Must be an address on this router with a route to
+# 172.31.7.0/24 (the sensors sit behind bs-sec-rtr behind bs-ops-fw). This
+# value MUST equal so_gre_remote_underlay in host_vars/soc-sensor-fops.yml exactly;
+# a mismatch gives a tunnel that is UP with zero RX forever.
+vyos_gre_source_ip: "172.31.1.13"
+vyos_gre_remote_ip: "172.31.7.22"      # soc-sensor-fops prod IP
+vyos_gre_local_addr: "10.100.2.1"
+vyos_gre_remote_addr: "10.100.2.2"
+vyos_gre_tunnel_prefix: 30
+
+# Do NOT mirror management-plane traffic. Where a mgmt IP shares a data-plane
+# interface, a bare matchall mirror copies every Ansible SSH/WinRM session into
+# the sensor -- out-of-band traffic that is invisible in-scenario and pollutes
+# detections. Rendered as tc `action pass` filters ahead of the catch-all.
+vyos_mirror_exclude_cidrs:
+  - "10.255.240.0/20"

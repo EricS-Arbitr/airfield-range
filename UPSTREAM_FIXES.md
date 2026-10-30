@@ -10,9 +10,1113 @@ Severity key:
 - **enhancement** — works but could be more robust or ergonomic
 - **platform** — SimSpace platform-side issue, not Ansible
 
-Format: `## YYYY-MM-DD · <severity> · <target path / heading>` followed by Symptom → Detection (if non-obvious) → Fix (upstream) → Workaround (overlay).
+Format: `## YYYY-MM-DD · severity · short title`, then **Symptom** → **Root cause** → **Fix**.
+
+---
+
+## 2026-10-29 · bug · ATC roles build a venv without ensuring python3-venv
+
+**Symptom.** Cold airfield-range deploy (ATC subsystem incorporated) failed on attempt 3 at `atc_inject : Create the shared ATC venv` on `atc-radar`: `python3 -m venv /opt/atc/venv` exited 1 with *"ensurepip is not available … apt install python3.10-venv"*. The host dropped at that task, so `atc_core` (readsb + FDP) never ran. Attempts 1–2 had failed earlier on an unrelated, self-clearing `so_fleet_integrations` timing gate (`pfsense-bs-ops-fw` collected nothing until pfSense logs arrived + parsed), which is why `atc_inject` was only reached on attempt 3.
+
+**Root cause.** All three venv-using ATC roles (`atc_inject`, `atc_core/fdp`, `atc_weather`) run `python3 -m venv {{ atc_venv }}` with no prior `python3-venv` install. On the dev range this worked because the dev `common` role installed `python3-venv` + `python3-pip` as base packages. That `common` role was intentionally dropped in the airfield port (airfield has its own `common`, which does not install them), so the Ubuntu 22.04 ATC image — which ships python3 without ensurepip — had no way to build a venv. Only `atc-radar` surfaced it first (atc_inject runs ahead of everything); the gap existed on every venv-using ATC host.
+
+**Fix (airfield roles, self-contained).** Added an idempotent apt prereq (`python3-venv`, `python3-pip`, `update_cache: true`, 3×5 s retry for proxy flakiness) immediately before the `python3 -m venv` task in `roles/atc_inject/tasks/main.yml`, `roles/atc_core/tasks/fdp.yml`, and `roles/atc_weather/tasks/main.yml`. apt reaches the archive through the `platform_proxy` apt config (`/etc/apt/apt.conf.d/95platform-proxy`), which `atc_playbook.yml` applies first. Kept in the roles rather than re-adding a `common` dependency so each role stays runnable standalone. Recover the already-deployed range out-of-band with `ansible-playbook atc_playbook.yml` after the controller pulls the refreshed tarball.
+
+**Follow-up (same day, surfaced on the recovery run).** On a range whose first deploy already failed at the venv step, `python3 -m venv` had created `{{ atc_venv }}/bin/python` and *then* died at ensurepip — leaving a pip-less partial venv. The original `creates: {{ atc_venv }}/bin/python` guard treated that as complete and skipped the rebuild, so `ansible.builtin.pip` tried to *create* the venv itself and failed with `Failed to find required executable "virtualenv"` (the module's default `virtualenv_command`, and that tool isn't installed). Hardened all three venv tasks to guard on `bin/pip` (the marker of a usable venv) with `--clear` so a partial env is rebuilt cleanly while a complete one is left untouched, and set `virtualenv_command: "python3 -m venv"` on the pip tasks so the module never shells out to the absent `virtualenv`. A fresh cold build never hits this; it only bites a re-run over a half-built venv.
+
+---
+
+## 2026-10-22 · bug · roles/dns — record writes have no retry while a child DC's DNS partition settles
+
+**Symptom.** A cold airfield-range build failed after all 3 deploy attempts. `fops-dc01` (the `fops.blackstone.mil` child DC) failed in the `dns` play — attempt 1 at the DomainDnsZones partition gate, attempts 2 and 3 at `dns : Manage Internal DNS Records`. By attempt 3 only the last 3 records in the batch (`fops-app01/02/03`) still failed to add. Because the host dropped at the dns task, it never reached the endpoint phase, never got its Elastic Agent, and the run failed ~1 h later at the Fleet coverage gate on `soc-so-manager` ("Missing: fops-dc01").
+
+**Root cause.** On a freshly promoted child DC the DomainDnsZones application partition enlists late. The existing partition gate (`site.yml` `dns` play pre_tasks) handles that — it passed on attempts 2/3. But once the partition is enlisted, the DNS server still needs a few more seconds to accept writes against it, and `Manage Internal DNS Records` had **no `until`/`retries`** (the `Create Forward/Reverse Lookup Zones` tasks right above it already retry 6×15s). So a tail-of-batch write that hit the server mid-stabilization failed the whole looped task, dropping the host from every later play. Diagnostics taken after the run confirmed the DC was fully healthy — `repadmin /showrepl` all successful (incl. `DC=DomainDnsZones,DC=fops,…`), partition State 0, zone `IsDsIntegrated`/Domain-scoped — the 3 records were simply never written.
+
+**Fix (overlay, both airfield repos).** `roles/dns/tasks/main.yml` — add `register: dns_record` + `until: dns_record is succeeded` + `retries: 6` + `delay: 15` to `Manage Internal DNS Records`, matching the zone tasks above it. `until` on a looped task retries each item independently, so one slow record rides out the ~90 s convergence window without failing its siblings or the host. Applied to `airfield-range` and `airfield-stacked` (identical-base `dns` role). The already-deployed range is recovered out-of-band with `ansible-playbook site.yml --limit fops-dc01,soc-so-manager`.
+
+---
+
+## 2026-09-22 · bug · reboot ceilings of 600s fail members on a cold build
+
+**Symptom.** Two members fail outright in attempt 1, then surface hours later at the Fleet coverage gate:
+
+```
+[FAILED] strip_apipa : Reboot if autoconfig setting changed
+      hosts: fops-ops08, fops-ops05
+      msg  : Timed out waiting for last boot time check (timeout=600.0)
+```
+
+**Root cause.** `win_reboot` defaults to `reboot_timeout: 600`, and several tasks either set it explicitly or inherited it. Ten minutes is not a cold Windows boot on freshly provisioned hardware. The reboot itself works; the task stops waiting.
+
+**Previously half-fixed, and the half that was missed is the point.** The shared `Reboot Windows` handler went 600 → 1800 on 2026-09-19 after both DCs failed the same way. That change came with an audit of every `win_reboot` in the repo — which saw `strip_apipa` at 600 and concluded only domain controllers boot slowly enough to matter. Members are not fine. Three days later two of them failed on exactly that value.
+
+**Fix.** Every `win_reboot` in both repos is now 1800, explicitly, including the two that were relying on the default:
+
+| | |
+|---|---|
+| airfield | `strip_apipa`, `domain_member_retry/join_pass`, `common/hostname` (was implicit) |
+| ss-pp-stacked | `strip_apipa`, `splunk-forwarder/windows` (was implicit) |
+
+Already at 1800: `handlers`, `dcpromo`.
+
+**Why a generous ceiling is nearly free.** `win_reboot` returns as soon as the host answers, so a machine back in 90 seconds costs 90 seconds regardless of the setting. The ceiling is spent only on hosts that are genuinely slow — which are precisely the hosts a short one converts into failures. The asymmetry is the whole argument, and it applies to every timeout of this shape.
+
+---
+
+## 2026-09-21 · bug · roles/domain_member_retry — the member is fine, the path is not
+
+**Symptom.** One fops member per cold build fails all three join passes:
+
+```
+fops-ops01 did not join fops.blackstone.mil in 3 passes.
+Last locator probe: DCLOCATOR_NOT_READY no-srv-records-for-fops.blackstone.mil
+  dns=[Ethernet1=172.31.3.11/172.31.3.12]   <- correct: fops-dc01, fops-dc02
+  ip=[172.31.6.11,10.255.240.177]           <- correct: range + mgmt
+```
+
+**What is now ruled out.** Both ends were provably healthy. The DC-locator play added the same day printed, *before* the join plays ran:
+
+```
+fops-dc01 (fops.blackstone.mil): DCSRV_READY fops-dc01.fops.blackstone.mil
+```
+
+So the records existed and were resolvable from the DC. The member's resolvers and addresses were correct, and passes 2 and 3 re-applied both from `network_interfaces` and changed nothing, because nothing was wrong with them. Configuration is right at both ends. What is left is the path between them.
+
+**Root cause (strongly indicated, not yet proven).** The members are on `172.31.5.x` / `172.31.6.x`; the DCs are on `172.31.3.x`. Every lookup has to route. `roles/init` documents an impostor MAC that answers ARP for the gateway address on whatever segment it appears on, **answers ICMP** so the gateway looks healthy, and — its words — *"presents as DNS failures, domain joins failing, Fleet enrolment failing."* That is this failure exactly.
+
+Two things make a host reach the join plays unpinned despite init running the repair: init's own notes record entries reverting to the impostor MAC inside a single run with no reboot, and the task fails **open** when it cannot prove a probe target is off-subnet, which is correct behaviour — an unpinned gateway is the status quo, a wrongly pinned one is an isolated host.
+
+**Fix.** The ARP repair is extracted to `roles/init/tasks/gw_arp.yml` and `domain_member_retry` includes it on join passes 2 and 3, alongside the IP and DNS re-application already there. It is idempotent; init runs the identical logic on every host every build.
+
+**And the probe now settles it either way.** On `no-srv-records` it opens TCP 53 to each configured resolver and reports `resolver53=[172.31.3.11=UNREACHABLE ...]` or `=open`. Those are different faults with different fixes and have been indistinguishable until now: a resolver that cannot be reached is a routing or ARP problem, one that answers with no records is a DC problem. The next occurrence says which.
+
+**Prior diagnoses of this failure, both wrong.** 2026-09-18 attributed it to herd load against a single DC; 2026-09-20 to the member's own network configuration. Each was disproved by the evidence the previous fix added — which is the only reason the search has narrowed rather than circled.
+
+---
+
+## YYYY-MM-DD · <severity> · <target path / heading>` followed by Symptom → Detection (if non-obvious) → Fix (upstream) → Workaround (overlay).
+
+---
+
+## 2026-09-20 · bug · site.yml — the DomainDnsZones partition is absent, not late
+
+**Symptom.** The child PDC fails the partition gate on every cold build, regardless of how long the gate waits:
+
+```
+Probe said: DNSPART_NOT_READY zone ds=True scope=Legacy | partition-query-failed:
+Failed to get Directory Partition information for DomainDnsZones.fops.blackstone.mil
+on server FOPS-DC01.
+```
+
+**Root cause.** `Failed to get Directory Partition information` is the partition being **absent**, not merely un-enlisted on this server. The built-in DNS application partitions are supposed to be created during promotion and, for the child domain on this platform, are not. The zone therefore lands at `Legacy` scope in the domain NC, and `win_dns_zone` with `replication: domain` has nowhere to move it.
+
+**Waiting does not work, and this was established the expensive way.** The ceiling was raised from 600s to 1200s and then to 2400s. The 2400s run cost 35 minutes of extra wall clock and failed identically. A state that never changes does not yield to a longer poll — the number was the wrong thing to tune, and two builds were spent learning it.
+
+**Fix (upstream).** Promotion should create the built-in partitions. Where it does not, create them rather than wait.
+
+**Workaround (overlay).** The gate probes for five minutes, then runs `dnscmd /CreateBuiltinDirectoryPartitions /Domain`, restarts the DNS Server service so it re-enumerates its partitions, and re-probes. `dnscmd` and not a cmdlet because there is no cmdlet for the **built-in** partitions — `Add-DnsServerDirectoryPartition` creates custom ones. The failure message now prints the before, the dnscmd output and the after, and says plainly that waiting longer will not help.
+
+---
+
+## 2026-09-20 · gap · site.yml — nothing made the DCs advertise themselves before the joins
+
+**Symptom.** Two fops members per build fail all three join passes. Their configuration is provably correct:
+
+```
+DCLOCATOR_NOT_READY no-srv-records-for-fops.blackstone.mil
+dns=[Ethernet1=172.31.3.11/172.31.3.12]      <- fops-dc01, fops-dc02: correct
+ip=[172.31.5.82,10.255.240.144]              <- range + mgmt: correct
+```
+
+**Root cause.** The records they were looking for did not exist. No play ever forced or verified DC locator-record registration; every join ran on the assumption that the DCs had advertised themselves, and on a fresh build that assumption is sometimes false.
+
+**This invalidates the previous day's fix.** The 2026-09-20 repair added to `domain_member_retry` re-applies a member's declared IP and DNS on passes 2 and 3. It fired on both failing hosts, changed nothing — because nothing was wrong with them — and they failed anyway. Re-applying correct config cannot conjure a missing SRV record. The repair is kept: it is cheap, scoped to the failure path, and covers a real fault shape. But it was aimed at the wrong host, and only the probe output added the same day made that visible.
+
+**Fix.** A play between the DNS forwarders and the join plays: `nltest /dsregdns` on each PDC to force immediate registration rather than waiting for the Netlogon timer, then `Resolve-DnsName -Type SRV _ldap._tcp.dc._msdcs.<domain>` with `until:`/40×15s to prove the records actually resolve. Forcing registration and having it succeed are different claims, so the gate tests the second one.
+
+Failing here costs one task. Failing later cost fifteen members three join passes each, discovering the same fact one at a time.
+
+---
+
+## 2026-09-20 · note · airfield deploys clean — 86 hosts, zero failures
+
+First fully successful cold build since the Splunk removal. Both domains promoted, users created, all four DCs enrolled in Fleet, every Fleet integration reporting data. Three attempts, 7h 55m wall clock, attempt 3 clean in 58m.
+
+Attempts 1 and 2 still failed, for the causes below.
+
+---
+
+## 2026-09-20 · bug · site.yml dns gate — ten minutes is not enough for a new child domain
+
+**Symptom.** The forest root builds; the child PDC times out on the partition gate:
+
+```
+TASK [Fail if the DomainDnsZones partition never enlisted]
+fops-dc01 did not enlist the DNS application partition
+DomainDnsZones.fops.blackstone.mil after 600s.
+Probe said: DNSPART_NOT_READY zone ds=True scope=Legacy
+```
+
+**Root cause.** Not the gate logic — the gate was right. `scope=Legacy` means the zone is AD-integrated but still stored in the domain NC rather than an application partition, which is where a child-domain zone lands when DNS creates it before `DomainDnsZones.<child>` exists. `win_dns_zone` with `replication: domain` then has nowhere to move it to, which is the 2026-09-18 failure this gate was built to prevent.
+
+The gate correctly refused to proceed. Ten minutes was simply short: the partition was present by the next attempt.
+
+**Fix.** `dns_partition_retries` 40 → 160, a 40-minute ceiling.
+
+The number is chosen against uncertainty, not against a measurement: the partition was absent at ten minutes and present by the next attempt, which began 5h27m later, so all we actually know is that the true figure lies somewhere in between. The asymmetry is what makes a generous value cheap. This is a **poll, not a sleep** — the probe runs immediately and again every 15s until the partition appears, then the gate exits, so a child DC ready in 30 seconds costs 30 seconds regardless of the ceiling. The only run that pays the full 40 minutes is one where the partition never arrives, and that run was going to fail anyway; it now fails having waited long enough for the failure to mean something.
+
+The gate's failure message computes the figure from the variable rather than hardcoding it, so the two cannot drift apart.
+
+---
+
+## 2026-09-20 · bug · roles/domain_member_retry — the failure named the wrong host
+
+**Symptom.**
+
+```
+TASK [domain_member_retry : Fail if bs-hq01 never joined blackstone.mil]
+fatal: [bs-supply01]: FAILED!
+```
+
+The task name says `bs-hq01`. The host that failed is `bs-supply01`.
+
+**Root cause.** The task name contained `{{ inventory_hostname }}`. Ansible renders a task name once per play, not once per host, so it froze on whichever host templated it first. A failure banner that names the wrong machine sends you to the wrong machine.
+
+**Fix.** The name no longer names a host. The `msg` body still does, where it renders per-host and is correct.
+
+---
+
+## 2026-09-20 · gap · roles/domain_member_retry — the locator probe said what, not why
+
+**Symptom.** `bs-supply01` failed all three join passes:
+
+```
+Last locator probe: DCLOCATOR_NOT_READY no-srv-records-for-blackstone.mil
+```
+
+Fifteen minutes of locator waiting across three passes and the SRV records never resolved. 28 of 29 hosts in the same play joined normally.
+
+**What this tells us.** The 2026-09-18 diagnosis of this failure mode was herd load against a single DC. That was wrong, or at least not the whole story: this host could not resolve the locator records at all, which is a DNS fault on the host rather than a busy DC. The probe added on 2026-09-18 is what made the difference visible — the old blind join could not have distinguished them.
+
+**Gap.** The probe named the symptom and nothing about the cause, so the next step was still a guess.
+
+**Fix, part one — evidence.** On `no-srv-records` the probe now also reports the host's configured DNS servers per interface and its IPv4 addresses, so a host pointed at the wrong resolver or holding no production address says so in the failure itself.
+
+**Fix, part two — repair.** Passes 2 and 3 now re-assert the network configuration the host declares in `network_interfaces` before probing again: the IPv4 addresses and the DNS servers, via the same two DSC resources `roles/common` uses, followed by a resolver-cache flush. A negative SRV lookup caches like any other, so without the flush the probe can keep returning the pre-repair answer.
+
+This is deliberately on the failure path only. A host that joins on pass 1 never runs any of it, and the 28 hosts that were always fine pay nothing.
+
+It repairs both shapes of the fault with one action, which matters because the evidence does not distinguish them: a production NIC that never took its static address cannot reach a DNS server at all, and one holding the wrong resolvers cannot resolve — and from the locator's side those look identical. DSC changes only what does not match, so re-applying correct config is a no-op.
+
+**A correction to the record.** The 2026-09-18 entry attributed this failure mode to herd load against a single DC, and an earlier note here claimed nothing in the playbook sets member DNS. Both are wrong. `roles/common` applies IP, gateway and DNS from `network_interfaces` via `xIPAddress` / `xDNSServerAddress` long before the join plays — it simply does not use `Set-DnsClientServerAddress`, which is what a grep for the cmdlet missed. The fault is that the config does not survive or does not apply on one random host per build, not that it was never set.
+
+---
+
+## 2026-09-19 · bug · roles/create_users — waits for LDAP, then uses ADWS
+
+**Symptom.** On a freshly promoted child DC, every `Create Users` item fails:
+
+```
+failed: [fops-dc01] (item={'name': 'simspace', ...}) => {"msg": "Unhandled exception while
+executing module: Unable to find a default server with Active Directory Web Services running."}
+```
+
+Thirteen items, thirteen failures, and the host drops out of every play below — including Fleet enrollment, so the deploy dies much later at the Fleet coverage gate naming a host whose real problem was hours upstream.
+
+**Root cause, part one — the gate tests the wrong service.** The role opens with a wait on `127.0.0.1:389`. Everything below it talks to **ADWS**, not LDAP: `microsoft.ad.user` and `microsoft.ad.group` both go through the AD PowerShell stack, as do the `Get-/Set-ADDefaultDomainPasswordPolicy` calls. ADWS starts *after* AD DS, so port 389 answering proves something true and irrelevant. Same defect shape as 2026-09-03.
+
+**Root cause, part two — the modules ask the locator for a DC.** `microsoft.ad.user` and `microsoft.ad.group` with no `domain_server` ask the DC locator for a default server. A freshly promoted DC cannot reliably locate *itself*. The role already knew this: the password-policy tasks pin `-Server $env:COMPUTERNAME` with a comment explaining exactly why (2026-07-14). The module tasks never got the same treatment.
+
+**Fix (upstream).** Gate on ADWS, and pin every AD call to the DC the play is running on.
+
+**Workaround (overlay).** A `Get-ADDomain -Server $env:COMPUTERNAME` probe with `until:`/40×15s after the LDAP wait, plus a `fail` task naming what to check. `$env:COMPUTERNAME` is then captured once and passed as `domain_server` to all four `microsoft.ad.user` / `microsoft.ad.group` tasks, matching what the shell tasks already do.
+
+---
+
+## 2026-09-19 · bug · roles/handlers — reboot ceiling too short for domain controllers
+
+**Symptom.** Two DCs fail out of a run having rebooted perfectly well:
+
+```
+fatal: [bs-dc01]: FAILED! => {"changed": true, "elapsed": 608,
+"msg": "Timed out waiting for last boot time check (timeout=600.0)", "rebooted": true}
+```
+
+`"rebooted": true` — the reboot worked. The handler simply stopped waiting.
+
+**Root cause.** The shared `Reboot Windows` handler used `reboot_timeout: 600`. A member workstation is back in two or three minutes. A domain controller on its first boot after promotion has to bring up NTDS, Netlogon, ADWS and SYSVOL replication before it answers, and routinely takes longer than ten minutes.
+
+**Fix.** 1800. This is a ceiling, not a delay — a host that returns in 90 seconds still takes 90 seconds — so raising it costs nothing and removes a whole class of false failure. The pre-promotion reboot in `roles/dcpromo` is raised to match, since a host that has just installed AD-Domain-Services may run servicing on the way back up.
+
+---
+
+## 2026-09-19 · bug · roles/dcpromo — the child-DC service probe ran on the forest root
+
+**Symptom.** The forest root goes UNREACHABLE mid-play and leaves the deploy:
+
+```
+TASK [dcpromo : Confirm AD services are actually running on the new child DC]
+fatal: [bs-dc01]: UNREACHABLE! => {"censored": "... no_log: true ..."}
+```
+
+**Root cause.** The task sets `ansible_user` to `<SHORTDOMAIN>\Administrator`, which is correct for a promoted child DC and wrong for the forest root. `microsoft.ad.domain` notifies the reboot handler, and handlers do not run until the END of the play — so within the play the forest root is promoted but **not rebooted**: local SAM gone, domain not yet serving. Connecting as `BLACKSTONE\Administrator` in that window returns UNREACHABLE.
+
+The task had no `when:` at all, so it ran on both promotion paths despite being named, credentialed and written for one.
+
+Compounding it: `until:` cannot retry an UNREACHABLE result and `failed_when: false` does not catch one, so the host left the play silently and the gate below it never got to report anything.
+
+**Fix.** Guarded to the child path (`parent_domain_name is defined`, promotion not skipped) and given `ignore_unreachable: true` so an unreachable child DC is reported by the gate rather than vanishing.
+
+---
+
+## 2026-09-19 · bug · roles/dcpromo — microsoft.ad.domain installs AD-DS and promotes in the same task
+
+**Symptom.** The forest root fails on every deploy.sh attempt, in minutes, and the range dies with it:
+
+```
+TASK [dcpromo : Create forest root domain (this host becomes first DC)]
+fatal: [bs-dc01]: FAILED! => {"changed": false, "msg": "Failed to install ADDSForest,
+DCPromo exited with 15: Role change is in progress or this computer needs to be
+restarted.\r\n", "reboot_required": true}
+```
+
+Three attempts, ~45 minutes total. With the forest root gone, nothing downstream of AD can build.
+
+**Root cause.** `microsoft.ad.domain` auto-installs the AD-Domain-Services feature when it is missing, then runs DCPromo **in the same task**. DCPromo meets the role change the module itself just created and exits 15. The `reboot_required: true` in the response is the module reporting that it needed a reboot partway through and had no way to take one.
+
+The child-domain path never hit this: it installs the feature explicitly first, then reboots if required, because `Install-ADDSDomain` needs the ADDSDeployment module on disk before it can be called at all. The forest-root path relied on the auto-install and had no equivalent step.
+
+**Why it surfaced now.** Invisible for as long as the base image shipped AD-Domain-Services already present — the module had nothing to install, so nothing went pending and promotion worked. The first image without it took the forest root down immediately.
+
+**Detection note — what does NOT work.** Probing for a pending reboot before the promotion task finds a clean host, because the pending state does not exist until the task runs. Measured twice on 2026-09-19: `win_feature` `reboot_required` reports were false and no pending-reboot registry key was present, while DCPromo went on refusing. Worth knowing before anyone tries that again. (If you do check those keys for other reasons: the Server Manager one is `HKLM:\SOFTWARE\Microsoft\ServerManager\CurrentRebootAttemps`, misspelled by Microsoft and in a different hive from the obvious guess.)
+
+**Fix (upstream).** Do not let `microsoft.ad.domain` install the feature. Install AD-Domain-Services as its own task, reboot if required, then promote.
+
+**Workaround (overlay).** `Install AD-Domain-Services + management tools` now runs for **both** paths, ahead of either promotion, with its `parent_domain_name is defined` guard removed. A single reboot task follows it, firing when any feature install reported `reboot_required` or when the host is not yet a DC (`Win32_ComputerSystem.DomainRole` below 4). Hosts that are already DCs skip it, so re-deploys pay nothing.
+
+---
+
+## 2026-09-18 · bug · roles/mapped_drive — DSC GPLink has no -Domain/-Server, so it depends on the DC locator
+
+**Supersedes the 2026-07-08 entry**, whose root-cause theory was wrong.
+
+**Symptom.** On the child PDC only, every task in the role succeeds and the last one fails:
+
+```
+TASK [mapped_drive : Link GPO to OU]
+fatal: [fops-dc01]: FAILED! => {"msg": "Failed to invoke DSC Set method: The specified
+domain either does not exist or could not be contacted. (Exception from HRESULT: 0x8007054B)"}
+```
+
+`GroupPolicy` creates the GPO and eight `GPRegistryValue` tasks set its values, all on the same host, in the same play, over the same connection. Only `GPLink` fails.
+
+**Detection.** It is wrapped in `block`/`rescue`, so it never appears as a deploy failure — the run is reported green with the GPO unlinked. Visible only by grepping the log for the task name.
+
+**Root cause.** `0x8007054B` is `ERROR_NO_SUCH_DOMAIN`. The DSC `GPLink` resource exposes no `-Domain` or `-Server` parameter, so `New-GPLink` resolves the target DN's domain through the DC locator. On a child DC whose primary DNS was pointed at the parent PDC for promotion, that lookup is the thing that fails — not RPC, not GPMI, and not warm-up. GPMC itself is demonstrably fine, because everything above it in the role works.
+
+**The 2026-07-08 theory is disproven.** That entry recorded this as a fresh-child-DC binding quirk curable by retrying "after fops-dc01 has been up for 15+ minutes". On 2026-09-18 it failed on attempts 2 **and** 3 of a deploy, the last roughly six hours in.
+
+**Fix (upstream).** Do not use the DSC GPLink resource against a domain the host may not be able to locate. Call `New-GPLink` with `-Domain` and `-Server` pinned.
+
+**Workaround (overlay).** The task is now a `win_shell` calling `Get-GPInheritance` / `New-GPLink` with both `-Domain` and `-Server` set to this host, which removes the locator from the path: the DC being configured is the DC being asked. Idempotency comes from checking `GpoLinks` for the GPO name rather than from DSC.
+
+**Verified on the running range**, from the shipped tarball: the task created the link on `fops-dc01` and, re-run, reported it present with `changed=0`; `bs-dc01` stayed `changed=0` throughout, confirming the already-working domain was unaffected.
+
+The `block`/`rescue` that wrapped this play in `site.yml` is **removed** — the fops play is now fatal, like the blackstone one. That wrapper existed so a failing link would not stop a deploy; what it actually did was hide the failure for two months while the run reported success. A convenience feature that silently does not exist is worse than one that stops the deploy and says so.
+
+---
+
+## 2026-09-18 · bug · roles/dcpromo — the AD-services probe reported the worst case as the best one
+
+**Symptom.** None. The probe passed on hosts where the services did not exist.
+
+**Root cause.** The probe counted services whose status was not Running:
+
+```powershell
+$svc = Get-Service ADWS, NTDS, Netlogon -ErrorAction SilentlyContinue
+Write-Output ([string](($svc | Where-Object Status -ne 'Running').Count))
+```
+
+When `Get-Service` found **nothing** — the services absent entirely, which is what a failed promotion actually looks like — `$svc` was null, the filtered count was `0`, and `0` was the healthy value. A host with no AD at all scored identically to a fully promoted DC.
+
+Combined with the duplicate-`when` defect logged above, the child-DC health gate was doubly inert: the condition was discarded, and the value it would have read was wrong.
+
+**Fix.** Name each service, distinguish MISSING from Stopped, and emit a marker rather than a count. Retries added because the probe runs immediately after a reboot, where sampling once turns a slow NTDS start into a failure.
+
+**Also fixed: the guard.** `Wait for the child DC to finish promoting and come back` and the gate both required `dcpromo_child is changed`. The promotion task reboots from inside its own session, so it can return unreachable or failed rather than changed — and those are exactly the runs where waiting and checking matter. Both now use `is not skipped`.
+
+---
+
+## 2026-09-18 · gap · requirements.yml documented an install that deploy.sh cannot use
+
+**Symptom.** `ansible-playbook --syntax-check` fails with `couldn't resolve module/action 'pfsensible.core.pfsense_setup'` on a controller that deploys perfectly well.
+
+**Root cause.** Neither the documented command nor `deploy.sh` passed `-p`, so collections land in `~/.ansible/collections` — per-user. `/tmp/deploy-script.sh` runs `deploy.sh` from system cron **as root**, so the deploy's collections live in `/root/.ansible/collections`, invisible to anyone checking by hand as `simspace`. The documented command additionally said `sudo`, which meant a hand-install landed somewhere the *non-root* path could not see either. Both halves worked only by accident of which account ran last.
+
+**Fix.** Both `requirements.yml` and `deploy.sh` now install to `/usr/share/ansible/collections`, which is on the default search path for every user, with a fallback to the per-user default when that directory is not writable. `HTTPS_PROXY` is now overridable so the internal Nexus can take over without editing the script.
+
+---
+
+## 2026-09-18 · bug · roles/dcpromo — duplicate `when` silently deleted the AD-services gate
+
+**Symptom.** None visible. That is the problem.
+
+**Detection.** Ansible emits a construction warning on every run that loads the role:
+
+```
+[WARNING]: While constructing a mapping from roles/dcpromo/tasks/main.yml, line 290,
+column 3, found a duplicate dict key (when). Using last defined value only.
+```
+
+One line on stderr, in the middle of a 26,000-line deploy log. It had been printing for months.
+
+**Root cause.** The task carried two `when:` keys:
+
+```yaml
+- name: Fail if AD services did not come up on the new child DC
+  ansible.builtin.fail:
+    msg: |
+      AD services are not running on {{ inventory_hostname }} after promotion.
+  when: (child_dc_services.output[0] | default('9') | int) != 0
+  when:
+    - parent_domain_name is defined
+    - dcpromo_child is defined
+    - dcpromo_child is changed
+```
+
+YAML keeps the last key and discards the earlier one without complaint. The service condition — the entire reason the task exists — was never evaluated. The `Confirm AD services are actually running on the new child DC` probe immediately above it ran on every deploy and was read by nothing but the failure message.
+
+Both lines are right there in the file and both are individually correct, which is what makes this class of defect survive review.
+
+**Fix (upstream).** One `when:`, with the service condition as a fourth entry in the list.
+
+**Workaround (overlay).** Applied directly; the role is copied into this repo.
+
+**Prevention.** `verify_dup_keys.py`, wired into `build_tarball.sh` as a hard gate. `yaml.safe_load()` accepts duplicate keys silently, so neither `verify_shell_args.py` nor `verify_vars.py` could see this despite both parsing the file on every build. The new checker uses a loader that records duplicates instead of swallowing them, and was verified against the original defect rather than only against a clean tree.
+
+**Still open, deliberately not changed here.** The surviving guard requires `dcpromo_child is changed`. That task fires an in-session reboot, so it typically returns unreachable and `is changed` evaluates false — meaning the gate stays skipped in exactly the case where a half-promoted child DC most needs catching. Widening it could newly fail deploys that currently pass, so it is a separate decision rather than a drive-by.
+
+---
+
+## 2026-09-18 · bug · roles/dns — AD-integrated zone task races the child domain's DomainDnsZones partition
+
+**Symptom.** On a cold build, `dns : Create Forward Lookup Zones` fails on the child PDC:
+
+```
+TASK [dns : Create Forward Lookup Zones] ***************************************
+failed: [fops-dc01] (item=fops.blackstone.mil) => {"msg": "Failed to set properties on
+the zone fops.blackstone.mil: Failed to reset the directory partition for zone
+fops.blackstone.mil on server FOPS-DC01."}
+```
+
+The same task, unchanged, succeeds on every later attempt.
+
+**Detection.** Measured on a fresh airfield deploy 2026-09-18 (`/var/log/playbook_run.log`):
+
+```
+2867   failed: [fops-dc01] (item=fops.blackstone.mil)   <- attempt 1, 48 min in
+13886  ok:     [fops-dc01] (item=fops.blackstone.mil)   <- attempt 2
+17701  ok:     [fops-dc01] (item=fops.blackstone.mil)   <- attempt 3
+```
+
+**Root cause.** `Install-ADDSDomain` creates the child zone, and the role then re-scopes it with `replication: domain` → `Set-DnsServerPrimaryZone -ReplicationScope Domain`. The `DomainDnsZones.<child>` application partition is created and enlisted **asynchronously** after promotion. Until it exists, the re-scope has nowhere to put the zone and fails with that message.
+
+The pre-existing child-ADWS gate does not cover this. ADWS is a different subsystem and answers minutes earlier — a gate has to test what the step behind it needs, not something adjacent to it (same lesson as 2026-09-03).
+
+**Blast radius is the real cost.** A failed task ends the play for that host, so `fops-dc01` also dropped out of *every play below `dns`* — it received no `internal_dns_records`, never enrolled in Fleet, and the deploy failed 4 hours later at the Fleet coverage gate. Attempt 1 burned 4h 48m to fail on a race that resolves itself in minutes.
+
+**Fix (upstream).** The role should not assume a freshly promoted DC can host an AD-integrated zone. Either gate on partition readiness or make the zone task retriable.
+
+**Workaround (overlay).** Two layers:
+
+1. `pre_tasks` on the `dns` play probe readiness with `until:`/40×15s, accepting **either** signal — the zone already being AD-integrated at Domain scope (in which case `win_dns_zone` is a no-op and cannot fail), **or** `DomainDnsZones.<domain>` present at `State 0`. Two independent signals because the gate is fail-closed: one property name that reads differently on some image would otherwise stall a healthy range for ten minutes and then fail it. A dedicated `fail` task reports what the probe saw and what to check.
+2. `register`/`until: ... is succeeded`, 6×15s on both zone tasks in the role, absorbing the gap between "partition enlisted" and "DNS server accepts a re-scope against it".
+
+---
+
+## 2026-09-18 · bug · roles/domain_member_retry — joins blind, with no check that a DC is reachable
+
+**Symptom.** On a cold build, a minority of members fail to join while the majority succeed on the same pass with the same variables:
+
+```
+fatal: [bs-hq02]: FAILED! => {"msg": "Computer 'bs-hq02' failed to join domain
+'blackstone.mil' from its current workgroup 'WORKGROUP' with following error message:
+The specified domain either does not exist or could not be contacted."}
+```
+
+3 of 29 `members_blackstone` hosts on 2026-09-18. The reboot-and-retry recovered one; two never joined, failed the Fleet coverage gate, and failed the deploy.
+
+**Detection.** The 15-host `members_fops` play that ran immediately afterwards never entered the retry path at all (log 3428–3500). Same role, same credentials, fewer hosts.
+
+**Root cause.** Two compounding factors.
+
+*Concurrency.* Every member joins against a single DC — the second DC is promoted **after** both join plays — and `deploy.sh` runs 76 forks, so all 29 hit the DC locator simultaneously. "The specified domain either does not exist or could not be contacted" is what a member reports when the locator times out, not evidence of misconfiguration.
+
+*No precondition.* The role attempted the join blind: try, and on failure reboot and try once more. A blind attempt cannot distinguish "the DC is busy" from "the DC is wrong", so it spent its one retry on a reboot that fixed nothing.
+
+**Fix (upstream).** Probe before joining, and let a busy DC be waited for rather than failed on.
+
+**Workaround (overlay).** The role is restructured around a per-pass `join_pass.yml`, included `domain_join_passes` times (default 3), every task guarded by `when: not member_joined` so passes short-circuit the moment one lands:
+
+- **Locator preflight** before each pass — resolves `_ldap._tcp.dc._msdcs.<domain>` and opens TCP 389, 88 and 445 to an advertised DC, `until:`/20×15s. This is precisely what the join needs, so a pass here means the precondition holds rather than resembling it. `nltest` would be the obvious tool but is not guaranteed present on every client image, so the probe is pure PowerShell.
+- **Three passes instead of two**, with the reboot only from pass 2 on — rebooting before the first attempt would add ~5 minutes to every host on every deploy to fix a state that is almost never wrong.
+- **`wait_for` delegated to localhost replaces `pause`.** Identical wall clock, but `pause` bypasses the host loop and is unsupported under `strategy: free`; with it gone, the join plays can be switched to `free` without the crash documented in `site.yml` and in PowerPlant's 2026-07-03 entry.
+- **A `fail` task that names the last probe result**, distinguishing "no DC answered" (check DNS, SRV records, APIPA) from "DC answered but the join was refused" (check the credential and for a stale computer object).
+
+On a healthy range the preflight returns on its first try and costs nothing.
+
+---
+
+## 2026-09-17 · gap · build_tarball.sh had no free-form shell-argument check
+
+**Symptom.** Commit 5b91051 built and shipped cleanly with three odd-quote lines inside the gateway-ARP task's PowerShell comments. Those make the PLAY FAIL TO LOAD — not one task, the whole run, before any host is touched.
+
+**Root cause.** Ansible runs `split_args()` over free-form module arguments and counts quotes; it does not know PowerShell has comments. An apostrophe in `bs-file01's gateway`, or a quoted phrase opened on one line and closed on the next, is an unterminated string to it. The file remains valid YAML and `verify_vars.py` accepts it happily — which is the point: the tree was being validated with a parser weaker than the one that would reject it.
+
+**Detection.** Not here. `ss-pp-so` refused to build the identical text while airfield built it without a word. That repo has `verify_shell_args.py` wired into its tarball build and this one did not, so the same defect was fatal in one repo and invisible in the other.
+
+**Fix (overlay).** Copied `verify_shell_args.py` from ss-pp-so and wired it into `build_tarball.sh` as a HARD GATE ahead of the archive step, matching ss-pp-so. Verified by reintroducing the exact apostrophe from 5b91051: the build now refuses with `odd quote count at line 9` and exits non-zero, and succeeds again once reworded.
+
+Deliberately separate from `verify_vars.py` rather than folded into it: one validates variable references, the other validates that the play can be parsed at all, and they fail for different reasons.
+
+---
+
+---
+
+## 2026-09-17 · bug · init gateway-ARP repair pinned a black-hole MAC and isolated a host
+
+**Symptom.** A fresh deploy failed all three attempts on one host of 86. `bs-file01` could not reach Fleet on 8220, so the `elastic_agent` preflight failed it and no agent was ever installed. Its neighbour `bs-file02`, at the adjacent address in the same subnet with the same gateway, enrolled normally.
+
+**Detection.** Comparing the two hosts' gateway neighbour entries:
+
+```
+bs-file01: 172.31.2.1 -> 00-00-00-00-00-00  Permanent
+bs-file02: 172.31.2.1 -> 00-50-56-A8-E5-D7  Permanent
+```
+
+A Permanent entry holding the all-zeros MAC is a black hole that ARP can never re-learn past. **This was self-inflicted** — by the gateway-ARP repair ported from ss-pp-so on 2026-09-16, on its first cold-range run. It is strictly worse than the poisoning it exists to fix.
+
+**Root cause, two compounding defects.**
+
+1. *The validity test accepted a sentinel.* The guard was `if (-not $mac -or ($blocked -contains $mac))`. `00-00-00-00-00-00` is a non-empty string that is not on the blocklist, so it read as a real address. Windows returns exactly that MAC for an `Incomplete` neighbour — the state a failed re-probe leaves behind — so the script's own repair loop manufactures the value it then trusts.
+
+2. *The routing proof did not prove routing.* `Routes` pinged the host's first configured DNS server, on the stated assumption that DNS "is off-subnet in every range these roles serve". False here: hosts in the Services segment (172.31.2.0/24) have their DCs in that same segment, so the ping never crossed the gateway. And `if (-not $dns) { return $true }` returned SUCCESS when there was nothing to test with. A proof that passes when it cannot run is not a proof — which is also why the post-pin rollback failed to catch the bad pin.
+
+**Fix (overlay).**
+
+- `Usable()` requires a well-formed `xx-xx-xx-xx-xx-xx`, rejects all-zeros and broadcast, and rejects blocklisted MACs.
+- The probe target is verified to be genuinely off-subnet against the host's own addresses and prefixes, preferring `init_gw_probe_targets` (soc-syslog, soc-so-manager) over DNS. Subnet comparison right-shifts both operands by the host-bit count rather than building a mask with `[uint32]0xFFFFFFFF -shl n`, which PowerShell widens to int64 and gets wrong.
+- **If no off-subnet target exists, the task does not pin at all.** Failing closed: an unpinned gateway is the status quo, a wrongly pinned one is an isolated host.
+- A Permanent entry holding an unusable MAC is deleted at the start, so a host already damaged by the previous version heals itself on the next run.
+
+**Remediation for a host already affected.** `Remove-NetNeighbor -IPAddress <gw> -Confirm:$false`, then re-probe. The new task does this automatically.
+
+---
+
+---
+
+## 2026-09-16 · bug · so_fleet_integrations — the role creates and updates but never prunes
+
+**Symptom.** `pfsense-bs-edge-fw` attached successfully and collected nothing: 20 retries of `observer.hostname:bs-edge-fw` returned zero documents, failing the deploy. `pfsense-bs-ops-fw` passed on the same run.
+
+**Detection.** The symptom pointed at the firewall. It was not the firewall: `/var/log/remote/bs-edge-fw/syslog.log` held 873 `filterlog` lines out of 1552, so the device was logging, forwarding and reaching the collector normally. `syslog_source_ip_map` and `pfsense_interfaces` agreed on its sender address, and that address was in the relay's match list.
+
+**Root cause.** `elastic_fleet_integration_check` matches by NAME, so renaming an integration does not replace the old one — it leaves it attached and RUNNING. `pfsense-firewalls` (one integration covering both firewalls, udp/9001) was superseded by `pfsense-bs-edge-fw` on the same port. Both existed, both claimed udp/9001, and the survivor was the old one — which has no `add_fields` processor, so its documents carry no `observer.hostname` and the per-firewall query matched nothing. bs-ops-fw on udp/9002 had no competitor, which is why exactly one of the two passed.
+
+**Fix (overlay).** A prune step, `so_fleet_retired_integrations`, running BEFORE the attach. Order matters: when old and new bind the same listener port, leaving the old one in place means two inputs contend and the winner is arbitrary.
+
+Deliberately an EXPLICIT list rather than "delete anything not in so_fleet_integrations". The same agent policy also carries the mirrored base integrations (system, osquery_manager, endpoint) and whatever SO's own loader placed there; a prune-by-exclusion would eventually delete something it did not understand.
+
+**Wider point.** Renaming an integration is a destructive operation dressed as a rename, and it is silent until something contends for a shared resource. Any future rename needs an entry in the retired list in the same commit.
+
+---
+
+---
+
+## 2026-09-16 · bug · pfSense Fleet relay — 29% of documents were grok failures, and none were attributable
+
+**Symptom.** `logs-pfsense.log-default` held 133 documents: 94 parsed cleanly as firewall events, 39 with `event.kind: pipeline_error` and `"Provided Grok expressions do not match field value: [<78>Sep 16 19:44:00 /usr/sbin/cron[59995]: (root) CMD (/usr/sbin/newsyslog)]"`. No document carried `observer.hostname`, so with two firewalls writing one dataset there was no way to tell which had logged what.
+
+**Detection.** Not by the deploy, which passed. The role's verify gate requires at least ONE document with `source.ip` present — a single genuine filterlog entry satisfies it while the rest of the dataset fills with errors. It asserts "something parsed", not "parsing is healthy". Found by dumping a document and reading it.
+
+**Root cause, part 1 — the errors.** The relay matched on source IP and therefore forwarded EVERYTHING those firewalls emit. The pfSense ingest pipeline parses `filterlog` entries; cron, newsyslog and sshd messages fail grok by construction.
+
+**Root cause, part 2 — the attribution.** pfSense omits the HOSTNAME field entirely (see 2026-06-30), so the message carries no identity. rsyslog works around that for the FILE store by mapping `$fromhost-ip` to a name — but the Fleet relay cannot, because `omfwd` to loopback means the Elastic agent sees `log.source.address: 127.0.0.1` for every message regardless of origin. Measured across all 133 documents. `observer.ingress.interface` is vmx0/vmx1 on both firewalls, so it does not disambiguate either.
+
+**Fix (overlay).** Two changes to `29-fleet-forward.conf.j2`:
+
+1. Relay only messages containing `filterlog`. Matching on `$rawmsg` rather than `$msg` deliberately — the messages are malformed RFC3164, so rsyslog's own field parsing of them is not something to depend on. The system messages are NOT lost; they continue to the per-host file rules in 30-remote.conf. Only the Fleet relay is narrowed.
+2. One relay port per firewall (`so_pfsense_syslog_ports`), with one integration per port stamping `observer.hostname` via a static `add_fields` processor. The PORT carries the identity that the message cannot. Nothing rewrites the message, so grok parsing is untouched — which matters, because re-rendering is exactly what broke parsing before `%rawmsg%` was adopted.
+
+Also made the role's verify query overridable (`verify_query`), so each firewall asserts `observer.hostname:<its own name>` rather than the default `<field>:*`. Without that, one silent firewall would pass on the other's data.
+
+**Fix (upstream).** pfSense/FreeBSD syslogd should insert the local hostname on remote forwards. Until then the port is the only reliable carrier of device identity through a loopback relay.
+
+---
+
+---
+
+## 2026-09-16 · bug · so_search / so_sensor — grid-join gate waited for a transition a healthy node never makes
+
+**Symptom (as seen on ss-pp-so 2026-09-03, latent here).** Sensors fail grid join with `attempts: 30, cmd: salt-key --list=unaccepted, stdout: "Unaccepted Keys:"` — an EMPTY list — while their keys sit in Accepted on the master and the nodes serve traffic with Zeek and Suricata green.
+
+**Root cause.** The gate polled `salt-key --list=unaccepted` and waited for the node's key to appear there. That is only correct on a FIRST install, where the key genuinely passes through Unaccepted on its way to Accepted. A node that is already a grid member never enters Unaccepted — it reconnects with the accepted key it already holds — so on any re-run against a working grid the gate waits five minutes for a transition that cannot happen, then fails a healthy node. The reboot above it carries no `when:` guard so it runs even when `so_setup_can_skip` is true, while the stale-key delete DOES carry that guard and is skipped: on a re-run the key is left in place ON PURPOSE, and the gate then demanded to see it somewhere it could never be.
+
+**Why airfield had not hit it.** The range has only ever installed SO fresh. The 2026-09-15/16 deploy reached the SO phases for the first time on its third run, so the key genuinely passed through Unaccepted. The first re-deploy over an existing grid would have failed healthy nodes.
+
+**Fix (overlay).** Wait for the END STATE — the master knows this key, in either list — and let `so-minion -o=add` accept it or no-op. The task below the gate already tolerated exactly this case (`"does not match any unaccepted keys" not in so_min_add.stdout`), so the gate was strictly stricter than the step it exists to protect. When a gate and the operation behind it disagree about what counts as ready, the gate is the one that is wrong.
+
+---
+
+## 2026-09-16 · platform · init — default-gateway ARP answered by an impostor MAC
+
+**Symptom.** Off-subnet routing silently fails on Windows hosts. Presents as DNS failures, domain joins failing and Fleet enrolment failing — never as an ARP problem.
+
+**Root cause.** One MAC, `00:50:56:98:7D:D7`, answers ARP for the default-gateway address on whatever segment it appears on. Observed on four subnets across three independent ranges, always Windows-only: Linux on the same wire ignores unsolicited ARP for an address it did not ask about (`arp_accept=0`) while Windows accepts the reply and overwrites its cache. **It answers ICMP**, so any check that stops at "can I reach my gateway" reports healthy while nothing routes off-subnet. It is in a different VMware MAC block (`:98:`) from every real router interface (`:A8:`), so only the platform vendor can remove the cause.
+
+**A flush alone is not enough.** The impostor re-announces — hosts repaired by a flush reverted within the same run, with no reboot. The entry must be PINNED as a Permanent neighbour, which a forged reply cannot overwrite.
+
+**Fix (overlay).** Ported from ss-pp-so: flush and re-probe until the learned MAC is not blocklisted, confirm an OFF-SUBNET host is reachable (the host's own DNS server — proving routing, not merely that the gateway answers), then write a Permanent neighbour entry, and roll it back if reachability breaks. Non-fatal: a host that cannot route fails a later precondition that reports it better than init can.
+
+---
+
+---
+
+## 2026-09-16 · bug · deploy.sh — a clean retry-scoped pass reported success over an unbuilt range
+
+**Symptom.** Attempt 1 failed, attempt 2 ran retry-scoped and passed, and deploy.sh exited 0 with `Success on attempt 2 (retry scope)`. The range had no domain joins and no Security Onion.
+
+**Root cause.** The retry file lists the hosts that FAILED. Running the playbook limited to them repairs those hosts, but every play whose targets were dropped when they failed still has not run. On airfield 2026-09-15, bs-dc01 — sole member of `[pdc_blackstone]` — failed on an ADWS race in attempt 1, so `Create Users`, `dns` and BOTH domain joins lost their target and the SO phases never started. Attempt 2 scoped to bs-dc01 fixed bs-dc01, passed, and the loop `break`ed on that success. A repair was mistaken for a deployment.
+
+**Detection.** Eric noticed the second attempt was suspiciously short, doubted that every play had run, and re-ran deploy.sh by hand — the full sweep then passed and built everything attempt 2 had skipped. Nothing in the script's output distinguished the two states.
+
+**Reachable only since 2026-09-15.** Before the `RETRY_FILE` path was fixed the `-f` guard never matched, so attempt 2 was always a full sweep and "success on attempt 2" genuinely meant a full sweep had passed. Correcting the retry path opened this hole behind it.
+
+**Fix (overlay).** The retry-scoped attempt is now a REPAIR PASS that never breaks out of the loop however well it goes. It reports `Repair pass clean — NOT declaring success`, clears the retry file and `continue`s, so attempt 3's full sweep is what actually confirms the range. This automates precisely the manual re-run that caught it.
+
+---
+
+---
+
+## 2026-09-15 · bug · deploy.sh — no BOOT_DELAY on the largest range of the four
+
+**Symptom.** On two consecutive fresh deploys (2026-09-14, 2026-09-15) not every VM had finished provisioning by the time the playbook reached `Init`. On the 14th that cost four Windows hosts, which under the then-current `any_errors_fatal: true` took all 48 out of the deploy.
+
+**Root cause.** A defensive `sleep 120` was removed from deploy.sh on 2026-07-02 in a speed pass, reasoning that the retry loop already handles a VM that is not ready. ss-pp-so removed it for the same reason and **restored it on 2026-08-05 at 180s**, having found that the reasoning did not survive a fresh range — the retry loop does "handle" an unprovisioned host, but only by spending a full multi-hour sweep to discover it. airfield never got that restoration, and it is the LARGEST of the four ranges (86 hosts against 74/74/78) with the longest provisioning tail.
+
+**Detection.** Comparing the four repos: airfield was the only one with `BOOT_DELAY=NONE`, and simultaneously the only one carrying the stale 2026-07-02 note claiming the delay was unnecessary.
+
+**Fix (overlay).** `BOOT_DELAY="${BOOT_DELAY:-300}"` before the attempt loop — 300s rather than ss-pp-so's 180s because the range is larger. Placed AFTER the galaxy, platform-prerequisite and vault checks, so a broken tree or a wrong vault password still fails in seconds rather than after a five-minute sleep. Overridable with `BOOT_DELAY=0 ./deploy.sh`, which was the legitimate half of the 2026-07-02 argument.
+
+Separately, `init_wait_timeout` raised 1800 -> 2400. These are different levers and are not interchangeable: BOOT_DELAY is flat wall clock paid once while the PLATFORM provisions, and covers hosts that do not exist yet — no IP, no NIC, nothing for `wait_for_connection` to connect to. `init_wait_timeout` is a per-host ceiling that costs nothing when a host is ready, because `wait_for_connection` returns the moment the connection succeeds. Raising the ceiling only became affordable once `any_errors_fatal` came off the Init play, since a host that exhausts it now drops out alone instead of taking the fleet with it.
+
+---
+
+---
+
+## 2026-09-15 · bug · site.yml "Bootstrap simspace as fops.blackstone.mil Domain Admin" — raced ADWS on the freshly promoted child DC
+
+**Symptom.** `Create simspace in the child domain` failed on bs-dc01 with `Get-ADUser : Unable to contact the server. This may be because this server does not exist, it is currently down, or it does not have the Active Directory Web Services running.` fops-dc01 had completed its own promotion play clean in the same run (`ok=27, failed=0`).
+
+**Root cause.** `Get-ADUser` and `Get-ADDomain` do not speak LDAP — they talk to Active Directory Web Services on TCP 9389. ADWS starts AFTER AD DS on a freshly promoted DC, and after its post-promotion reboot. There is a window of minutes where the child DC is promoted, DNS resolves it and LDAP answers while ADWS still does not. The task had no wait and no retry: it assumed the child domain was serving the instant the play reached it.
+
+**Why it cost the whole range.** bs-dc01 is the sole member of `[pdc_blackstone]`. When this task failed, bs-dc01 was marked failed and dropped from every subsequent play — `Create Users` (hosts: pdc), `dns`, and BOTH domain joins all target it. One transient race took out the forest root, and nothing downstream of AD could be built. The run got no further than the range baseline; the Security Onion phases never started.
+
+**Fix (overlay).** A preflight gate ahead of the create step, same shape as `additional_dc`'s locatable-DC gate: retry `Get-ADDomain -Server <child>` until it answers (40 x 15s = 10 min), then fail with the reason if it never does. The probe deliberately uses Get-ADDomain rather than a TCP check on 9389 — it exercises the same ADWS path, the same credential and the same `-Server` target the create step uses, so a pass means the precondition actually holds rather than merely resembling it.
+
+**Fix (upstream).** Anything that promotes a DC and then immediately uses an AD cmdlet against it needs this gate; promotion returning success is not the same as the domain being serviceable.
+
+---
+
+---
+
+## 2026-09-15 · bug · Init play — `any_errors_fatal: true` turned 4 unreachable hosts into 48
+
+**Symptom.** A fresh airfield-range deploy built the Linux side and the whole Security Onion grid, then failed 4.5 hours later at `75-endpoint`'s Fleet coverage check with all 48 Windows hosts missing. The recap showed 44 of them at `ok=2, changed=0, skipped=0, failed=0, unreachable=0` — they had completed init's two tasks and then been offered nothing else for the rest of the run. Four hosts showed `ok=1, unreachable=1`.
+
+**Root cause.** The Init play carried `any_errors_fatal: true`. Under that flag an unreachable host does not fail alone: Ansible marks EVERY host in the play failed, aborts the play, and removes all of them from every subsequent play. Plays targeting other groups keep running, so the deploy does NOT stop — it silently continues without the entire Windows fleet. Four hosts that never finished booting inside init's `wait_for_connection` therefore cost 44 healthy hosts their AD join, their Sysmon install and their Elastic Agent enrolment. The Fleet assertion at the end was the first thing to notice.
+
+**Detection.** Only visible by cross-reading the PLAY RECAP: `ok=2` with `skipped=0` and `failed=0` is the signature of a host that was silently dropped, not one that was skipped by a `when`. Fleet knowing exactly the Linux endpoints plus the SO grid, and nothing else, confirmed it.
+
+**Fix (overlay).** Removed `any_errors_fatal: true` from the Init play. Unreachable hosts now fall out individually. A `run_once` report at the end of the play names the dropped hosts immediately — `ansible_play_hosts_all | difference(ansible_play_hosts)` — so the problem is visible in minutes instead of hours. The deploy deliberately CONTINUES: the reachable hosts are still built, and the end-of-run coverage assertions remain the hard gate. A deploy with missing hosts still fails; it just fails having done all the work it could, which is what makes the retry cheap.
+
+**Why not fail immediately at init.** A fatal assertion there would report the problem better but still stop the deploy before any Windows work — reproducing the very failure being removed.
+
+---
+
+## 2026-09-15 · bug · deploy.sh — attempt 2 was never once retry-scoped
+
+**Symptom.** Attempt 1 fails, Ansible prints `to retry, use: --limit @/etc/ansible/retry/site.retry`, and deploy.sh announces `=== Attempt 2 (full sweep) ===` instead of the retry scope.
+
+**Root cause.** `RETRY_FILE="retry/$PLAYBOOK.retry"` with `PLAYBOOK="site.yml"` builds `retry/site.yml.retry`. Ansible strips the extension and writes `retry/site.retry`. The paths never matched, so the `[ -f "$RETRY_FILE" ]` guard was always false. That guard exists to handle "the deploy died before writing a retry file", so a missing file looked like a legitimate condition rather than a bug — it failed silently and safely, in the direction of doing more work rather than less, which is why it survived this long.
+
+**Fix (overlay).** `RETRY_FILE="retry/$(basename "${PLAYBOOK%.*}").retry"`. Handles `.yml` and `.yaml` and any directory prefix.
+
+**Scope.** The identical line was present in airfield-range, ss-pp-so, ss-pp-stacked and ss-pp-ab.
+
+---
+
+---
+
+## 2026-09-15 · bug · Security Onion `so-setup` — seeds its container registry from ghcr.io
+
+**Symptom.** Every container except `so-dockerregistry` stays `missing` and `so-status` never goes green. The local registry store at `/nsm/docker-registry/docker/registry/v2/repositories/security-onion-solutions` is empty or short.
+
+**Root cause.** `so-setup`'s `docker_seed_registry()` pulls 22 images straight from `ghcr.io` on the manager. That made the SO nodes the only hosts in the range reaching the internet themselves — every other artifact class already came from the controller's nginx mirror. Worse, `so-setup` DELETES `/etc/systemd/system/docker.service.d/` on its reinstall path, so the docker proxy drop-in `so_base` writes is gone by the time seeding runs; docker falls back to direct DNS, hits an in-range DC that cannot resolve `ghcr.io`, and every pull 404s. Observed on ss-pp-stacked 2026-09-05: registry left at 8.0K / 0 repositories, and because `setup-completed` had already been written the next two attempts SKIPPED `so-setup` entirely.
+
+**Fix (overlay).** Use the mechanism `so-setup` already checks before any network call — the airgap-ISO path. The controller builds `registry.tar` + `registry_image.tar` with skopeo and serves them from the mirror (`roles/so_apt_mirror/tasks/registry_content.yml`, `templates/build_so_registry.sh.j2`); the manager stages them into `/nsm/docker-registry/docker/` before `so-setup` runs (`roles/so_manager/tasks/registry_seed.yml`). In-play systems now have zero internet dependency for images; the controller is the only host that reaches ghcr.io, and only to BUILD.
+
+**Fix (upstream).** `so-setup` should accept a registry mirror URL rather than hardcoding ghcr.io, and should not delete the docker drop-in directory on reinstall.
+
+---
+
+## 2026-09-15 · bug · `so-setup` writes its completion marker before the registry is proven
+
+**Symptom.** A deploy attempt that left the registry empty still wrote `setup-completed`, so the next two `deploy.sh` attempts skipped the 45-90 minute install and went straight to a 30-minute `so-status` wait they could never pass. 7h22m across three attempts, never retrying the one step that was broken.
+
+**Root cause.** The skip decision asserted the marker and a Salt install. Both can be true with an empty registry — neither is the outcome the next step depends on.
+
+**Fix (overlay).** `roles/so_manager/tasks/main.yml` now probes the registry repository count and folds it into `so_setup_can_skip`, and after `so-setup` returns it verifies the count against `so_registry_min_repos` and fails closed WITHOUT writing the marker — so the next attempt redoes the install rather than skipping it.
+
+---
+
+## 2026-09-15 · bug · `verify_vars.py` — could not see `group_vars/all/`
+
+**Symptom.** 96 "referenced but not defined" warnings, most of them false. Every variable defined under `group_vars/all/` read as undefined.
+
+**Detection.** Porting the Security Onion registry variables added 13 new warnings for variables that were demonstrably defined and loadable.
+
+**Root cause.** Three parser defects, all fixed in `PowerPlant/ss-pp-so` and not yet carried across: `collect_defined()` used a non-recursive `glob("*.yml")` so it walked straight past the `group_vars/all/` DIRECTORY; the `set_fact` pattern did not accept the `ansible.builtin.` FQCN prefix; and the `vars:` block regex was greedy enough to swallow the whole `tasks:` section. A checker with known-bogus warnings trains you to skim past the real ones.
+
+**Fix (overlay).** Re-copied `verify_vars.py` from `PowerPlant/ss-pp-so` wholesale. It is range-agnostic (takes a stage directory argument) and additionally adds ROLE-SCOPE checking — role defaults are role-scoped, and a play referencing one without including that role fails at run time. Warnings dropped 96 → 4, and the 4 survivors are genuine pre-existing items worth review: `dns_zone_replication`, `nat`, `out`, `pfsense_stale_gateways`.
+
+---
+
+## 2026-09-15 · bug · Ubuntu unattended-upgrades holds the dpkg lock at first boot
+
+**Symptom.** Every apt task fails outright on a fresh controller; `deploy.sh`'s three attempts fire seconds apart and all three lose the same race.
+
+**Fix (overlay).** `so_apt_mirror` and `so_base` wait for `/var/lib/dpkg/lock-frontend` to clear (60 x 10s), and `so_apt_mirror` masks the `apt-daily` timers plus the `unattended-upgrades` service and writes `20auto-upgrades` 0/0. The RUNNING job is deliberately never stopped — killing it mid-transaction risks a half-configured dpkg, which is worse than the lock contention it would fix.
+
+---
+
+## 2026-09-15 · bug · `additional_dc` retried promotion against an unchecked precondition
+
+**Symptom.** Promotion fails with "a domain controller could not be contacted", AFTER the DNS Server role is installed — leaving a zone-less DNS server that answers every query with SERVFAIL, which is worse than the host being down.
+
+**Fix (overlay).** `roles/additional_dc` now asserts the precondition first: it waits (40 x 15s) for `_ldap._tcp.dc._msdcs.<domain>` to resolve and fails BEFORE promotion is attempted, so no zone-less DNS server is ever created.
+
+---
+
+## 2026-09-15 · bug · VyOS image ships a console device that is not a tty
+
+**Symptom.** `serial-getty@ttyS0` restart-loops forever — one cycle per ~10s, roughly 200,000 junk messages a day into the central syslog store, burying real VyOS signal.
+
+**Root cause.** The image ships `set system console device ttyS0 speed '115200'` but `/dev/ttyS0` is not a working tty on these VMs, so agetty exits with "not a tty" and systemd restarts it.
+
+**Fix (overlay).** A play in `site.yml` deletes the console in CONFIG (not `systemctl mask` — VyOS regenerates unit state from its own configuration, so a mask is undone by the next commit) and stops the flapping getty so the fix takes effect without a reboot. Guarded by a check first, because VyOS errors on deleting an absent node.
+
 
 **Historical domain names:** entries dated before 2026-07-02 reference `vcab.lan` / `flightops.lan` and OU groups `pdc_vcab` / `pdc_flightops` / `members_vcab` / `members_flightops` — these were **renamed to `blackstone.mil` / `fops.blackstone.mil` / `pdc_blackstone` / `pdc_fops` / `members_blackstone` / `members_fops` in the Blackstone rebrand on 2026-07-02** (see `[[project_blackstone_rebrand]]` memory). The technical content of every pre-rebrand entry still applies; only the domain/group labels changed. Don't edit those entries retroactively — the labels are preserved as historical fact.
+
+---
+
+## 2026-08-14 · bug · L3 `gre` mirror tunnel makes Zeek discard 100% of frames — AFFECTS so-ansible AND PowerPlant
+
+**Symptom.** Security Onion's dashboard shows the four sensors contributing
+~20k events total against 4.2M overall. Zeek is "healthy", the container has
+43h uptime, packets are arriving, and there is no `conn.log`.
+
+**Measured on soc-sensor-corp, same interface, same traffic, minutes apart:**
+
+| capture | packets | not processed | conn records |
+|---|---|---|---|
+| `zeek -i tun0` (plain libpcap) | 5,390 | 0.37% | **583** |
+| `zeek -i af_packet::tun0` | 841 | **100.00%** | **0** |
+
+The running workers use `-i af_packet::tun0` (`lb_procs: 3`). Zeek had
+produced **66 connection records in its entire lifetime** while 23,590,318
+packets arrived on the tunnel.
+
+**Cause.** `tc ... action mirred egress mirror` copies complete ETHERNET
+FRAMES. The tunnel was plain `gre` — an L3 tunnel that carries IP only — so
+the kernel strips the L2 header and `tun0` presents cooked-mode frames
+(`DLT_LINUX_SLL`, confirmed by `file` on a capture). Zeek's AF_PACKET plugin
+expects Ethernet and cannot parse them, so it counts every frame received and
+processes none.
+
+**Why it hid for the life of three projects.**
+
+- **Suricata reads cooked capture natively.** `eve.json` kept rotating hourly
+  and alerts kept flowing, so the sensor looked alive from every angle.
+- **`60-verify` counted packets on `tun0`.** They were genuinely arriving.
+  The check measured the TRANSPORT and reported it as the OUTCOME.
+- **The container is `healthy`.** Zeek's own health check passes; parsing
+  nothing is not unhealthy.
+- **Cluster logs kept being written.** `broker.log`, `capture_loss.log` and
+  `notice.log` rotate normally — and all but `notice` are on SO's own shipper
+  exclude list, so the dashboard showed near-silence rather than absence.
+- `capture_loss.log` reports `rcvd` climbing and `dropped: 1715` flat, which
+  reads like a healthy capture. Zeek was receiving fine. It was parsing that
+  failed, and that counter does not measure parsing.
+
+**Fix.** `gretap` on both ends — L2 GRE, which carries the Ethernet frame end
+to end and gives `tun0` a normal `DLT_EN10MB` interface:
+
+```
+router:  set interfaces tunnel tunX encapsulation gretap
+sensor:  mode: gretap    mtu: 1462   # 1500 - 20 IP - 4 GRE - 14 Ethernet
+```
+
+Plus a task to delete a stale L3 `gre` device before `netplan apply` — the
+link kind is fixed at creation, so netplan will not convert one in place, and
+a leftover tunnel keeps working, keeps feeding Suricata, and keeps Zeek
+parsing nothing.
+
+Fixed at the tunnel rather than by overriding SO's salt-rendered `node.cfg`
+to force plain pcap: this keeps SO on its intended `af_packet` + `lb_procs`
+fanout path, and follows the same principle as not patching `soc.json` — make
+the environment match what SO expects.
+
+**New check in 60-verify.** Zeek's `conn.log` must be GROWING, with retries
+across the hourly rotation boundary. The failure message names the two
+commands that identify this class — the worker `stdout.log` "not processed"
+percentage, and `ip -d link show tun0` reporting `gretap` — and states
+explicitly that Suricata working is not evidence.
+
+**SCOPE: THIS IS NOT AIRFIELD-ONLY.** so-ansible and PowerPlant/ss-pp-ab both
+build the mirror with plain `gre` and both have the identical `60-verify`
+blind spot. PowerPlant was declared green with three working mirrors and is
+heading for customer sign-off; its Zeek connection data should be checked
+before that happens. The one-line test on any sensor:
+
+```
+grep -vc '^#' /nsm/zeek/logs/current/conn.log
+```
+
+**Method note.** Four wrong causes preceded this one: the mirror (fine — `tc`
+filters and `tcpdump` both proved it), Zeek being dead (healthy, 43h uptime),
+checksum offloading (0 of 40 packets bad on the wire), and a missing file
+read as a diagnosis. Each was a single signal promoted to a conclusion. What
+resolved it was one controlled comparison — same interface, same traffic, one
+variable — which is what should have been run first.
+
+---
+
+## 2026-08-13 · bug · WPAD PAC never marked 172.31.* DIRECT, so analysts could not open the SOC WebUI
+
+**Symptom.** Analyst workstations cannot reach Security Onion at
+`https://172.31.7.15`, on a deploy where `playbooks/70-analyst.yml` passed.
+
+**Cause.** `roles/squid/templates/wpad.dat.j2` returned DIRECT for:
+
+```javascript
+isPlainHostName(host) || shExpMatch(host, "10.10.*") ||
+shExpMatch(host, "172.16.*") || dnsDomainIs(host, ".{{ domain_name }}")
+```
+
+`172.31.*` is absent. The PAC came from a range whose whole estate was in
+`172.16.x`; Blackstone's production estate is `172.31.0.0/16` and only the OT
+chain is `172.16.x`. The `dns` role publishes a `wpad` record and Windows
+auto-detects WPAD by default, so every analyst browser loaded this and sent
+`https://172.31.7.15` to squid.
+
+**Why it hid.** `dnsDomainIs(".blackstone.mil")` covers browsing BY NAME, so
+ordinary intranet use works and nothing looks wrong. Only IP-LITERAL access
+breaks — and the SOC WebUI is reached by IP deliberately, because
+`so_web_access_type: IP` and the SO nodes are not AD-joined so they have no
+DNS records.
+
+**Why the check passed.** `70-analyst.yml` asserted with
+`Test-NetConnection -Port 443`, a raw socket that does not consult proxy
+configuration at all. It answered "is there a network path", which was true,
+while the question that mattered — "what path does the browser take" — went
+unasked. A test that cannot fail for the reason the user is failing is not a
+test of that thing.
+
+**Fix.** `shExpMatch(host, "172.31.*")` added to the DIRECT list. The
+management plane (`10.255.240.0/20`) is deliberately NOT added: it must stay
+invisible to scenario traffic.
+
+`70-analyst.yml` now checks three layers instead of one:
+
+| layer | question |
+|---|---|
+| `Test-NetConnection` | is there a network path |
+| `[System.Net.WebRequest]::DefaultWebProxy.GetProxy()` | **what path would the browser take** |
+| `Invoke-WebRequest` | does the WebUI actually answer over that path |
+
+`DefaultWebProxy` reflects live WinINET/WPAD resolution, so layer 2 asks
+exactly what the browser asks. `GetProxy()` returns the original URI when no
+proxy applies, which is the DIRECT case.
+
+**Generalisable.** Any range on `172.31.x` built from this squid role has the
+same gap, and it only shows for IP-literal access. Worth fixing upstream so
+the PAC lists the range's actual production supernet rather than one
+inherited from whichever range the template came from.
+
+---
+
+## 2026-08-12 · bug · `common` never sets the Linux system hostname, so soc-splunk logged as `localhost` for the life of the project
+
+**Symptom.** Found while attributing devices in Security Onion's new syslog
+input, not by looking for it. The central collector had a `localhost` device
+bucket with ~169k events and no `soc-splunk` directory at all:
+
+```
+$ ls /var/log/remote/
+172.31.1.14  atc-radar  ...  bs-www  ...  localhost  ...  www.blackstone.mil
+                                          ^^^^^^^^^  and no soc-splunk
+```
+
+A 45-second capture on the collector named a single ongoing sender:
+
+```
+$ tcpdump -i any -nn -A 'udp port 514' | awk '/ IP /{...} /localhost/{print src}' | sort | uniq -c
+     33 172.31.7.19        <- soc-splunk
+```
+
+**Cause.** `roles/common/tasks/linux.yml` writes an `/etc/hosts` line naming
+`inventory_hostname`:
+
+```yaml
+line: "127.0.0.1 localhost {{ inventory_hostname }}"
+```
+
+and nothing else. The **system hostname is never set** — each Linux host keeps
+whatever its image booted with. That is usually correct, because the platform
+sets it from the blueprint VM name, so the gap is invisible on every host
+where the platform did its job. soc-splunk's image booted as `localhost`.
+
+rsyslog stamps the system hostname into every message's HOSTNAME field, and
+`30-remote.conf` files by that field, so 100% of that host's syslog landed
+under `/var/log/remote/localhost/`.
+
+**Why only this host.** The project ALREADY had a mechanism for this.
+`roles/splunk-forwarder/templates/rsyslog-hostname.conf.j2` writes
+
+```
+$LocalHostName {{ inventory_hostname }}
+$PreserveFQDN on
+```
+
+which forces rsyslog to stamp `inventory_hostname` no matter what the OS
+hostname is. But the forwarder play targets `linux:!splunk:!so_all`, and
+soc-splunk is excluded because it IS the indexer. It is the only Linux host
+that both lacks that override and booted with a wrong hostname. The SO grid
+is excluded too, but its nodes booted with correct hostnames, so nothing
+showed.
+
+Two mechanisms, each covering the other's gap, and exactly one host in the
+blind spot of both.
+
+**Why it went unnoticed for the life of the project.** The data was never
+missing — it was in Splunk the whole time under a name nobody queried for. A
+second SIEM reading the same directories is what surfaced it, because the
+device list became something a human had to read rather than something a
+dashboard aggregated away.
+
+**What was NOT affected, contrary to a first reading.** Splunk's `host` field
+was always correct. `roles/splunk/templates/inputs.conf.j2` sets
+`[default] host = {{ inventory_hostname }}` explicitly, so events indexed on
+soc-splunk have always carried `host=soc-splunk`. Only `serverName` inherits
+the OS hostname, because `server.conf.j2` does not set it — that is instance
+identity (Settings UI, `splunk_server` field, distributed-search peer name),
+not event data. And on a fresh deploy even that is right: the `Common Role`
+play runs at site.yml:157, the Splunk indexer play at 1125.
+
+**Fix (overlay).** Two tasks at the top of `common/tasks/linux.yml`:
+
+```yaml
+- name: System hostname matches inventory
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  register: common_hostname
+
+- name: Restart rsyslog so forwarded messages carry the new hostname
+  ansible.builtin.service: { name: rsyslog, state: restarted }
+  when: common_hostname is changed
+  failed_when:
+    - common_rsyslog is failed
+    - "'Could not find the requested service' not in (common_rsyslog.msg | default(''))"
+```
+
+The restart is not optional. rsyslog reads the hostname ONCE at startup, so
+setting it without restarting leaves every subsequent message carrying the old
+name until the next reboot — the fix would look applied and change nothing
+observable.
+
+**Fix (upstream).** Same two tasks belong in
+`range-development-ansible/roles/common`. Every range built from that role has
+this gap; it only shows when an image boots with a wrong hostname.
+
+**Scope, stated honestly.**
+- This fixes the SYSLOG path. Splunk's own `serverName` lives in
+  `server.conf` and is set at install time, so soc-splunk's internal Splunk
+  data keeps its existing label until Splunk is separately reconfigured.
+- It MAY also resolve `bs-www` appearing as both `bs-www` and
+  `www.blackstone.mil`, if that host's system hostname is the FQDN. Not
+  verified — the split could equally come from a service setting its own
+  name.
+- It does NOT address `bs-ops-fw` arriving as `172.31.1.14`. pfSense picks a
+  source address per route and the collector routes it by `$fromhost-ip`;
+  that needs a `syslog_source_ip_map` entry, which is a separate change with
+  its own blast radius on the Splunk path.
+
+---
+
+## 2026-08-11 (later 2) · bug · Roles were ported without the data file one of them reads
+
+**Symptom.** Phase 10, ~40 minutes into a deploy, on the first run that ever
+got past the controller-connection bug:
+
+```
+TASK [so_apt_mirror : Fail if the ETOPEN ruleset was not bundled with the tarball]
+fatal: [ansible]: FAILED! => emerging.rules.tar.gz is missing from the mirror
+because it was not bundled at /etc/ansible/rules/emerging.rules.tar.gz.
+```
+
+The role behaved exactly as designed — it named the file, the path, and the
+reason downloading is not an option. Nothing was wrong with it.
+
+**Cause.** `so_apt_mirror` was copied from `ss-pp-ab` on 2026-08-11 along with
+six other roles. The 5.5 MB ETOPEN ruleset it reads was not, because it does
+not live under `roles/` — it is a top-level `rules/` directory that
+`ss-pp-ab/build_tarball.sh` stages and packs explicitly. Airfield's
+`build_tarball.sh` had no mention of `rules` at all.
+
+**Why every check passed anyway.** This is the uncomfortable part. The port
+was verified four ways and all four were clean:
+
+| check | result |
+|---|---|
+| 48 roles bundled, up from 41 | correct |
+| tarball members, zero AppleDouble junk | correct |
+| `site.yml` syntax-check from a CLEAN EXTRACTION | passed |
+| staged-vs-`TAR_PATHS` divergence assertion | passed |
+
+Every one of them asks about roles and playbooks. None asks whether a role's
+DATA came with it. The `TAR_PATHS` assertion added earlier the same day is
+specifically unable to catch this: it compares what was staged against what
+gets packed, and this file was never staged, so there was nothing to diverge.
+
+**Fix.**
+- `rules/emerging.rules.tar.gz` copied in (md5 `9db1fd3b90e37ed10a8ef2d11bcaef42`,
+  identical to PowerPlant's — it is the same upstream ET Open ruleset).
+- `build_tarball.sh` stages `rules/` and adds it to `TAR_PATHS`.
+- A `REQUIRED_PAYLOADS` declaration keyed on the bundled role:
+
+```bash
+declare -a REQUIRED_PAYLOADS=(
+  "so_apt_mirror:rules/emerging.rules.tar.gz"
+)
+```
+
+If the role is in the bundle and its payload is not staged, the BUILD fails in
+two seconds naming both. Verified by hiding the file and re-running: the build
+exits non-zero with the role name, the file, and why it cannot be downloaded.
+
+**The generalisable lesson.** ROLES ARE NOT SELF-CONTAINED. A role that reads
+from `/etc/ansible/<something>` outside its own directory has a dependency the
+role-discovery walker structurally cannot see, because that walker follows
+`roles:` blocks and `meta/main.yml` — neither of which mentions data. When
+copying a role across repos, grep its defaults for absolute controller paths
+and carry those too. Add each one to `REQUIRED_PAYLOADS` so the next person
+gets a build failure instead of a deploy failure.
+
+---
+
+## 2026-08-11 (later 1) · enhancement · `so_subnet_security` is a range-specific name in a range-agnostic role
+
+**Symptom.** Copying the SO roles into a range whose grid does not live on a
+subnet called "security" gives `'so_subnet_security' is undefined` in three
+places, all of which fail late:
+
+```
+roles/so_base/tasks/main.yml:232          NO_PROXY for salt's HTTP probes
+roles/so_base/tasks/main.yml:277          scope-link netplan route on the prod NIC
+roles/so_manager/templates/manager.env.j2:83   ALLOW_CIDR in the answer file
+```
+
+The name is inherited from so-ansible's dev range and PowerPlant, where the SO
+grid genuinely sits on a subnet named `security`. Here it sits on SOC.
+
+**Why it is worth a note rather than a rename.** The variable is doing three
+different jobs that happen to take the same value in both ranges so far:
+
+| use | what it actually means |
+|---|---|
+| `ALLOW_CIDR` | who may reach the SOC WebUI |
+| scope-link route | the subnet the grid's peers are on |
+| `NO_PROXY` | node-to-node traffic that must not be proxied |
+
+Those are the same CIDR only because the whole grid is on one subnet. Split a
+grid across two subnets — a sensor in a DMZ, say — and one variable cannot
+express all three, and the failure would be a silent proxy hairpin rather than
+an error.
+
+**Workaround (overlay).** `group_vars/all/security_onion.yml` defines
+`so_subnet_security: "{{ so_subnet_soc }}"` with the three uses documented
+inline. The roles stay BYTE-IDENTICAL to `ss-pp-ab`, so the next re-copy is a
+plain `cp -R` with no merge to reconcile.
+
+**Fix (upstream).** Rename to `so_grid_subnet` in the roles and split
+`ALLOW_CIDR` out into its own variable, since "who may log in" is a policy
+question and the other two are topology. Do it in so-ansible first, then
+re-copy to both ranges together.
+
+---
+
+## 2026-08-11 · bug · `group_vars/vault.yml` mapped to a group that does not exist — all 7 vault vars were never loaded
+
+**Symptom.** None. That is the entire problem. Every deploy of this range has
+succeeded without ever loading a single `vault_*` variable.
+
+**Detection.** Found while auditing `group_vars/` against inventory groups
+before adding `group_vars/all/security_onion.yml` — not by anything failing.
+A `group_vars/<name>.yml` file applies to hosts in the group `<name>`. There
+is no `[vault]` group in `hosts`, and there never was:
+
+```
+$ grep -c '^\[vault\]' hosts
+0
+```
+
+So `group_vars/vault.yml` was scoped to the empty set. `group_vars/power.yml`
+has the same defect (no `[power]` group) but is currently harmless — no power
+hosts are in the blueprint yet.
+
+**Why it stayed invisible.** `group_vars/fuel.yml` references the vault vars
+through `| default(...)` fallbacks:
+
+```yaml
+fuxa_admin_password: "{{ vault_fuxa_admin_password | default('...') }}"
+```
+
+Those defaults are what has actually been deploying the fuel farm this whole
+time. The vault was decorative. Had any consumer referenced a vault var
+*without* a default, this would have surfaced on day one as an undefined-
+variable error — the defaults converted a hard failure into a silent
+substitution.
+
+Note the interaction with the 2026-08-10 (later 3) entry below: the file was
+simultaneously shipping in plaintext *and* not being read. Fixing only the
+encryption would have left the second half of the bug in place, and fixing
+only the scope would have started loading credentials that were in the clear.
+
+**Fix.** `git mv group_vars/vault.yml group_vars/all/vault.yml` (and
+`group_vars/all.yml` -> `group_vars/all/main.yml`, since `all.yml` and `all/`
+cannot coexist). Under `group_vars/all/` the file loads for every host.
+`deploy.sh`'s vault guard follows to the new path.
+
+**Verify after any group_vars move** that every file maps to a real group:
+
+```
+$ for f in group_vars/*.yml; do n=$(basename $f .yml); \
+    grep -q "^\[$n\]\|^\[$n:" hosts || echo "ORPHAN: $f"; done
+```
+
+`all.yml` is the one legitimate exception. Anything else this prints is dead.
 
 ---
 

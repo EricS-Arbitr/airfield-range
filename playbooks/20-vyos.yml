@@ -1,0 +1,71 @@
+---
+# =========================================================================
+# 20-vyos.yml — GRE tunnel + tc mirror rules on every mirror-source router
+# =========================================================================
+# Four routers, one sensor each:
+#   bs-core-rtr        -> soc-sensor-corp   Services, HQ, IT, Supply
+#   bs-ops-rtr         -> soc-sensor-fops   Flight-Ops-Services, FCC, Users
+#   bs-modbus-gateway  -> soc-sensor-ot     MTU /29, Fuel PLC /29, Fuel Sim /24
+#   bs-edge-rtr        -> soc-sensor-edge   simulated internet
+#
+# TWO plays, because VyOS orchestration mixes two connection profiles:
+#
+#   Play A (network_cli): vyos.vyos.vyos_config for the declarative tunnel.
+#                         network_cli intercepts everything and cannot run
+#                         ansible.builtin.* modules at all.
+#   Play B (ssh):         ansible.builtin.template + command to write and run
+#                         the tc-mirror script, over VyOS's underlying Debian
+#                         shell and its python3.
+#
+# Both reference the SAME vyos_mirror role via `tasks_from:`, so ordering and
+# variable resolution stay in one place.
+#
+# PREREQUISITE: the routers must already be configured by site.yml's VyOS
+# plays. This adds a tunnel to a working router; it does not build one.
+# =========================================================================
+
+- name: GRE tunnel to each sensor — Part A (declarative, via network_cli)
+  # [so_mirror_routers], not [vyos]. Membership there means "has vyos_mirror_*
+  # host_vars", which is a different question from "the vyos role manages it"
+  # -- bs-modbus-gateway is a mirror source regardless of how site.yml treats
+  # it. Keeping the two groups independent is what let PowerPlant mirror from
+  # pp-ot-router, which is excluded from its [vyos] group entirely.
+  hosts: so_mirror_routers
+  gather_facts: false
+  connection: network_cli
+  tasks:
+    - name: Include tunnel tasks
+      ansible.builtin.import_role:
+        name: vyos_mirror
+        tasks_from: tunnel
+  tags:
+    - so
+    - so_mirror_routers
+
+- name: tc mirred rules on each router — Part B (script, via ssh)
+  hosts: so_mirror_routers
+  gather_facts: false
+  vars:
+    # ansible_connection MUST be set as a play VAR, not via the play's
+    # `connection:` keyword.
+    #
+    # An ansible_connection from inventory OUTRANKS the play keyword, and this
+    # repo's [vyos] group sets `ansible_connection:
+    # ansible.netcommon.network_cli`. With the keyword form this play silently
+    # stays on network_cli and its shell/file tasks execute on the CONTROLLER
+    # instead of the routers -- on PowerPlant all three hosts reported the
+    # controller's own `ip link show` (identical MACs, eth0/eth1/docker0) and
+    # aborted on "tun0 not present" (2026-08-03).
+    #
+    # Play vars beat inventory group_vars and host_vars, so this form wins.
+    ansible_connection: ssh
+    # VyOS's /usr/bin/python does not always exist; be explicit.
+    ansible_python_interpreter: /usr/bin/python3
+  tasks:
+    - name: Include tc tasks
+      ansible.builtin.import_role:
+        name: vyos_mirror
+        tasks_from: tc
+  tags:
+    - so
+    - so_mirror_routers

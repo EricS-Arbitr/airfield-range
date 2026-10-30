@@ -1,0 +1,7 @@
+---
+- import_tasks: readsb.yml
+  tags: [readsb]
+- import_tasks: tar1090.yml
+  tags: [tar1090]
+- import_tasks: fdp.yml
+  tags: [fdp]

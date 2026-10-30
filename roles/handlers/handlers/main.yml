@@ -22,35 +22,38 @@
     enabled: true
     state: restarted
 
+# 1800, not 120. Two minutes is not a Linux reboot on a busy hypervisor, let
+# alone a Security Onion node. Raised 2026-09-23 alongside the Windows
+# ceilings, which were fixed on 2026-09-22 -- this one was missed because the
+# audit that found those matched `win_reboot`, and Linux uses
+# ansible.builtin.reboot.
+#
+# The same blind spot cost a deploy the same day: `common : reboot when
+# changed` on so-search timed out at the bare module default of 600s.
+#
+# A CEILING, NOT A DELAY -- reboot returns as soon as the host answers.
 - name: Reboot Linux
   become: true
   ansible.builtin.reboot:
-    reboot_timeout: 120
+    reboot_timeout: 1800
 
+# 1800, not 600. A member workstation is back in two or three minutes; a
+# domain controller on its first boot after promotion has to bring up NTDS,
+# Netlogon, ADWS and SYSVOL replication before it answers, and routinely takes
+# longer than ten minutes. On 2026-09-19 bs-dc01 and bs-dc02 both hit
+#
+#   Timed out waiting for last boot time check (timeout=600.0)
+#   "rebooted": true, "elapsed": 608
+#
+# ...having actually rebooted fine. The handler gave up six hundred seconds in
+# and both DCs failed out of the run over a wait that was simply too short.
+#
+# This is a CEILING, not a delay: a host that comes back in 90 seconds still
+# takes 90 seconds. Raising it costs nothing and removes a whole class of
+# false failure.
 - name: Reboot Windows
   ansible.windows.win_reboot:
-    reboot_timeout: 600
-
-- name: Initialize Splunk
-  ansible.builtin.shell: >
-    /opt/splunk/bin/splunk enable boot-start --accept-license --no-prompt
-    --answer-yes --seed-passwd {{ splunk_admin_password }}
-  listen: Initialize Splunk
-  changed_when: false
-
-- name: Start Splunk After Installing and Initializing
-  ansible.builtin.systemd:
-    name: splunk
-    enabled: true
-    state: started
-  register: splunk_status
-  listen: Initialize Splunk
-
-- name: Restart Splunk Service
-  ansible.builtin.systemd:
-    name: splunk
-    state: restarted
-  listen: Restart Splunk Service
+    reboot_timeout: 1800
 
 - name: reload unbound
   community.docker.docker_container_exec:
@@ -78,3 +81,31 @@
   listen: Restart email container
   ansible.builtin.shell: docker restart email
 
+
+# THE OVERLAY IS THE COMPLETE BASE SET, MINUS SPLUNK ON PURPOSE.
+# resolve_role_path selects ONE directory, so this file REPLACES
+# range-development-ansible/roles/handlers wholesale -- it never merges. A
+# handler the base role defines and this file omits does not fall back; a role
+# that notifies it aborts the deploy at run time, hours in, because Ansible
+# resolves notify targets on the host when a task reports changed.
+#
+# Not hypothetical. airfield-stacked copied roles/splunk in over THIS file and
+# ran 4h31m before dying on "The requested handler 'Initialize Splunk' was not
+# found". `Reload systemd` and `Restart network_mgr` below were missing for the
+# same reason; nothing had notified them yet.
+#
+# The three Splunk handlers the base role defines are DELIBERATELY absent: this
+# range is Security Onion only and Splunk is fully removed, so a Splunk handler
+# here would be dead code advertising a SIEM that is not deployed.
+# verify_handlers.py fails the build if anything ever notifies them, which is the
+# guard that makes leaving them out safe.
+- name: Reload systemd
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart network_mgr
+  become: true
+  ansible.builtin.systemd:
+    name: network_mgr.service
+    state: restarted

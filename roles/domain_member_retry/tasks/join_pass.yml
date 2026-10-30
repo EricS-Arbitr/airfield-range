@@ -1,0 +1,211 @@
+---
+# One join pass. Included once per entry in `domain_join_passes`; the caller's
+# `when: not member_joined` short-circuits every task here once a pass lands.
+
+# Probe what the join needs, not something that resembles it: a DC advertised
+# in DNS for this domain that answers LDAP, Kerberos and SMB. `nltest` would
+# be the obvious tool but is not guaranteed present on every client image, so
+# this resolves the locator SRV set directly and opens the three sockets the
+# join uses.
+# Only from pass 2 on. A reboot before the FIRST attempt would add ~5 minutes
+# to every host on every deploy to fix a state that is almost never wrong.
+- name: "Join pass {{ join_pass }} — reboot before re-attempting"
+  # 1800, matching the rest of the repo. A member that needs more than ten
+  # minutes to come back is slow, not broken, and failing it here costs the
+  # host its remaining join passes. See roles/strip_apipa 2026-09-22.
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+  when: join_pass | int > 1
+
+# Re-assert the network config this host DECLARES, before probing again.
+#
+# Pass 1 failing means something about this host is wrong, and the evidence
+# says it is the network. On 2026-09-20 bs-supply01 reported
+# DCLOCATOR_NOT_READY no-srv-records-for-blackstone.mil through all three
+# passes while the other 28 hosts in the same play joined normally; 2026-09-18
+# lost bs-hq02, soc-analyst05 and bs-supply04 the same way. A DIFFERENT random
+# host each build, which is a per-boot race rather than a broken machine.
+#
+# `common` already applies exactly this from network_interfaces, with the same
+# two DSC resources, early in the run. Re-applying it here is idempotent -- DSC
+# changes only what does not match -- and repairs both shapes of the fault: a
+# production NIC that never took its static address (so it cannot reach a DNS
+# server at all) and one holding the wrong resolvers.
+#
+# Scoped to the failure path on purpose. Hosts that join on pass 1 never run
+# any of this.
+- name: "Join pass {{ join_pass }} — re-apply declared IPv4 addresses"
+  ansible.windows.win_dsc:
+    resource_name: xIPAddress
+    InterfaceAlias: "{{ item.name }}"
+    IPAddress: "{{ item.ipv4.address }}/{{ (item.ipv4.address ~ '/' ~ item.ipv4.netmask) | ipaddr('prefix') }}"
+    AddressFamily: "IPv4"
+  loop: "{{ network_interfaces | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - join_pass | int > 1
+    - item.ipv4 is defined
+    - item.ipv4.address is defined
+    - item.ipv4.netmask is defined
+
+- name: "Join pass {{ join_pass }} — re-apply declared DNS servers"
+  ansible.windows.win_dsc:
+    resource_name: xDNSServerAddress
+    InterfaceAlias: "{{ item.name }}"
+    AddressFamily: "IPv4"
+    Address: "{{ item.dns }}"
+  loop: "{{ network_interfaces | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - join_pass | int > 1
+    - item.dns is defined
+
+# Re-pin the default-gateway ARP entry.
+#
+# This is the fault the re-applied IP and DNS above cannot touch. On 2026-09-21
+# fops-ops01 failed all three passes with correct resolvers
+# (dns=[Ethernet1=172.31.3.11/172.31.3.12]), a correct address
+# (ip=[172.31.6.11,...]) and both DCs provably advertising their locator
+# records -- DCSRV_READY for fops.blackstone.mil was printed before the join
+# plays ran. Configuration was right at both ends and the member still could
+# not resolve, which leaves the path between them.
+#
+# roles/init says exactly this: an impostor MAC answers ARP for the gateway
+# address, ANSWERS ICMP so the gateway looks healthy, and "presents as DNS
+# failures, domain joins failing, Fleet enrolment failing". The DCs are on
+# 172.31.3.x and these members are not, so every lookup has to route.
+#
+# init pins this once. Re-running it here matters because init's own notes
+# record entries reverting to the impostor MAC inside a single run with no
+# reboot, and because that task fails OPEN when it cannot prove a probe target
+# is off-subnet -- so a host can finish init legitimately unpinned.
+- name: "Join pass {{ join_pass }} — re-pin the default-gateway ARP entry"
+  ansible.builtin.include_role:
+    name: init
+    tasks_from: gw_arp
+  when: join_pass | int > 1
+
+# A negative lookup is cached like any other. Without this the probe below can
+# keep returning no-srv-records from cache after the resolvers are corrected.
+- name: "Join pass {{ join_pass }} — flush the DNS resolver cache"
+  ansible.windows.win_shell: Clear-DnsClientCache
+  changed_when: false
+  when: join_pass | int > 1
+
+- name: "Join pass {{ join_pass }} — preflight: a {{ domain_name }} DC answers"
+  ansible.windows.win_shell: |
+    $ErrorActionPreference = 'SilentlyContinue'
+    $dom = "{{ domain_name }}"
+    $srv = @(Resolve-DnsName -Type SRV -Name "_ldap._tcp.dc._msdcs.$dom" -ErrorAction SilentlyContinue |
+             Where-Object { $_.QueryType -eq 'SRV' -and $_.NameTarget })
+    if ($srv.Count -eq 0) {
+      # Report the DNS configuration with the failure. On 2026-09-20
+      # bs-supply01 returned no-srv-records through all three passes -- a
+      # persistent DNS fault on that host, not the DC load this probe was
+      # written for. The probe said WHAT failed and nothing about WHY, so the
+      # next step was a guess. These two lines make it evidence.
+      $dns = (Get-DnsClientServerAddress -AddressFamily IPv4 |
+              Where-Object { $_.ServerAddresses } |
+              ForEach-Object { "$($_.InterfaceAlias)=$($_.ServerAddresses -join '/')" }) -join ' '
+      $ips = (Get-NetIPAddress -AddressFamily IPv4 |
+              Where-Object { $_.IPAddress -notlike '127.*' } |
+              ForEach-Object { $_.IPAddress }) -join ','
+      $addrs = @(Get-DnsClientServerAddress -AddressFamily IPv4 |
+                 ForEach-Object { $_.ServerAddresses }) |
+               Where-Object { $_ } | Select-Object -Unique
+      $reach = foreach ($a in $addrs) {
+        $t = New-Object System.Net.Sockets.TcpClient
+        $up = $false
+        try { $up = $t.ConnectAsync($a, 53).Wait(3000) } catch { $up = $false } finally { $t.Dispose() }
+        if ($up) { "$a=open" } else { "$a=UNREACHABLE" }
+      }
+      $r = ($reach -join ' ')
+      "DCLOCATOR_NOT_READY no-srv-records-for-$dom dns=[$dns] ip=[$ips] resolver53=[$r]"
+    } else {
+      $ready = $null
+      foreach ($r in $srv) {
+        $ok = $true
+        foreach ($port in 389, 88, 445) {
+          $c = New-Object System.Net.Sockets.TcpClient
+          try {
+            if (-not $c.ConnectAsync($r.NameTarget, $port).Wait(3000)) { $ok = $false }
+          } catch {
+            $ok = $false
+          } finally {
+            $c.Dispose()
+          }
+          if (-not $ok) { break }
+        }
+        if ($ok) { $ready = $r.NameTarget; break }
+      }
+      if ($ready) {
+        "DCLOCATOR_READY dc=$ready"
+      } else {
+        $names = ($srv | ForEach-Object { $_.NameTarget }) -join ','
+        "DCLOCATOR_NOT_READY none-answered srv=$names"
+      }
+    }
+  register: dc_locator
+  until: "'DCLOCATOR_READY' in (dc_locator.stdout | default(''))"
+  retries: "{{ domain_join_locator_retries }}"
+  delay: 15
+  changed_when: false
+  failed_when: false
+
+# Deliberately non-fatal: the module frequently loses the connection mid-join
+# because the host reconfigures its network identity. `Verify domain
+# membership` below is what decides the outcome, not this task's rc.
+- name: "Join pass {{ join_pass }} — join {{ domain_name }}"
+  microsoft.ad.membership:
+    dns_domain_name: "{{ domain_name }}"
+    hostname: "{{ inventory_hostname }}"
+        # DOWN-LEVEL FORM, not UPN. `{{ domain_admin }}@{{ domain_name }}` is a
+        # UPN, and a UPN only resolves if the account HAS one. The base
+        # create_users role builds these accounts with New-ADUser and never
+        # passes -UserPrincipalName, so simspace has no UPN and
+        # simspace@voltgrid.com matches no principal. Windows reports that as
+        # "The user name or password is incorrect", which is indistinguishable
+        # from a wrong password and is what all 40 members failed with on
+        # 2026-09-27 while the password was provably correct.
+        #
+        # This was masked until the image refresh: the local admin used to BE
+        # simspace, promotion migrated it into the domain, and migrated accounts
+        # get a UPN. The 1.2.x images ship xadmin, so simspace is now created
+        # fresh by New-ADUser -- without one.
+        #
+        # VOLTGRID\simspace resolves on sAMAccountName, which every account has
+        # by construction, so this form works with or without a UPN.
+    domain_admin_user: '{{ short_domain_name }}\{{ domain_admin }}'
+    domain_admin_password: "{{ domain_admin_password }}"
+    state: domain
+  ignore_unreachable: true
+  ignore_errors: true
+  register: join_attempt
+
+# `wait_for` on localhost rather than `pause`. Identical wall clock, but pause
+# bypasses the host loop and is unsupported under `strategy: free` -- with it
+# gone, these plays can be switched to free without the crash documented in
+# site.yml and in PowerPlant's UPSTREAM_FIXES.md 2026-07-03.
+- name: "Join pass {{ join_pass }} — settle after network reconfiguration"
+  ansible.builtin.wait_for:
+    timeout: 45
+  delegate_to: localhost
+  become: false
+
+- name: "Join pass {{ join_pass }} — reconnect"
+  ansible.builtin.wait_for_connection:
+    timeout: 300
+    delay: 10
+
+- name: "Join pass {{ join_pass }} — verify domain membership"
+  ansible.windows.win_powershell:
+    script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
+  register: join_verification
+  changed_when: false     # read-only probe
+  failed_when: false
+
+- name: "Join pass {{ join_pass }} — record outcome"
+  ansible.builtin.set_fact:
+    member_joined: "{{ (join_verification.output | default([false]))[0] | default(false) | bool }}"

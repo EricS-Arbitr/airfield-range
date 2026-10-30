@@ -1,0 +1,36 @@
+---
+# =========================================================================
+# 10-mirror.yml — stage the SO source + detection content on the controller
+# =========================================================================
+# Runs on the Ansible controller itself. so_apt_mirror unpacks the pinned SO
+# source tarball, the ETOPEN ruleset and the three airgap content repos out
+# of ab_mb.tgz and serves them over nginx :80 on the MANAGEMENT address.
+# Every SO node fetches from here during install (see the so_manager,
+# so_search and so_sensor roles), and 75-endpoint.yml later stages the
+# Elastic Agent installers into the same tree.
+#
+# NOTHING HERE REACHES THE INTERNET. That is the point: these ranges deploy
+# to platforms with no egress and not even a proxy, so the content ships
+# inside the tarball. See group_vars/all/security_onion.yml for the three
+# install-time dependencies that are still outstanding.
+# =========================================================================
+
+- name: SO local mirror — nginx on the Ansible controller
+  # [ansible_controller] holds ONLY the controller. Do NOT use
+  # [infrastructure]: that group also carries is-inet, elgg and the other
+  # simulation hosts, and pointing the mirror role at it ran so_apt_mirror
+  # against the simulated-internet host on PowerPlant (2026-08-03).
+  hosts: ansible_controller
+  become: true
+  gather_facts: true
+  roles:
+    # Deliberately NOT running `common` here. On the controller it would do
+    # NetworkManager/netplan surgery against a host_vars entry that exists
+    # only as documentation (host_vars/ansible.yml says so in as many words),
+    # and reconfiguring the network of the machine currently running the
+    # playbook is a good way to lose the deploy. so_apt_mirror handles
+    # everything the mirror needs.
+    - so_apt_mirror
+  tags:
+    - so
+    - so_mirror

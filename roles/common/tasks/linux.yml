@@ -1,4 +1,41 @@
 ---
+# --- System hostname ------------------------------------------------------
+# AIRFIELD OVERLAY, added 2026-08-12. The base role writes an /etc/hosts entry
+# naming inventory_hostname but never sets the actual system hostname, so each
+# Linux host keeps whatever its image booted with. That is usually right --
+# the platform sets it from the blueprint VM name -- until it is not.
+#
+# A host that boots as `localhost` is invisible in the SIEM. rsyslog stamps
+# the system hostname into every message's HOSTNAME field, so the central
+# collector files 100% of that host's syslog under /var/log/remote/localhost/
+# and no directory under the host's real name ever exists. The failure is
+# silent -- the events arrive, they are simply attributed to a name nobody
+# recognises (~169k of them before this was caught, 2026-08-12).
+#
+# Set it explicitly. The /etc/hosts task below then agrees with reality rather
+# than asserting something the system does not believe.
+- name: System hostname matches inventory
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  register: common_hostname
+
+# rsyslog reads the hostname ONCE, at startup, and stamps it into every
+# message it forwards. Changing the hostname without restarting it leaves
+# every subsequent message labelled with the OLD name until the next reboot --
+# so the fix would appear to have worked while changing nothing observable.
+- name: Restart rsyslog so forwarded messages carry the new hostname
+  ansible.builtin.service:
+    name: rsyslog
+    state: restarted
+  when: common_hostname is changed
+  register: common_rsyslog
+  # Tolerate images with no rsyslog; fail on anything else. Same shape as the
+  # so-firewall 'already exists' tolerance -- name the acceptable failure
+  # rather than blanket-ignoring, or a real error rides through silently.
+  failed_when:
+    - common_rsyslog is failed
+    - "'Could not find the requested service' not in (common_rsyslog.msg | default(''))"
+
 - name: Configure hosts file
   ansible.builtin.lineinfile:
     path: /etc/hosts
@@ -19,12 +56,22 @@
     name: network-manager
     state: present
 
-- name: Set Resolv.conf
+# Rendered ONCE from every interface's nameservers merged, not once per
+# interface. Looping the template over network_interfaces made each iteration
+# overwrite the whole file, so the LAST interface carrying `dns` won and the
+# file churned on every run when the lists differed. No host has two
+# dns-bearing interfaces today, so nothing is broken right now -- the day one
+# does, the loop silently discards the other interface's resolvers.
+- name: Set resolv.conf
   ansible.builtin.template:
     src: resolv.conf.j2
     dest: /etc/resolv.conf
-  loop: "{{ network_interfaces }}"
-  when: item.dns is defined
+    mode: "0644"
+  vars:
+    resolv_nameservers: >-
+      {{ (network_interfaces | default([])) | selectattr('dns', 'defined')
+         | map(attribute='dns') | flatten | unique | list }}
+  when: resolv_nameservers | length > 0
 
 - name: Configure NetworkManager settings
   community.general.ini_file:
@@ -133,7 +180,11 @@
   ansible.builtin.package_facts:
     manager: auto
 
+# so-search timed out on the bare 600s default during the 2026-09-22
+# ss-pp-stacked build. This reboots a host whose netplan just changed, so the
+# machine is bringing its network back up as the clock runs.
 - name: reboot when changed
   ansible.builtin.reboot:
+    reboot_timeout: 1800
   when: netplan_config.changed
 

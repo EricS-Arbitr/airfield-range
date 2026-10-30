@@ -1,0 +1,69 @@
+---
+# init — how long to wait for a cold Windows host to answer WinRM.
+#
+# A longer wait costs nothing when the host is ready: wait_for_connection
+# returns as soon as the connection succeeds. It only matters for hosts that
+# are genuinely slow or genuinely down, and the Init play no longer lets those
+# take the rest of the fleet with them (see site.yml).
+# 2400 = 40 minutes. Raised from 1800 on 2026-09-15: four Windows hosts were
+# still not answering WinRM at the 30-minute mark on a fresh range.
+#
+# The ceiling is nearly free. wait_for_connection returns as soon as the
+# connection succeeds, so a healthy host never pays it -- it is only spent on
+# hosts that are genuinely slow or genuinely down. And since the Init play no
+# longer carries any_errors_fatal, a host that exhausts it drops out alone
+# instead of taking the fleet with it, which is what made a high ceiling too
+# expensive to contemplate before.
+init_wait_timeout: 2400
+
+# --- Stability gate (see tasks/wait_stable.yml) ---------------------------
+# How long a host must have been up before the run will configure it. Past the
+# boot storm, short enough not to add real time to a healthy build: a host that
+# has been up three minutes when init reaches it waits zero seconds.
+init_stable_uptime: 180
+
+# 80 x 15s = 20 minutes of waiting for a host to settle. This is the budget for
+# a host that is REACHABLE but still rebooting or servicing.
+init_stable_retries: 40
+
+# And this is the budget for one that vanished mid-probe. Generous on purpose:
+# a customer watching the provisioning UI can see a bad workstation and
+# reprovision it, and this window is what lets the run pick it up instead of
+# failing and forcing another full attempt.
+init_stable_recover_timeout: 1800
+init_wait_delay: 30
+init_wait_sleep: 10
+
+# --- Default-gateway ARP poisoning (see tasks/main.yaml) ------------------
+# MACs known to falsely answer ARP for a gateway address. The task flushes and
+# re-probes until the learned MAC is not on this list, then pins it.
+# 00:50:56:98:7D:D7 has been observed on four subnets across three independent
+# ranges; every real router interface in these ranges is in the :A8: block.
+init_gw_arp_blocklist:
+  - "00-50-56-98-7D-D7"
+# How many flush/re-probe cycles before giving up and reporting INIT_GW_FAIL.
+init_gw_arp_attempts: 6
+
+# Off-subnet addresses the gateway-ARP check may probe, tried before the
+# host's own DNS servers. Needed because DNS is NOT reliably off-subnet: hosts
+# in the Services segment (172.31.2.0/24) have their DCs in that same segment,
+# so pinging them never crosses the gateway and proves nothing about routing.
+#
+# The check verifies each candidate is genuinely off-subnet before using it,
+# and refuses to pin at all when none is -- an unpinned gateway is the status
+# quo, a wrongly pinned one is an isolated host.
+#
+# soc-syslog and the SO manager are good targets: off-subnet for every segment
+# that carries endpoints, and reaching them is what the deploy needs anyway.
+# THREE TARGETS, DELIBERATELY IN DIFFERENT SEGMENTS. Any single target is
+# on-subnet for the hosts that share its segment, and those hosts would then
+# fall through to DNS -- which is exactly the assumption that broke this check
+# in the first place. bs-dc01 covers the SOC segment (soc-analyst01-06 sit at
+# 172.31.7.x alongside both SOC targets); the SOC pair covers everything else.
+# Verified 2026-09-17: all 48 Windows hosts have at least one off-subnet
+# target from this list, with no reliance on the DNS fallback.
+init_gw_probe_targets:
+  - "172.31.7.13"      # soc-syslog       — off-subnet for all but SOC
+  - "172.31.7.15"      # soc-so-manager   — off-subnet for all but SOC
+  - "172.31.2.7"       # bs-dc01          — off-subnet for SOC
+init_noroute_retries: 120

@@ -1,0 +1,464 @@
+---
+# =========================================================================
+# group_vars/all/security_onion.yml — Security Onion 2.4.x (Blackstone)
+# =========================================================================
+# Ported from PowerPlant/ss-pp-ab, which is the version proven end-to-end on
+# a from-scratch range. Read ss-pp-ab/UPSTREAM_FIXES.md and
+# so-ansible/docs/PORTING_GUIDE.md §9 before changing anything here — §9 is
+# the list of things that break a NEW range silently.
+#
+# MUST live under group_vars/all/, not group_vars/so_all.yml.
+#
+# It was in so_all.yml first in PowerPlant, which scopes every variable to
+# the [so_all] group — so `so_apt_mirror`, which runs on the ANSIBLE
+# CONTROLLER, could not see so_git_ref and phase 10 died with
+# "'so_git_ref' is undefined" (2026-08-03). The controller, the mirror
+# routers and the SO nodes consume these and are all in different groups.
+# Everything here is so_*-prefixed, so a global scope collides with nothing.
+# =========================================================================
+
+# --- Pinned SO source ----------------------------------------------------
+# A SHA, not a tag. The `setup/automation/` answer-file mechanism that this
+# whole stack depends on exists only on 2.4/main — no tagged 2.4.x release
+# ships it.
+#
+# This MUST match roles/so_base/files/setup-automation-source/SOURCE_SHA.txt,
+# which is the commit the snapshotted so-setup/so-functions/so-variables/
+# so-whiptail were taken from. A mismatch means the overlay is patching
+# functions that moved. Do not bump casually — PORTING_GUIDE §10 lists the
+# functions to re-diff on upgrade.
+so_git_ref: "55af7eb541f086c4e7d6d3182fb2bc4fbc2b9e21"   # 2.4/main HEAD @ 2026-07-22
+so_git_branch: "2.4/main"
+so_git_repo: "https://github.com/Security-Onion-Solutions/securityonion.git"
+
+# NEXUS SOURCING (2026-10-21): when set, the controller downloads the pinned SO
+# source tarball from the in-platform Nexus (ng_raw, via the mgmt proxy, internal
+# CA so validate_certs is off) instead of cloning github. Empty = git-clone.
+so_source_artifact_url: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/so/source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+
+# Only working install mode on Ubuntu — `so-setup iso` is CentOS/Rocky only.
+so_setup_type: "network"
+
+# --- Install-time egress -------------------------------------------------
+# so-setup pulls from packages.securityonion.net, Docker, Elastic and Ubuntu
+# repos. Reuses the range's existing mgmt-plane proxy (bs-proxy is the
+# IN-SCENARIO proxy and is not this) rather than defining a second one; the
+# mgmt plane is out-of-band and invisible in-scenario.
+#
+# THIS IS ONE OF THE THREE REMAINING EGRESS DEPENDENCIES. It is deferred, not
+# solved: on a platform with no egress at all, so-setup's own package fetches
+# still need a source. The bundled tarball covers the SO source and the
+# detection content (see airgap below); it does not yet cover apt/Docker.
+# Resolution is the in-platform Nexus. Until then this stack needs
+# 10.255.240.1:3128 to work during install only — never at runtime.
+so_upstream_proxy: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+
+# --- In-range mirror (on the Ansible controller) -------------------------
+# nginx on the controller serving the pinned SO source, the ETOPEN tarball
+# and the airgap content repos, all shipped inside ab_mb.tgz.
+#
+# Derived, not restated. A hardcoded copy duplicates `ansible_host` in
+# host_vars/ansible.yml, so a range whose controller lands on a different
+# mgmt IP needs the same value changed in two places — and forgetting the
+# second breaks phases 10, 30 and 75 with a connection error that points at
+# neither file (ss-pp-ab structural pass 5/5, 2026-08-05).
+#
+# Earmarked to move to the platform-hosted Nexus once access exists.
+so_mirror_host: "{{ hostvars[groups['ansible_controller'][0]]['ansible_host'] }}"
+so_mirror_port: 80
+so_mirror_url: "http://{{ so_mirror_host }}:{{ so_mirror_port }}"
+so_source_tarball_url: "{{ so_mirror_url }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+so_bundled_rules_filename: "emerging.rules.tar.gz"
+
+# --- Grid identity -------------------------------------------------------
+# Derived from the manager's own host_vars, same reasoning as so_mirror_host.
+# `groups` and `so_prod_ip` are inventory data resolved lazily at use time and
+# available even under `--limit`, so this is safe in every play.
+so_manager_ip: "{{ hostvars[groups['so_manager'][0]]['so_prod_ip'] }}"
+so_manager_hostname: "soc-so-manager"
+so_msrv: "{{ so_manager_hostname }}"
+so_msrv_ip: "{{ so_manager_ip }}"
+
+# --- Range subnets -------------------------------------------------------
+# SOC hosts the whole SO grid. Mirrored traffic arrives encapsulated, so the
+# sensors need no interface in the segments they watch.
+so_subnet_soc: "172.31.7.0/24"
+
+# Segments each sensor monitors. Documentation plus the 60-verify targets;
+# NOT the tc mirror lists, which live per-router in host_vars because
+# interface numbering is a device-specific fact.
+so_subnets_corp:
+  - "172.31.2.0/24"      # Services      (blackstone.mil DCs, file, mail, wec)
+  - "172.31.14.0/24"     # Headquarters
+  - "172.31.15.0/24"     # IT
+  - "172.31.16.0/24"     # Supply
+so_subnets_fops:
+  - "172.31.3.0/24"      # Flight-Ops-Services (fops.blackstone.mil DCs)
+  - "172.31.5.0/24"      # Flight-Control-Center (ATC, weather)
+  - "172.31.6.0/24"      # Flight-Ops-Users
+so_subnets_ot:
+  - "172.16.45.0/29"     # MTU / control-room-hmi
+  - "172.16.45.8/29"     # Fuel Farm PLC
+  - "172.16.46.0/24"     # Fuel Farm Sim
+so_subnets_edge:
+  - "200.200.200.0/24"   # simulated internet (is-inet, elgg)
+  - "199.252.163.0/30"   # bs-edge-rtr <-> bs-edge-fw transit
+
+# In-range subnets that bypass the upstream proxy (so_base/environment.j2).
+#
+# MUST be literal NAMES, not CIDRs, for the hostname portion — Python's
+# urllib does not parse CIDR notation in no_proxy at all (so-ansible
+# UPSTREAM_FIXES 2026-07-23), so salt's internal HTTP probes to a peer node
+# would go out through the proxy and time out. Every grid node by IP, plus
+# localhost.
+so_no_proxy_subnets: >-
+  {{ groups['so_all'] | map('extract', hostvars, 'so_prod_ip') | list
+     + ['127.0.0.1', 'localhost'] }}
+
+# THE ROLES' NAME FOR "the subnet the SO grid lives on". so_base and
+# so_manager reference `so_subnet_security` in three places, all functional:
+#   so_base/tasks/main.yml:232   NO_PROXY for salt's internal HTTP probes
+#   so_base/tasks/main.yml:277   the scope-link netplan route (see below)
+#   so_manager/templates/manager.env.j2:83   ALLOW_CIDR in the answer file
+#
+# The name is a PowerPlant/so-ansible artifact -- their grids sit on a subnet
+# literally called "security". Aliasing here rather than renaming in the roles
+# keeps them byte-identical to ss-pp-ab, so the next re-copy is a plain `cp`
+# with no merge. Logged in UPSTREAM_FIXES as a naming wart to fix upstream.
+#
+# Three separate things happen to be the same CIDR in this range:
+#   1. ALLOW_CIDR, who may reach the SOC WebUI. Must be a SINGLE CIDR --
+#      so-common's valid_cidr regex rejects a comma-joined list, and a list
+#      silently hangs the setup TUI for an hour (so-ansible UPSTREAM_FIXES
+#      2026-07-22). The soc /24 covers soc-analyst01..06 (.31-.36) and
+#      soc-flare (.18).
+#   2. The scope-link route so_base adds on the prod NIC. The platform hands
+#      each node a /32, which leaves the kernel unaware that any /24 exists on
+#      eth1, so peers are unreachable and a joining node dies at "Checking
+#      manager connectivity".
+#   3. NO_PROXY, so salt does not send node-to-node HTTP through the proxy.
+#
+# COUNT THE COINCIDENCES: they agree because the whole grid is on SOC. Split
+# the grid across subnets and this needs to become three variables, not one.
+so_subnet_security: "{{ so_subnet_soc }}"
+
+# The wider set, for so-allow rules added after setup.
+so_allow_subnets:
+  - "{{ so_subnet_soc }}"
+  - "10.255.240.0/20"
+
+# --- Answer-file values (rendered into the so-setup templates) -----------
+so_nids: "Suricata"
+so_zeek_version: "ZEEK"
+so_rule_set: "ETOPEN"
+so_manager_adv: "BASIC"
+so_address_type: "STATIC"
+so_web_access_type: "IP"
+
+# IP, not hostname: the cert and every redirect are built around this value,
+# and a hostname a client cannot resolve gives redirect loops rather than an
+# error you can read.
+
+# SOC WebUI admin, plus the shared secret search/sensor use to join the
+# manager. Both live in group_vars/all/vault.yml.
+#
+# DELIBERATELY a literal, not "admin@{{ domain_name }}". Deriving it would
+# reach for a GROUP-scoped variable from a host that may not be in that
+# group — the same scope trap as everything else in this file's header.
+so_web_user: "admin@blackstone.mil"
+so_web_password: "{{ vault_so_web_password }}"
+so_remote_password: "{{ vault_so_remote_password }}"
+
+# --- Airgap mode ---------------------------------------------------------
+# The in-game plane has no real internet — only is-inet's simulation. SO's
+# detection engines would otherwise hit github and rules.emergingthreats.net
+# every 5 minutes and fail forever, surfacing in SOC as a permanent
+# "ElastAlert: Sync Failed" / "Suricata: Rule Mismatch".
+#
+# SO has first-class airgap support keyed off ONE pillar boolean
+# (`global:airgap`); setting it swaps every remote content source for a local
+# path. so_apt_mirror stages the content out of the tarball, so_manager flips
+# the pillar and proves it took.
+#
+# Do NOT patch soc.json instead. It is salt-rendered and reverts on the next
+# highstate — same lesson as the GRE firewall rule.
+so_airgap_mode: true
+so_airgap_build_dir: "/var/tmp/so-airgap-build"
+so_airgap_etopen_dest: "/nsm/rules/suricata/etopen"
+so_airgap_pillar_file: "/opt/so/saltstack/local/pillar/global/adv_global.sls"
+
+# `url` is retained for provenance only — with so_airgap_mode true these are
+# staged from the bundle, never cloned. See so_apt_mirror/tasks/airgap_content.yml.
+# NEXUS SOURCING (2026-10-21): when set, each airgap content repo tarball is
+# downloaded from Nexus ng_raw (<base>/<name>.tar.gz, via the mgmt proxy) instead
+# of being cloned from github and re-tarred on the controller. Empty = git-clone.
+so_airgap_artifact_base: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/so/content"
+
+so_airgap_repos:
+  - name: securityonion-resources
+    url: "https://github.com/Security-Onion-Solutions/securityonion-resources"
+    dest: "/nsm/rules/detect-sigma/repos/securityonion-resources"
+  - name: securityonion-yara
+    url: "https://github.com/Security-Onion-Solutions/securityonion-yara"
+    dest: "/nsm/rules/detect-yara/repos/securityonion-yara"
+  - name: securityonion-resources-playbooks
+    url: "https://github.com/Security-Onion-Solutions/securityonion-resources-playbooks"
+    dest: "/nsm/airgap-resources/playbooks/securityonion-resources-playbooks"
+
+# --- Elastic Agent endpoint telemetry ------------------------------------
+# Subnets that must reach the manager's Fleet ports (8220 control, plus data
+# and update). Fed to `so-firewall includehost elastic_agent_endpoint` by
+# playbooks/75-endpoint.yml.
+#
+# Derived from the inventory 2026-08-11: every host in [windows] + [linux]
+# minus the SO grid and minus [no_endpoint_agent] — 66 hosts across 10 full
+# subnets plus 2 individual OT hosts. Listed
+# explicitly rather than computed so the permitted set is reviewable, and
+# 75-endpoint.yml ASSERTS that every agent target's in-scenario address falls
+# inside one of these. Add a host on a new segment and the assert fails
+# loudly instead of that host silently failing to enroll.
+#
+# PREFIXES ARE REAL, NOT ROUNDED. PowerPlant's assert compared the first
+# three octets, which is exact only when every entry is a /24. Two entries
+# here are /29s inside the same third octet, so 75-endpoint.yml does a proper
+# CIDR containment test with `ipaddr` instead. Do not "simplify" 172.16.45.0/29
+# and 172.16.45.8/29 into a 172.16.45.0/24 — that subnet does not exist, and
+# writing it into the hostgroup would permit addresses the range never assigns.
+so_agent_endpoint_subnets:
+  - "172.31.2.0/24"       # Services      — bs-dc01/02, bs-file01/02, bs-mail, bs-wec, bs-proxy
+  - "172.31.3.0/24"       # Flight-Ops-Services — fops-dc01/02, fops-file, fops-wec, fops-app01-03
+  - "172.31.5.0/24"       # Flight-Control-Center — atc-radar/weather/station, fops-flight01-05
+  - "172.31.6.0/24"       # Flight-Ops-Users — fops-ops01-08
+  - "172.31.7.0/24"       # SOC — soc-analyst01-06, soc-syslog
+  - "172.31.8.0/24"       # Engineering-Control-Center — bs-eng01-06, bs-ro-hist
+  - "172.31.12.0/24"      # DMZ — bs-www, bs-ftp, bs-ns1
+  - "172.31.14.0/24"      # Headquarters
+  - "172.31.15.0/24"      # IT
+  - "172.31.16.0/24"      # Supply
+  # --- OT: TWO HOSTS, NOT THREE SEGMENTS ---------------------------------
+  # /32s on purpose. Everywhere else a whole subnet is the right granularity;
+  # crossing the Purdue L3.5 boundary it is not. Only the Level 3 historian
+  # and audit DB are agent targets (see [no_endpoint_agent] in `hosts` for the
+  # rule and the reasoning), and a 172.16.46.0/24 entry would additionally
+  # permit fuel-farm-sim — a host that will never enroll — to open a session
+  # to Fleet. Permitting what will actually be used, and nothing else, is the
+  # whole point of a boundary.
+  #
+  # The two suppressed segments are gone entirely, not narrowed:
+  #   172.16.45.0/29  MTU        — only control-room-hmi, excluded
+  #   172.16.45.8/29  Fuel PLC   — only ff-plc-1, excluded
+  #
+  # These cross bs-ops-fw, which is lab permit-any per interface today
+  # (host_vars/bs-ops-fw.yml: "NO blocking ACLs yet"), so they enroll now.
+  # WHEN THE L3.5 ACLs LAND this needs an explicit pfsense_rules entry
+  # permitting these two hosts to reach the SOC subnet on Fleet's ports --
+  # a deliberate change to the range's security posture. elastic_agent's
+  # preflight fails loudly if it is missing; it does not open the path itself.
+  - "172.16.46.18/32"     # fuel-hist — L3 historian (Telegraf/InfluxDB/Grafana)
+  - "172.16.46.19/32"     # fuel-db   — L3 audit DB (PostgreSQL/TimescaleDB)
+
+# The SO hostgroup that opens Fleet's ports. Confirmed present in
+# /opt/so/saltstack/default/salt/firewall/defaults.yaml on 2026-08-04,
+# mapping to portgroups elastic_agent_control (8220), _data and _update.
+so_agent_firewall_hostgroup: "elastic_agent_endpoint"
+
+# --- Variables that MUST be all-scoped, not role-scoped -------------------
+# Role defaults are ROLE-scoped: a play that does not include the role cannot
+# see them. playbooks/75-endpoint.yml stages installers onto the mirror
+# without including either so_apt_mirror or elastic_agent, so these have to
+# live here. Third instance of this trap — see so_bundled_rules_filename,
+# so-ansible UPSTREAM_FIXES 2026-07-29 (fresh-range 3).
+#
+# verify_vars.py cannot catch it: it treats any role default as globally
+# defined, so a scope error resolves fine at build time and fails at run time.
+so_mirror_root: /var/www/so-mirror
+so_agent_installer_windows: "so-elastic-agent_windows_amd64"
+so_agent_installer_linux: "so-elastic-agent_linux_amd64"
+
+# --- Elastic Defend event-filter exclusions -------------------------------
+# EMPTY: nothing on this range currently generates enough low-value endpoint
+# telemetry to be worth excluding. The mechanism stays documented because the
+# constraints are non-obvious and were expensive to establish.
+#
+# Managed DIRECTLY against the Kibana API, not through SO's custom-filters
+# helper. The helper hardcodes `"os_types": ["windows"]` (line 87 of
+# so-elastic-defend-manage-filters.py) and never reads the `operating_system`
+# key, so it structurally cannot express a Linux filter — a filter correct in
+# every other respect still gets stamped Windows-only, and Defend on a Linux
+# host never evaluates it.
+#
+# Safe to self-manage: the helper only ever deletes a GUID listed in
+# disabled-filters.yaml and only iterates its own input directories. It never
+# enumerates the list, so it cannot touch items it did not create.
+#
+# ONE filter, not one per event type. Entries key on event.dataset, and
+# file_create/file_delete/rename all land in endpoint.events.file — two rules
+# produce byte-identical entries, which is why a second one reports "up to
+# date" while doing nothing.
+#
+# To add one: fresh GUID, then os_type / dataset / field / value. Confirm in
+# Hunt (group by host, event.dataset) that the host really does dominate
+# before excluding anything. so_manager gates on `length > 0`, so an empty
+# list is a clean no-op.
+so_defend_exclusions: []
+
+so_defend_filters_src: "/opt/so/saltstack/local/salt/elasticfleet/files/soc/elastic-defend-custom-filters.yaml"
+so_defend_filters_raw: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters-raw"
+so_defend_filters_out: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters"
+
+# =========================================================================
+# Container image registry content — the 5th artifact class
+# =========================================================================
+# Until 2026-09-07 this was the ONLY install artifact the SO nodes fetched
+# from the internet THEMSELVES. so-setup's docker_seed_registry() pulled 22
+# images straight from ghcr.io on the manager, retagged them
+# so-manager:5000/... and pushed them into its own registry. Every other
+# class (SO source, ETOPEN, sigma/yara/playbook repos) already came from the
+# controller's nginx mirror, per the rule in so_apt_mirror/airgap_content.yml:
+# the controller is the only host with mgmt-plane egress.
+#
+# WHAT THAT COST US — ss-pp-stacked, 2026-09-05
+# ---------------------------------------------
+# so-setup DELETES /etc/systemd/system/docker.service.d/ on its reinstall
+# path. The docker proxy drop-in so_base writes was therefore GONE by the
+# time the seeding ran (proved by mtime: drop-in 05:31:40, so-setup.log
+# 04:22:45 — the drop-in was recreated by the NEXT attempt, 69 min later).
+# Docker fell back to direct DNS, hit the in-range DC at 172.16.2.7 which
+# cannot resolve ghcr.io, and all four pull attempts 404'd. The registry
+# stayed empty (8.0K, 0 repositories), 12 of 13 containers were never
+# created, and because setup-completed had already been written at 04:23 the
+# next two attempts SKIPPED so-setup entirely — 7h22m, never retrying the one
+# step that was broken.
+#
+# THE SUPPORTED MECHANISM
+# -----------------------
+# so-setup checks local files before any network call:
+#   docker_seed_registry()   -> tar xvf /nsm/docker-registry/docker/registry.tar
+#   import_registry_docker() -> docker load -i .../registry_image.tar
+# That is how the airgap ISO installs. We reproduce it from the mirror, so
+# in-play systems now have ZERO internet dependency for images. The
+# controller is the only host that reaches ghcr.io, and only to BUILD these.
+#
+# END STATE (Eric, 2026-09-07): both artifacts hosted on the in-platform
+# Nexus. Set so_registry_artifact_url to that base URL and the controller
+# DOWNLOADS them instead of building. No other change required.
+so_registry_artifact_url: ""
+
+# Tags carried by the SO container set. MUST track so_git_ref — the salt
+# states reference these literally, so a mismatch means the highstate asks
+# the local registry for a tag it does not have and every container stays
+# `missing`: the exact failure this mechanism exists to prevent.
+so_registry_image_version: "2.4.211"
+so_registry_registry_version: "3.0.0"
+so_registry_elasticsearch_version: "9.0.8"
+
+# NEXUS SOURCING (2026-10-21): the registry base the CONTROLLER pulls the SO
+# images FROM when building the on-range registry. Default is ghcr.io (internet
+# via proxy); set to the in-platform Nexus docker registry to pull from there
+# (via the mgmt proxy; internal CA, so build_so_registry passes --src-tls-verify=false).
+# The on-range registry the GRID pulls from is unchanged.
+so_registry_source: "nexus-docker.dev.ng.simspace.lan/security-onion-solutions"
+
+# Versioned on the mirror so a stale blob cannot masquerade as a current one.
+# Renamed to registry.tar / registry_image.tar on the node, because those are
+# the names so-setup looks for.
+so_registry_tar_name: "so-registry-{{ so_registry_image_version }}.tar"
+so_registry_image_tar_name: "so-registry-image-{{ so_registry_registry_version }}.tar"
+
+# Verified against a healthy 2.4.211 manager (ss-pp-so, 2026-09-07): the
+# registry held exactly 22 repositories totalling 7.2 GB. so-elasticsearch
+# carries Elastic's own version, NOT the SO tag.
+so_registry_images:
+  - "so-elastalert:{{ so_registry_image_version }}"
+  - "so-elastic-agent:{{ so_registry_image_version }}"
+  - "so-elastic-agent-builder:{{ so_registry_image_version }}"
+  - "so-elastic-fleet-package-registry:{{ so_registry_image_version }}"
+  - "so-elasticsearch:{{ so_registry_elasticsearch_version }}"
+  - "so-hydra:{{ so_registry_image_version }}"
+  - "so-idh:{{ so_registry_image_version }}"
+  - "so-influxdb:{{ so_registry_image_version }}"
+  - "so-kafka:{{ so_registry_image_version }}"
+  - "so-kibana:{{ so_registry_image_version }}"
+  - "so-kratos:{{ so_registry_image_version }}"
+  - "so-logstash:{{ so_registry_image_version }}"
+  - "so-nginx:{{ so_registry_image_version }}"
+  - "so-pcaptools:{{ so_registry_image_version }}"
+  - "so-redis:{{ so_registry_image_version }}"
+  - "so-soc:{{ so_registry_image_version }}"
+  - "so-steno:{{ so_registry_image_version }}"
+  - "so-strelka-backend:{{ so_registry_image_version }}"
+  - "so-strelka-manager:{{ so_registry_image_version }}"
+  - "so-suricata:{{ so_registry_image_version }}"
+  - "so-telegraf:{{ so_registry_image_version }}"
+  - "so-zeek:{{ so_registry_image_version }}"
+
+# Hard gate on the node. A registry with fewer repositories than this did not
+# seed correctly; failing here costs a re-run, failing downstream costs the
+# 30-minute so-status timeout and a misleading error.
+so_registry_min_repos: 22
+
+# How many resume passes the node gets on the 7.2 GB artifact. Replaced the
+# old size-floor heuristic, which could only DETECT a truncated transfer --
+# it could not finish one. Each pass resumes where the last stopped, so the
+# worst observed cutoff (~2 GB per pass on a cold cache) completes in four.
+# Eight leaves margin without letting a genuinely dead link spin forever.
+so_registry_download_passes: 8
+
+# Build log for the controller-side container-image build. In group_vars
+# rather than so_apt_mirror/defaults because the wait play at the top of
+# playbooks/40-manager.yml reads it and does not include that role.
+so_registry_build_log: /var/log/so_registry_build.log
+
+# --- Central syslog into Security Onion -----------------------------------
+# soc-syslog is the range's rsyslog collector: VyOS routers, both pfSense
+# firewalls and every Linux host ship to UDP/TCP 514 there, and it writes
+# /var/log/remote/<device>/syslog.log (roles/syslog_server).
+#
+# Two mechanisms consume that, both configured by so_fleet_integrations:
+#
+#   pfSense  rsyslog on soc-syslog relays the RAW datagram from the firewall
+#            interface addresses to 127.0.0.1 on that firewall's own port,
+#            where the Elastic pfSense integration parses it. See
+#            roles/syslog_server/templates/29-fleet-forward.conf.j2 for why
+#            this is a local fan-out and not a second destination on the
+#            firewalls.
+#   VyOS     the agent tails /var/log/remote/<router>/syslog.log directly.
+#
+# THE VyOS PATHS ARE ENUMERATED PER ROUTER, NEVER GLOBBED. /var/log/remote/
+# holds every sender, including the SO grid nodes themselves -- they are in
+# [linux] so their daemon logs land there like everyone else. Measured on the
+# first ingest 2026-08-12: soc-so-manager alone was the single largest source
+# at 453k events, and the six grid nodes together were roughly a third of all
+# syslog volume. SO already collects its own component logs natively, so
+# reading them back in is duplicate data about the thing doing the reading.
+# Listing the [vyos] hosts explicitly excludes them structurally rather than
+# by a filter that can be forgotten.
+
+
+# ONE LISTENER PORT PER FIREWALL, and that is how the events get attributed.
+#
+# pfSense omits the HOSTNAME field entirely (UPSTREAM_FIXES 2026-06-30 --
+# FreeBSD syslogd does not insert it on remote forwards), so a pfSense event
+# carries no device identity of its own. rsyslog works around that for the
+# FILE store by mapping $fromhost-ip to a name, but the Fleet relay cannot:
+# it forwards with omfwd to loopback, so the Elastic agent sees
+# log.source.address 127.0.0.1 for every message regardless of origin.
+# Measured 2026-09-16 -- every pfsense document had the same source address.
+#
+# So the PORT carries the identity. Each firewall relays to its own port, and
+# each port has its own integration stamping observer.hostname with a static
+# processor. Nothing rewrites the message, so grok parsing is untouched --
+# which matters, because re-rendering is exactly what broke parsing on
+# ss-pp-so before %rawmsg% was adopted.
+#
+# IN GROUP_VARS RATHER THAN A ROLE DEFAULT: both roles/syslog_server (the
+# relay template) and so_fleet_integrations read this, and neither includes
+# the other -- a role default would resolve cleanly at build time and be
+# undefined at run time. Fifth instance of that trap.
+#
+# Adding a firewall is two lines: an entry here, and an integration entry in
+# so_fleet_integrations. The relay template reads this map directly, so it
+# needs no edit.
+so_pfsense_syslog_ports:
+  bs-edge-fw: 9001
+  bs-ops-fw: 9002

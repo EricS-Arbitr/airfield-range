@@ -1,0 +1,66 @@
+---
+# Admit a host to the run only once it is settled, not merely answering.
+#
+# WHY THIS EXISTS. wait_for_connection returns on the FIRST successful
+# connection. A workstation still finishing provisioning answers WinRM once,
+# gets admitted, and then reboots -- sysprep, driver install, Windows
+# servicing, the range agent -- and vanishes mid-run. Ansible evicts an
+# unreachable host from every remaining task and play, so the range finishes
+# without it and the Fleet coverage gate fails hours later.
+#
+# MEASURED. In two of the three attempt-1 failures that prompted this, the host
+# had already passed wait_for_connection and died within seconds:
+#   2026-09-22  airfield  soc-analyst03    died on init task 2
+#   2026-09-22  stacked   5 workstations   died on the first task of `common`
+# Nothing timed out. The gate let them in too early. init_wait_timeout was
+# already 2400s and was never the constraint.
+#
+# So this asks a different question: has this host been up long enough to be
+# past its boot storm?
+#
+# It is a PROXY, not a proof. Uptime catches a host still inside its boot
+# storm; it cannot see a provisioning agent about to restart the machine for
+# its own reasons. It is the best signal available from inside the guest and it
+# covers the case actually observed.
+#
+# The probe lives in stable_probe.yml, which documents exactly which of its
+# signals blocks and which is only reported, and why that distinction is what
+# keeps this gate passable.
+- name: Wait until this host is settled
+  ansible.builtin.include_tasks: stable_probe.yml
+  vars:
+    init_probe_name: Probe whether this host is stably up
+
+# The half `until` cannot handle: the host went away rather than answering
+# unsettled. Wait for it to come back, then ask again.
+- name: Host vanished while settling — wait for it, then re-probe
+  when: init_stable is unreachable
+  block:
+    - name: Wait for the host to come back
+      ansible.builtin.wait_for_connection:
+        timeout: "{{ init_stable_recover_timeout }}"
+        delay: 15
+        sleep: 10
+
+    - name: Re-probe once the host is back
+      ansible.builtin.include_tasks: stable_probe.yml
+      vars:
+        init_probe_name: Re-probe whether this host is stably up
+
+- name: Report stability
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ (init_stable.output | default(['(unreachable throughout)'])) | join(' ') }}
+
+# Admitting an unsettled host is the deliberate choice above, but it must never
+# be a SILENT one -- an exhausted gate and a satisfied gate looked identical in
+# the log until this task existed, which is why the 2026-09-25 [win11] stall
+# had to be diagnosed by hand. Grep a run for INIT_STABLE_ADVISORY.
+- name: Flag a host that was admitted without ever settling
+  when: "'HOST_STABLE' not in (init_stable.output | default([]) | join(' '))"
+  ansible.builtin.debug:
+    msg: >-
+      INIT_STABLE_ADVISORY {{ inventory_hostname }} never reported settled after
+      {{ init_stable_retries }} probes and was admitted anyway —
+      {{ (init_stable.output | default(['unreachable throughout'])) | join(' ') }}

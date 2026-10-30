@@ -16,7 +16,7 @@
 # -------------------------------------------------------------------------
 # soc-elastic already exists at 172.31.7.15 (mgmt 10.255.240.131), reserved in
 # the inventory as "future Elastic / Security Onion stack" and deliberately
-# left without splunk-forwarder. It becomes the SO MANAGER.
+# left without an endpoint agent. It becomes the SO MANAGER.
 #
 # ** ITS IMAGE MUST CHANGE. ** It is currently
 # global/RDP_Ubuntu_Server_24.04:1.1.0 (noble). Security Onion 2.4 at our
@@ -31,7 +31,7 @@
 # Also needs resizing -- it was specced as a placeholder, not as a manager
 # running 14 containers plus Elasticsearch.
 - type: "range.resource.primitive.VmInstance::1.0.0"
-  name: "soc-elastic"
+  name: "soc-so-manager"
   properties:
     image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"   # WAS RDP_Ubuntu_Server_24.04
     cpuCount: 16                                        # confirm current value
@@ -50,7 +50,7 @@
 # Storage-bound rather than CPU-bound; size for retention. In PowerPlant this
 # node carried roughly half the cluster's shards.
 - type: "range.resource.primitive.VmInstance::1.0.0"
-  name: "soc-elastic-search"
+  name: "soc-so-search"
   properties:
     image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
     cpuCount: 16
@@ -138,8 +138,8 @@
 # =========================================================================
 # SOC subnet 172.31.7.0/24 currently in use:
 #   .1 bs-sec-rtr   .13 soc-syslog  .15 soc-elastic  .16 soc-openvas
-#   .19 soc-splunk  .31-.36 soc-analyst01-06
-# .20-.24 are free and contiguous.
+#   .31-.36 soc-analyst01-06
+# .19-.24 are free and contiguous.
 #
 # Management: this range uses a contiguous block 10.255.240.100-.181 (82
 # hosts). New allocations continue at .182-.186 rather than backfilling low

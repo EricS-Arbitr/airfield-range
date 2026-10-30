@@ -112,6 +112,30 @@ check_pf_shell() {
   fi
 }
 
+# Query Elasticsearch on the SO manager and grep the raw response.
+#
+# SEPARATE FROM check_pf_shell BECAUSE OF --become. so-elasticsearch-query
+# requires root; run unprivileged it produces NOTHING on stdout and exits
+# quietly. Section 9 was written with check_pf_shell on 2026-09-22 and every
+# dataset check failed on a healthy grid, because empty output is
+# indistinguishable from an empty index. playbooks/75-endpoint.yml has used
+# `become: true` for these queries all along.
+#
+# The command is kept deliberately quote-light -- one single-quoted URL, no
+# $( ), no variable assignment -- because it crosses ansible's free-form
+# argument parsing, which counts quotes and does not know it is looking at a
+# shell pipeline.
+check_so() {
+  local cmd="$1" expect="$2" label="$3"
+  local out
+  out=$(A soc-so-manager -m ansible.builtin.shell -a "$cmd" --become --one-line)
+  if echo "$out" | grep -qE "$expect"; then
+    pass "$label"
+  else
+    fail "$label" "$out"
+  fi
+}
+
 # Count Windows hosts in a group that satisfy a PowerShell predicate.
 # The PS one-liner should print a single token per host that grep can match.
 count_ps_predicate() {
@@ -177,6 +201,30 @@ check_pf_shell bs-edge-fw \
 
 # =========================================================================
 # 3. Active Directory — blackstone.mil + fops.blackstone.mil
+# --- No Windows host is pinned to the impostor gateway MAC ----------------
+# Fleet-wide, not a spot check, because this fault picks hosts at random. One
+# MAC answers ARP for the default-gateway address on whatever segment it
+# appears on, and it ANSWERS ICMP -- so the gateway pings while nothing routes
+# off-subnet. It presents as DNS failures, domain joins failing and Fleet
+# enrolment failing, never as "the network is down".
+#
+# roles/init pins the real MAC as a Permanent neighbour entry on every Windows
+# host. This asks whether any host still holds the impostor, which is both a
+# regression check on that task and the fastest explanation available for a
+# host that is mysteriously half-built.
+# count_ps_predicate and A() already exist for exactly this shape -- reuse
+# them rather than reaching for `ansible` directly, which would bypass the
+# script's inventory and verbosity handling.
+arp_bad=$(count_ps_predicate windows \
+  'if (Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.LinkLayerAddress -eq "00-50-56-98-7D-D7" }) { "IMPOSTOR_MAC_PRESENT" } else { "GW_MAC_CLEAN" }' \
+  'IMPOSTOR_MAC_PRESENT')
+arp_total=$(n_hosts windows)
+if [ "${arp_bad:-0}" -eq 0 ]; then
+  pass "impostor gateway MAC absent from all $arp_total Windows hosts"
+else
+  fail "impostor gateway MAC present on $arp_bad of $arp_total Windows hosts — those hosts cannot route off-subnet"
+fi
+
 # =========================================================================
 section "3. Active Directory"
 
@@ -317,67 +365,14 @@ for fw in bs-edge-fw bs-ops-fw; do
 done
 
 # =========================================================================
-# 6. SOC tier — Splunk SIEM
+# 6. SOC tier — endpoint telemetry
 # =========================================================================
-section "6. SOC tier — Splunk SIEM"
-
-# Indexer service active and listening on receiver (9997) + web (8000) + REST (8089).
-# Pattern: emit a sentinel from the remote shell then grep for it -- avoids
-# the trap where `ss` multi-line output is joined with literal "\n" in
-# ansible's --one-line format, defeating ^/$ anchors in the controller regex.
-check_pf_shell soc-splunk \
-  'systemctl is-active splunk' \
-  'active' \
-  "soc-splunk Splunk indexer service active"
-
-check_pf_shell soc-splunk \
-  'ss -lnt | grep -qE ":9997\\b" && echo OK_9997 || echo MISSING_9997' \
-  'OK_9997' \
-  "soc-splunk listening on :9997 (receiver — UF target)"
-
-check_pf_shell soc-splunk \
-  'ss -lnt | grep -qE ":8000\\b" && echo OK_8000 || echo MISSING_8000' \
-  'OK_8000' \
-  "soc-splunk listening on :8000 (Splunk Web)"
-
-# soc-syslog forwarder up + has an ESTABLISHED conn to the indexer on 9997.
-# Catches "service running but indexer unreachable" silently-broken state.
-check_pf_shell soc-syslog \
-  'systemctl is-active SplunkForwarder' \
-  'active' \
-  "soc-syslog SplunkForwarder service active"
-
-check_pf_shell soc-syslog \
-  'c=$(ss -ant | grep "172.31.7.19:9997" | grep -c ESTAB); [ "$c" -ge 1 ] && echo OK_ESTAB || echo NO_ESTAB' \
-  'OK_ESTAB' \
-  "soc-syslog UF has ESTABLISHED connection to indexer :9997"
-
-# Total forwarder count on soc-splunk. Expected ≥ 30 once the Windows UF
-# rollout is done (Linux UFs alone give us ~10; Windows UFs push us to
-# 50+). Threshold set at 30 to prove Windows UF landed successfully.
-# LOW_UFS_<n> below 30 usually means the Windows UF play never ran or the
-# MSI install failed on most hosts.
-check_pf_shell soc-splunk \
-  'c=$(ss -ant | grep ":9997 " | grep -c ESTAB); [ "$c" -ge 30 ] && echo "OK_UFS_$c" || echo "LOW_UFS_$c"' \
-  'OK_UFS_' \
-  "soc-splunk: ≥ 30 UFs ESTABLISHED on :9997 (Linux + Windows rollout done)"
-
-# Windows UF service spot checks — one per domain. Catches "MSI installed
-# but service failed to start" which the ESTAB count wouldn't distinguish
-# from "host offline."
-check_ps bs-hq01 \
-  '(Get-Service SplunkForwarder -ErrorAction SilentlyContinue).Status' \
-  '\(stdout\)[[:space:]]+Running' \
-  "bs-hq01 (blackstone): SplunkForwarder service running"
-
-check_ps fops-ops01 \
-  '(Get-Service SplunkForwarder -ErrorAction SilentlyContinue).Status' \
-  '\(stdout\)[[:space:]]+Running' \
-  "fops-ops01 (fops): SplunkForwarder service running"
+section "6. SOC tier — endpoint telemetry"
 
 # Sysmon service spot checks — proves the sysmon role landed the config +
-# started Sysmon64 service. Sysmon events land in index=sysmon via the UF's
-# templates/inputs.conf Microsoft-Windows-Sysmon/Operational stanza.
+# started Sysmon64 service. Sysmon events reach Security Onion via the
+# Elastic Agent enrolled by playbooks/75-endpoint.yml, which reads the
+# Microsoft-Windows-Sysmon/Operational channel.
 check_ps bs-hq01 \
   '(Get-Service Sysmon64 -ErrorAction SilentlyContinue).Status' \
   '\(stdout\)[[:space:]]+Running' \
@@ -492,6 +487,109 @@ check_pf_shell is-inet \
   'docker exec email getent passwd bob.burke 2>&1 | head -1' \
   'bob.burke' \
   "is-inet: bob.burke unix user exists in email container (mailbox provisioned)"
+
+# =========================================================================
+# 9. Security Onion — the Fleet integrations are actually INGESTING
+# =========================================================================
+# Sections 5 and 6 prove the plumbing exists: rsyslog is listening, Sysmon is
+# running, agents are installed. None of that proves a document reached
+# Elasticsearch, and the gap between the two has been real here more than once
+# -- on 2026-08-07 Zeek was discarding 100% of frames while every service check
+# passed, and on 2026-09-16 29% of pfSense documents were grok failures that no
+# "is it running" check could see.
+#
+# So these ask the datastore, with counts.
+section "9. Security Onion — Fleet integrations ingesting"
+
+# PREFLIGHT, AND IT GATES THE REST.
+#
+# Every check below reports "no documents" when it cannot query at all, and
+# those two states need different people looking at them. On 2026-09-22 this
+# section reported all six datasets empty on a grid that was ingesting
+# normally -- the queries were running unprivileged and returning nothing.
+# Six confident failures pointing at the wrong thing.
+#
+# So: prove the mechanism first. A cluster-health response means the tool
+# runs, the credentials work and Elasticsearch is up; anything below it is
+# then a real statement about data.
+so_query_ok=0
+if A soc-so-manager -m ansible.builtin.shell \
+     -a 'so-elasticsearch-query _cluster/health' --become --one-line 2>/dev/null \
+     | grep -qE '"status":"(green|yellow)"'; then
+  pass "soc-so-manager: Elasticsearch answers (query mechanism works)"
+  so_query_ok=1
+else
+  fail "soc-so-manager: cannot query Elasticsearch — every dataset check below would report 'no documents' whether or not data exists. Fix this first; do NOT go looking at the log sources."
+fi
+
+if [ "$so_query_ok" -eq 1 ]; then
+  # --- One check per integration, by its own verify field ------------------
+  # Fields match roles/so_fleet_integrations/defaults/main.yml. Querying the
+  # FIELD and not just the datastream is the point: an index can exist, and
+  # receive documents, while the pipeline that should populate url.path or
+  # source.ip does nothing.
+  #
+  # The expect pattern is "value":<non-zero>. No shell arithmetic, no $( ) --
+  # the regex does the comparing, which keeps the command simple enough to
+  # survive ansible's free-form argument parsing intact.
+  check_so \
+    'so-elasticsearch-query logs-nginx.access-default/_search?q=url.path:*&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "nginx on bs-www: documents present in logs-nginx.access-default"
+
+  check_so \
+    'so-elasticsearch-query logs-squid.log-default/_search?q=source.ip:*&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "squid on bs-proxy: documents present in logs-squid.log-default"
+
+  check_so \
+    'so-elasticsearch-query logs-pfsense.log-default/_search?q=source.ip:*&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "pfSense firewalls: documents present in logs-pfsense.log-default"
+
+  check_so \
+    'so-elasticsearch-query logs-vyos-default/_search?q=log.file.path:*&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "VyOS routers: documents present in logs-vyos-default"
+
+  # --- BOTH firewalls, not just one ---------------------------------------
+  # Until 2026-09-16 a single pfsense integration collapsed both firewalls
+  # into one source, so every document looked like it came from the same box
+  # and the dataset count looked perfectly healthy. Per-firewall attribution
+  # is the only thing that catches that; a total never will.
+  check_so \
+    'so-elasticsearch-query logs-pfsense.log-default/_search?q=bs-edge-fw&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "pfSense: bs-edge-fw attributed in logs-pfsense.log-default"
+
+  check_so \
+    'so-elasticsearch-query logs-pfsense.log-default/_search?q=bs-ops-fw&size=0&filter_path=hits.total' \
+    '"value":[1-9]' \
+    "pfSense: bs-ops-fw attributed in logs-pfsense.log-default"
+
+  # --- Ingest pipeline errors, IN THESE FOUR DATASETS ----------------------
+  # Where the 2026-09-16 regression would reappear. A document that fails its
+  # pipeline still lands in the datastream, so it inflates every count above
+  # while carrying none of the parsed fields -- the dataset looks busy and is
+  # useless.
+  #
+  # THE INDEX LIST IS THE POINT. This asked `logs-*` on 2026-09-22 and failed
+  # on a healthy grid: all 190 hits were in logs-elastic_agent.fleet_server,
+  # the Elastic Agent's own self-monitoring, recording its startup churn
+  # against Elasticsearch ("dial tcp [::1]:9200: connect: connection refused",
+  # "failed to fetch elasticsearch version") from before Elasticsearch was
+  # listening. Every one of the four integration datasets held zero. A check
+  # scoped wider than its own claim reports other people's noise as your
+  # regression.
+  #
+  # NOTE the inverted sense: this one passes on ZERO, so it is the one check
+  # here that a blind query would pass. That is precisely why the preflight
+  # above gates it rather than letting it stand as reassurance.
+  check_so \
+    'so-elasticsearch-query logs-nginx.access-default,logs-squid.log-default,logs-pfsense.log-default,logs-vyos-default/_search?q=error.message:*&size=0&filter_path=hits.total' \
+    '"value":0' \
+    "no ingest-pipeline errors in the four integration datasets"
+fi
 
 # =========================================================================
 # Summary

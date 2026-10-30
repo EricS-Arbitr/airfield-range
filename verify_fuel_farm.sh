@@ -360,8 +360,13 @@ check_sh fuel-hist \
 # with `docker exec` -- unclear, but sudo makes both work uniformly.)
 # `grep -qw fuel` is safe because the CLI wouldn't have any other
 # reason to mention the word "fuel" in its own output.
+# NO --token/--org: the influxdb container's entrypoint wrote an
+# active CLI config at setup (DOCKER_INFLUXDB_INIT_*), so the CLI
+# authenticates itself. Passing the group_var default token here was
+# WRONG -- the grid was set up with the vault token, so the hardcoded
+# default false-failed these two checks even though data was flowing.
 check_sh fuel-hist \
-  "sudo docker exec influxdb influx bucket list --name fuel --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 2>&1 | grep -qw fuel && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
+  "sudo docker exec influxdb influx bucket list --name fuel 2>&1 | grep -qw fuel && echo BUCKET_PRESENT || echo BUCKET_MISSING" \
   'BUCKET_PRESENT' \
   "fuel-hist InfluxDB 'fuel' bucket exists"
 
@@ -372,7 +377,7 @@ check_sh fuel-hist \
 # sample lands, Telegraf is polling ff-plc-1 and InfluxDB is accepting
 # writes.
 check_sh fuel-hist \
-  "sudo docker exec influxdb influx query --token Simspace1SimspaceFuelHistorianAdminToken --org airfield 'from(bucket:\"fuel\") |> range(start: -60s) |> filter(fn:(r) => r._measurement == \"modbus\") |> count() |> limit(n:1)' 2>&1 | grep -qE 'Table:.*_result|_value' && echo DATA_FLOWING || echo NO_RECENT_DATA" \
+  "sudo docker exec influxdb influx query 'from(bucket:\"fuel\") |> range(start: -60s) |> filter(fn:(r) => r._measurement == \"modbus\") |> count() |> limit(n:1)' 2>&1 | grep -qE 'Table:.*_result|_value' && echo DATA_FLOWING || echo NO_RECENT_DATA" \
   'DATA_FLOWING' \
   "fuel-hist Telegraf writing to InfluxDB (recent 'modbus' samples in 'fuel' bucket)"
 

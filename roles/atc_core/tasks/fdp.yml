@@ -1,0 +1,75 @@
+---
+# Flight Data Processor — electronic flight strips. Reads readsb's
+# aircraft.json (live) for the strip list + landing detection (design §4C).
+
+- name: Create the FDP directory
+  ansible.builtin.file:
+    path: "{{ atc_fdp_dir }}"
+    state: directory
+    owner: "{{ atc_user }}"
+    group: "{{ atc_user }}"
+    mode: "0755"
+
+- name: Ensure venv + pip support (base image ships python3 without ensurepip)
+  ansible.builtin.apt:
+    name:
+      - python3-venv
+      - python3-pip
+    state: present
+    update_cache: true
+  register: _atc_venv_apt
+  retries: 3
+  delay: 5
+  until: _atc_venv_apt is succeeded
+
+- name: Create the shared ATC venv
+  # Guard on bin/pip, not bin/python: a prior failed `venv` (e.g. missing
+  # ensurepip) leaves bin/python behind but no pip, and that partial env
+  # would otherwise satisfy the guard forever. --clear rebuilds it cleanly.
+  ansible.builtin.command: "python3 -m venv --clear {{ atc_venv }}"
+  args:
+    creates: "{{ atc_venv }}/bin/pip"
+
+- name: Install FDP pip dependencies (ng_pypi when air-gapped)
+  ansible.builtin.pip:
+    name: "{{ atc_fdp_requirements }}"
+    virtualenv: "{{ atc_venv }}"
+    virtualenv_command: "python3 -m venv"   # never shell out to the (absent) `virtualenv` tool
+    extra_args: >-
+      {{ ('--index-url ' ~ atc_pip_index_url ~ ' --trusted-host ' ~ atc_pip_trusted_host)
+         if atc_pip_index_url | length > 0 else '' }}
+  environment:
+    HTTPS_PROXY: "{{ inet_proxy }}"
+    HTTP_PROXY: "{{ inet_proxy }}"
+
+- name: Stage the FDP app
+  ansible.builtin.copy:
+    src: "fdp/app.py"
+    dest: "{{ atc_fdp_dir }}/app.py"
+    owner: "{{ atc_user }}"
+    group: "{{ atc_user }}"
+    mode: "0755"
+  notify: Restart atc-fdp
+
+- name: Render the FDP config
+  ansible.builtin.template:
+    src: "fdp-config.json.j2"
+    dest: "{{ atc_fdp_dir }}/config.json"
+    owner: "{{ atc_user }}"
+    group: "{{ atc_user }}"
+    mode: "0640"
+  notify: Restart atc-fdp
+
+- name: Install the FDP systemd unit
+  ansible.builtin.template:
+    src: "atc-fdp.service.j2"
+    dest: "/etc/systemd/system/atc-fdp.service"
+    mode: "0644"
+  notify: Restart atc-fdp
+
+- name: Enable + start the FDP
+  ansible.builtin.systemd:
+    name: atc-fdp
+    enabled: true
+    state: started
+    daemon_reload: true

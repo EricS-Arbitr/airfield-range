@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+[Unit]
+Description=ATC synthetic ADS-B feed engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ atc_user }}
+ExecStart={{ atc_venv }}/bin/python {{ atc_feed_dir }}/atc_feed.py --config {{ atc_feed_dir }}/config.json
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

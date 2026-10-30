@@ -1,0 +1,167 @@
+---
+# Default-gateway ARP repair + pin, extracted from init/tasks/main.yaml on
+# 2026-09-21 so it can be re-run outside init.
+#
+# domain_member_retry includes this on join passes 2 and 3. A poisoned gateway
+# entry is the one fault that produces the join failure we keep seeing: the
+# member has correct DNS servers and a correct address, the DC is provably
+# advertising its locator records, and the member still cannot resolve them --
+# because nothing routes off-subnet. The comment below says so directly:
+# "It presents as DNS failures, domain joins failing, Fleet enrolment failing."
+#
+# init already runs this once. Re-running it matters because the same comment
+# records entries reverting to the impostor MAC within a single run, with no
+# reboot, and because the task fails OPEN when it cannot prove a probe target
+# is off-subnet -- an unpinned host is the status quo, so a host can leave init
+# unpinned and legitimately so.
+- name: Repair and pin the default-gateway ARP entry
+  ansible.windows.win_shell: |
+    $ErrorActionPreference = 'SilentlyContinue'
+    $blocked = "{{ init_gw_arp_blocklist | join(',') }}".Split(',') |
+               ForEach-Object { $_.Trim().ToUpper() }
+    function Norm($m) { if ($m) { $m.ToUpper().Replace(':','-') } else { '' } }
+
+    # A MAC is USABLE only if it is well-formed AND not a sentinel. The
+    # previous test was `if (-not $mac)`, which treats 00-00-00-00-00-00 as a
+    # real address: a non-empty string that is not on the blocklist. On
+    # airfield 2026-09-17 that pinned the gateway on bs-file01 to all-zeros as
+    # Permanent -- a black hole that ARP could never re-learn past, and
+    # strictly worse than the poisoning this task exists to fix. Windows
+    # returns the zero MAC for an Incomplete neighbour, which is exactly the
+    # state a failed re-probe leaves behind.
+    function Usable($m) {
+      if (-not $m) { return $false }
+      if ($m -notmatch '^([0-9A-F]{2}-){5}[0-9A-F]{2}$') { return $false }
+      if ($m -eq '00-00-00-00-00-00') { return $false }
+      if ($m -eq 'FF-FF-FF-FF-FF-FF') { return $false }
+      if ($blocked -contains $m) { return $false }
+      return $true
+    }
+
+    $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' |
+             Sort-Object RouteMetric | Select-Object -First 1
+    $gw = $route.NextHop
+    if (-not $gw -or $gw -eq '0.0.0.0') { Write-Output 'INIT_GW_NONE'; exit 0 }
+
+    # THE PROBE TARGET MUST BE OFF-SUBNET, AND WE VERIFY THAT RATHER THAN
+    # ASSUME IT. The previous version used the first configured DNS server on
+    # the stated assumption that it is off-subnet in every range these roles
+    # serve. False here: hosts in the Services segment (172.31.2.0/24) have
+    # their DCs in that same segment, so the ping never crossed the gateway
+    # and proved nothing about routing. Worse, `if (-not $dns) { return $true }`
+    # returned SUCCESS when there was nothing to test with -- a routing proof
+    # that passes when it cannot run is not a proof.
+    $local = @()
+    foreach ($a in (Get-NetIPAddress -AddressFamily IPv4 |
+                    Where-Object { $_.IPAddress -ne '127.0.0.1' })) {
+      $local += ,@($a.IPAddress, $a.PrefixLength)
+    }
+    function ToUInt($ip) {
+      $b = [System.Net.IPAddress]::Parse($ip).GetAddressBytes()
+      [array]::Reverse($b)
+      return [System.BitConverter]::ToUInt32($b, 0)
+    }
+    # Right-shift BOTH operands by the host-bit count and compare, rather than
+    # building a mask with `[uint32]0xFFFFFFFF -shl n`. PowerShell widens that
+    # shift to int64, so the mask carries high bits that make the -band
+    # comparison wrong. Shifting away the host bits needs no mask at all.
+    function SameSubnet($ip) {
+      foreach ($l in $local) {
+        try {
+          $p = [int]$l[1]
+          if ($p -le 0 -or $p -gt 32) { continue }
+          $s = 32 - $p
+          if ((((ToUInt $ip) -shr $s)) -eq (((ToUInt $l[0]) -shr $s))) { return $true }
+        } catch { }
+      }
+      return $false
+    }
+
+    $candidates = @()
+    $candidates += ("{{ init_gw_probe_targets | join(',') }}".Split(',') |
+                    ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    foreach ($e in (Get-DnsClientServerAddress -AddressFamily IPv4)) {
+      foreach ($s in $e.ServerAddresses) { $candidates += $s }
+    }
+    $probe = $candidates | Where-Object { $_ -and -not (SameSubnet $_) } | Select-Object -First 1
+
+    # NO OFF-SUBNET TARGET MEANS WE DO NOT PIN. Failing closed: an unpinned
+    # gateway is the status quo, a wrongly pinned one is an isolated host.
+    if (-not $probe) {
+      $cur = Norm ((Get-NetNeighbor -IPAddress $gw | Select-Object -First 1).LinkLayerAddress)
+      Write-Output ("INIT_GW_NO_PROBE gw=" + $gw + " mac=" + $cur + " no off-subnet target; not pinning")
+      exit 0
+    }
+    function Routes { return [bool](Test-Connection -ComputerName $probe -Count 2 -Quiet) }
+
+    # SELF-HEAL A BAD PIN FROM AN EARLIER RUN. A Permanent entry holding an
+    # unusable MAC cannot be corrected by ARP and will never age out, so it
+    # has to be deleted before anything else can work.
+    $n0 = Get-NetNeighbor -IPAddress $gw | Select-Object -First 1
+    if ($n0 -and $n0.State -eq 'Permanent' -and -not (Usable (Norm $n0.LinkLayerAddress))) {
+      Write-Output ("INIT_GW_UNPINNED_BAD gw=" + $gw + " mac=" + (Norm $n0.LinkLayerAddress))
+      Remove-NetNeighbor -IPAddress $gw -Confirm:$false
+      Start-Sleep -Seconds 3
+      Test-Connection -ComputerName $gw -Count 2 -Quiet | Out-Null
+    }
+
+    $repaired = $false
+    for ($i = 0; $i -lt {{ init_gw_arp_attempts }}; $i++) {
+      $n   = Get-NetNeighbor -IPAddress $gw | Select-Object -First 1
+      $mac = Norm $n.LinkLayerAddress
+      if ((Usable $mac) -and (Routes)) { break }
+      Remove-NetNeighbor -IPAddress $gw -Confirm:$false
+      Start-Sleep -Seconds 3
+      Test-Connection -ComputerName $gw -Count 2 -Quiet | Out-Null
+      $repaired = $true
+    }
+
+    $n   = Get-NetNeighbor -IPAddress $gw | Select-Object -First 1
+    $mac = Norm $n.LinkLayerAddress
+    if (-not (Usable $mac)) {
+      Write-Output ("INIT_GW_FAIL gw=" + $gw + " mac=" + $mac + " unusable-or-blocklisted"); exit 0
+    }
+    if (-not (Routes)) {
+      Write-Output ("INIT_GW_FAIL gw=" + $gw + " mac=" + $mac + " no-off-subnet-route via " + $probe); exit 0
+    }
+    if ($n.State -eq 'Permanent') {
+      Write-Output ("INIT_GW_OK gw=" + $gw + " mac=" + $mac + " already-pinned"); exit 0
+    }
+
+    Remove-NetNeighbor -IPAddress $gw -Confirm:$false
+    try {
+      New-NetNeighbor -IPAddress $gw -LinkLayerAddress $mac `
+        -InterfaceIndex $route.InterfaceIndex -State Permanent -ErrorAction Stop | Out-Null
+    } catch {
+      Write-Output ("INIT_GW_PIN_FAILED gw=" + $gw + " mac=" + $mac + " " + $_.Exception.Message)
+      exit 0
+    }
+    # Roll back rather than leave a host isolated behind a bad pin.
+    if (-not (Routes)) {
+      Remove-NetNeighbor -IPAddress $gw -Confirm:$false
+      Start-Sleep -Seconds 3
+      Write-Output ("INIT_GW_PIN_ROLLED_BACK gw=" + $gw + " mac=" + $mac); exit 0
+    }
+    $verify = (Get-NetNeighbor -IPAddress $gw | Select-Object -First 1).State
+    if ($repaired) { Write-Output ("INIT_GW_REPAIRED_AND_PINNED gw=" + $gw + " mac=" + $mac + " state=" + $verify + " probe=" + $probe) }
+    else           { Write-Output ("INIT_GW_PINNED gw=" + $gw + " mac=" + $mac + " state=" + $verify + " probe=" + $probe) }
+  register: init_gw_arp
+  changed_when: >
+    'INIT_GW_PINNED' in (init_gw_arp.stdout | default('')) or
+    'INIT_GW_REPAIRED_AND_PINNED' in (init_gw_arp.stdout | default(''))
+  # Never fatal: a host that cannot route fails a later precondition that
+  # reports it far better than init can. (Until 2026-09-15 this also had to
+  # absorb the play's any_errors_fatal, which would have stopped all 48
+  # Windows hosts for one host; that flag is gone, but non-fatal is still
+  # correct here.)
+  failed_when: false
+
+# Surfaced deliberately. A repair nobody sees is indistinguishable from the
+# problem never happening, and the `was=`/`mac=` values are the census that
+# tells the platform vendor this is still occurring.
+- name: Report gateway ARP repairs
+  ansible.builtin.debug:
+    msg: "{{ init_gw_arp.stdout | default('') | trim }}"
+  when: >
+    'INIT_GW_OK' not in (init_gw_arp.stdout | default('none'))
+

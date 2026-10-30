@@ -1,0 +1,22 @@
+// {{ ansible_managed }}
+// tar1090 site config for {{ atc_airfield.name }} ({{ atc_airfield.ident_icao }}).
+// (Verify variable names against the installed tar1090 version on first deploy.)
+SiteLat = {{ atc_airfield.lat }};
+SiteLon = {{ atc_airfield.lon }};
+SiteShow = true;
+SiteName = "{{ atc_airfield.name }}";
+DefaultCenterLat = {{ atc_airfield.lat }};
+DefaultCenterLon = {{ atc_airfield.lon }};
+DefaultZoomLvl = {{ atc_tar1090_default_zoom }};
+SiteCircles = {{ atc_tar1090_range_rings_nm | to_json }};
+PlaneCountInTitle = true;
+{% if atc_tar1090_offline_tiles %}
+// Offline basemap: tar1090's built-in offline layer reads
+// html/osm_tiles_offline/{z}/{x}/{y}.png. Enable it (maxZoom = detail) and make
+// it the default so the map shows without browser egress.
+offlineMapDetail = {{ atc_tiles_zoom_max }};
+MapType_tar1090 = "osm_tiles_offline";
+{% else %}
+// No local tileset staged: the OSM basemap will not load without browser
+// egress; aircraft, trails and range rings still render on a dark background.
+{% endif %}

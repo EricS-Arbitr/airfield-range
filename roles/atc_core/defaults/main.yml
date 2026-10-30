@@ -1,0 +1,7 @@
+---
+# atc_core — readsb + tar1090 + Flight Data Processor (runs on atc-radar).
+atc_fdp_dir: "{{ atc_root }}/fdp"
+atc_fdp_db: "{{ atc_root }}/fdp/fdp.sqlite"
+atc_fdp_requirements:
+  - flask
+atc_readsb_json_dir: "/run/readsb"      # where readsb writes aircraft.json

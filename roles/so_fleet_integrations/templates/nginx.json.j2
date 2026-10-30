@@ -1,0 +1,30 @@
+{
+  "policy_id": "{{ item.policy }}",
+  "package": { "name": "{{ item.package }}", "version": "" },
+  "name": "{{ item.name }}",
+  "namespace": "{{ so_fleet_namespace }}",
+  "description": "Managed by so_fleet_integrations (Ansible). Do not edit in SOC.",
+  "inputs": {
+    "{{ item.input }}": {
+      "enabled": true,
+      "streams": {
+        "nginx.access": {
+          "enabled": true,
+          "vars": {
+            "paths": {{ item.access_paths | to_json }},
+            "tags": ["nginx-access"],
+            "preserve_original_event": false
+          }
+        },
+        "nginx.error": {
+          "enabled": true,
+          "vars": {
+            "paths": {{ item.error_paths | to_json }},
+            "tags": ["nginx-error"],
+            "preserve_original_event": false
+          }
+        }
+      }
+    }
+  }
+}

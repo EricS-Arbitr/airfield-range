@@ -7,20 +7,39 @@
 # Attempt 3: full site.yml again (safety net if retry-scoped attempt didn't cover
 #            a cross-host dependency)
 #
-# --forks 40 (up from Ansible default 5, and up from the previous 20 in
-# ansible.cfg) so the full sweep finishes in roughly a third the wall-clock
-# time on our ~76-host inventory. Enough parallelism to batch all ~14
-# Linux hosts and half the ~48 Windows hosts per task pass. Controller has
-# enough headroom (2-4 vCPU on the SimSpace VM); 40 concurrent host workers
-# is a comfortable middle ground.
-#
 # See PROJECT_LOG.md or the retry-pattern discussion in the session where
 # this file was rewritten for the rationale.
 
 PLAYBOOK="site.yml"
-RETRY_FILE="retry/$PLAYBOOK.retry"
+# Ansible names the retry file after the playbook with the EXTENSION STRIPPED
+# (site.yml -> site.retry), so this has to strip it too. Built as
+# "$PLAYBOOK.retry" it yields site.yml.retry, which never exists -- and the
+# `[ -f "$RETRY_FILE" ]` guard below then reads that as "no retry file was
+# produced" and silently falls through to a full sweep. Attempt 2 had never
+# once been retry-scoped. Caught on airfield 2026-09-15.
+RETRY_FILE="retry/$(basename "${PLAYBOOK%.*}").retry"
 MAX_ATTEMPTS=3
-FORKS=40
+# FORKS is DERIVED, not chosen: it is the largest single play target plus a
+# small margin. Recomputed 2026-09-15.
+#
+#   largest play target : 74  (windows,linux — the `common` play)
+#   FORKS               : 76
+#
+# Sized so the widest play runs in ONE batch. At 40 forks that 74-host play
+# ran two rounds, the second only 34 wide, and those are the long plays. The
+# margin is free: Ansible never spawns more workers than the play has hosts,
+# so excess forks cost nothing, while being one short costs a whole extra
+# round.
+#
+# TRADEOFF: each fork is a separate Python process, so this is a memory
+# question rather than a CPU one -- workers are almost always blocked on
+# WinRM/SSH I/O, not computing. UNVERIFIED ON THIS CONTROLLER: 76 forks is
+# roughly 4-6 GB resident. If it swaps during a full sweep, drop this rather
+# than assuming the deploy is slow for another reason.
+#
+# RECOUNT, do not increment, when hosts are added or removed. Adding a host
+# to [windows] or [linux] moves the target this is derived from.
+FORKS=76
 
 # --- Speed knobs -------------------------------------------------------------
 # Trims 5-10 minutes off a full-fleet run vs Ansible defaults.
@@ -48,17 +67,96 @@ mkdir -p "$ANSIBLE_CACHE_PLUGIN_CONNECTION"
 # ansible-playbook will surface a clear "collection not found" error if
 # anything's actually missing.
 #
-# NOTE: The historical `sleep 120` before this section was removed 2026-07-02
-# as part of the speed pass. It was a defensive delay to let fresh-provisioned
-# VMs finish booting before the deploy started, but the retry loop already
-# handles any "host unreachable" from a VM that isn't ready. On iterative
-# deploys the sleep is pure wasted wall clock.
+# NOTE: a `sleep 120` here was removed 2026-07-02 in a speed pass, reasoning
+# that the retry loop already handles a VM that is not ready yet. RESTORED
+# 2026-09-15 as BOOT_DELAY (see below), because that reasoning did not survive
+# contact with a fresh range -- the same conclusion ss-pp-so reached on
+# 2026-08-05. The retry loop does "handle" it, but only by paying for a full
+# multi-hour sweep to discover the host was still booting. The legitimate half
+# of the 2026-07-02 argument survives as the override: BOOT_DELAY=0.
+# --- Elapsed-time accounting -------------------------------------------------
+# Reported through an EXIT trap rather than at the bottom of the script, because
+# the bottom is only reached on two of the three ways this ends. The third --
+# someone killing a run that has stopped making progress -- is the one where
+# knowing the elapsed time matters most, and it never reaches the last line.
+#
+# Two clocks, because they answer different questions:
+#   ansible elapsed   what was asked for: first attempt start -> finish
+#   pre-ansible       galaxy install + BOOT_DELAY, several minutes of wall clock
+#                     that is not Ansible and should not be blamed on it
+SCRIPT_START=$(date +%s)
+ANSIBLE_START=""
+DEPLOY_RESULT="interrupted before Ansible started"
+
+fmt_elapsed() {
+	local s=$1
+	printf '%dh %02dm %02ds' $((s / 3600)) $(((s % 3600) / 60)) $((s % 60))
+}
+
+report_elapsed() {
+	rc=$?
+	now=$(date +%s)
+	echo
+	echo "================== deploy.sh timing =================="
+	if [ -n "$ANSIBLE_START" ]; then
+		printf '  ansible elapsed  : %s\n' "$(fmt_elapsed $((now - ANSIBLE_START)))"
+		printf '  pre-ansible      : %s   (galaxy + BOOT_DELAY)\n' \
+			"$(fmt_elapsed $((ANSIBLE_START - SCRIPT_START)))"
+	else
+		printf '  ansible elapsed  : never started\n'
+	fi
+	printf '  total wall clock : %s\n' "$(fmt_elapsed $((now - SCRIPT_START)))"
+	printf '  outcome          : %s\n' "$DEPLOY_RESULT"
+	echo "====================================================="
+
+	# Printed for EVERY attempt that produced failures, including on a run that
+	# ultimately succeeded. A build that passes on attempt 3 still failed twice,
+	# and those two failures are the only evidence of what is not yet reliable.
+	# Suppressing them on success is how "succeeds on attempt 3" became normal.
+	#
+	# Runs inside the EXIT trap, so it also prints when a run is interrupted --
+	# which is the case where knowing what had already gone wrong matters most
+	# and where the summary would otherwise never be reached.
+	if [ -d "${ATTEMPT_LOG_DIR:-/nonexistent}" ]; then
+		summary="$(summarize_failures 2>/dev/null)"
+		if [ -n "$summary" ]; then
+			echo
+			echo "================== failures by attempt =============="
+			printf '%s\n' "$summary"
+			echo
+			echo "  Full output per attempt: $ATTEMPT_LOG_DIR/deploy-attempt-N.log"
+			echo "====================================================="
+		fi
+	fi
+	exit $rc
+}
+trap report_elapsed EXIT
+trap 'DEPLOY_RESULT="INTERRUPTED by signal"; exit 130' INT TERM
+
 echo "=== Checking for Ansible Galaxy collections ==="
 
 if [ -f requirements.yml ]; then
 	echo "=== Installing/refreshing Ansible Galaxy collections ==="
-	HTTPS_PROXY="http://10.255.240.1:3128" \
+	# Install to a SHARED path, not ~/.ansible/collections. This script runs
+	# from system cron as root via /tmp/deploy-script.sh, so a per-user install
+	# is invisible to anyone debugging by hand as `simspace` -- and vice versa.
+	# /usr/share/ansible/collections is on the default search path for every
+	# user, so one copy serves both. Falls back to the per-user default when
+	# that directory cannot be written, which is the case if deploy.sh is ever
+	# run as a non-root user.
+	GALAXY_DEST="/usr/share/ansible/collections"
+	if ! mkdir -p "$GALAXY_DEST" 2>/dev/null || [ ! -w "$GALAXY_DEST" ]; then
+		echo "NOTE: $GALAXY_DEST not writable; installing to the per-user path"
+		GALAXY_DEST=""
+	fi
+	# HTTPS_PROXY is overridable so the internal Nexus can take over without
+	# editing this script. The controller is currently the one machine in the
+	# range that still reaches outside for anything.
+	# --ignore-certs: requirements.yml points at the in-platform Nexus, which is
+	# reached via the proxy and presents an internal-CA cert.
+	HTTPS_PROXY="${HTTPS_PROXY:-http://10.255.240.1:3128}" \
 		ansible-galaxy collection install -r requirements.yml \
+		${GALAXY_DEST:+-p "$GALAXY_DEST"} --ignore-certs \
 		|| echo "WARN: galaxy install returned non-zero; continuing"
 fi
 
@@ -73,7 +171,12 @@ fi
 ANSIBLE_OWNER="${ANSIBLE_OWNER:-simspace}"
 VAULT_PASS_FILE="${VAULT_PASS_FILE:-/home/simspace/.vault_pass}"
 RETRY_DIR="${RETRY_DIR:-/etc/ansible/retry}"
-VAULT_FILE="group_vars/vault.yml"
+# group_vars/all/vault.yml, NOT group_vars/vault.yml. The latter maps to a
+# GROUP named "vault", which does not exist in this inventory -- so the seven
+# vault_* variables were never loaded by anything. fuel.yml's
+# `vault_openplc_admin_password | default(...)` had silently been using the
+# default all along. Moved under all/ 2026-08-11 so they actually apply.
+VAULT_FILE="group_vars/all/vault.yml"
 
 as_root() {
 	if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi
@@ -187,25 +290,183 @@ else
 	echo "  vault encrypted; password file present and readable (ansible-vault absent, decrypt unverified)"
 fi
 
+# --- Let a freshly provisioned range finish booting --------------------------
+# THIS IS A DIFFERENT LEVER FROM init_wait_timeout, and they are not
+# interchangeable:
+#
+#   BOOT_DELAY          flat wall clock, paid ONCE before ansible starts, while
+#                       the PLATFORM finishes provisioning. Covers hosts that do
+#                       not exist yet -- no IP, no NIC, nothing to connect to.
+#                       wait_for_connection cannot help there; it can only wait
+#                       on a host that is at least present.
+#   init_wait_timeout   per-host ceiling inside init. Costs NOTHING when a host
+#                       is ready -- wait_for_connection returns the moment the
+#                       connection succeeds -- so it is the cheap lever, and it
+#                       only bites on hosts that are genuinely slow or dead.
+#
+# 300s, not ss-pp-so's 180s: this is the largest range of the four (86 hosts vs
+# 74), and the provisioning tail scales with it. Observed twice on fresh
+# deploys (2026-09-14 and 2026-09-15) that not every host had provisioned by
+# the time the playbook reached Init. Five minutes against a ~5 hour deploy is
+# noise; a wasted sweep is not.
+BOOT_DELAY="${BOOT_DELAY:-300}"
+if [ "$BOOT_DELAY" -gt 0 ]; then
+	echo "=== Waiting ${BOOT_DELAY}s for range VMs to finish booting ==="
+	echo "    (override with BOOT_DELAY=0 ./deploy.sh on an already-up range)"
+	sleep "$BOOT_DELAY"
+fi
+
+# --- Per-attempt logs and the end-of-run failure summary ---------------------
+# WHY. Every failed build so far has ended with a PLAY RECAP that names which
+# hosts failed and nothing about why, so diagnosing one costs a round trip to
+# grep /var/log/playbook_run.log -- after an 8-hour deploy. The information was
+# in the log the whole time. This puts it in the output.
+#
+# Written to a directory proven writable first. deploy.sh runs as root from
+# cron via /tmp/deploy-script.sh, where /var/log is fine, but it is also run by
+# hand as simspace, where it is not -- and a tee that cannot open its file
+# would spray errors through the whole run.
+ATTEMPT_LOG_DIR="${ATTEMPT_LOG_DIR:-/var/log}"
+if ! { mkdir -p "$ATTEMPT_LOG_DIR" 2>/dev/null && [ -w "$ATTEMPT_LOG_DIR" ]; }; then
+	ATTEMPT_LOG_DIR="${TMPDIR:-/tmp}"
+fi
+rm -f "$ATTEMPT_LOG_DIR"/deploy-attempt-*.log
+
+# Groups identical (task, kind, message) across hosts, so 13 Create Users items
+# failing the same way are one line and not thirteen. UNREACHABLE is called out
+# separately from FAILED because they are different faults: an unreachable host
+# left the play and never ran the task, a failed one ran it and it did not
+# work, and `until:` retries only ever help the second.
+summarize_failures() {
+	local f attempt
+	for f in "$ATTEMPT_LOG_DIR"/deploy-attempt-*.log; do
+		[ -f "$f" ] || continue
+		attempt="${f##*-attempt-}"; attempt="${attempt%.log}"
+		awk -v att="$attempt" '
+			# Handlers too, not just TASK. A handler failure printed under the
+			# last TASK name is actively misleading: on 2026-09-22 a win_reboot
+			# timeout in the shared Reboot Windows handler was reported as
+			#   [FAILED] secpol : Set secpol
+			# and secpol cannot time out waiting for a boot. That name sends you
+			# to the wrong role, the same defect as a task name naming the wrong
+			# host. Prefixed "handler: " so the two are never confused.
+			#
+			# IGNORED ERRORS ARE NOT FAILURES. Ansible prints "...ignoring" on
+			# the line after a fatal the playbook chose to tolerate. This used to
+			# count those as failures, so every deliberate fallback appeared in
+			# the summary as something broken. Measured 2026-09-28 on
+			# airfield-stacked: dcpromo_child_heal probes four credentials in
+			# turn and the first two are EXPECTED to be rejected, yet both were
+			# reported as failures while the probe that succeeded was invisible.
+			# They are still shown, in their own section, because a tolerated
+			# error is worth seeing -- it just is not the reason a run failed.
+			function commit(bucket,   key) {
+				key = pk "\t" pt "\t" pm
+				if (bucket == "ign") {
+					if (!(key in ihosts)) { iord[++ni]=key; ihosts[key]=ph }
+					else if (index(" " ihosts[key] " ", " " ph " ")==0) ihosts[key]=ihosts[key] ", " ph
+				} else {
+					if (!(key in hosts)) { ord[++n]=key; hosts[key]=ph }
+					else if (index(" " hosts[key] " ", " " ph " ")==0) hosts[key]=hosts[key] ", " ph
+				}
+			}
+			pending && /^\.\.\.ignoring/ { commit("ign"); pending=0; next }
+			pending                      { commit("fail"); pending=0 }
+			/^TASK \[/ { t=$0; sub(/^TASK \[/,"",t); sub(/\].*$/,"",t) }
+			/^RUNNING HANDLER \[/ { t=$0; sub(/^RUNNING HANDLER \[/,"handler: ",t); sub(/\].*$/,"",t) }
+			/^fatal:|^failed:/ {
+				ph=$0; sub(/^[a-z]+: \[/,"",ph); sub(/ *->.*/,"",ph); sub(/\].*/,"",ph)
+				pk=(index($0,"UNREACHABLE")>0)?"UNREACHABLE":"FAILED"
+				pm=""
+				if (match($0, /"msg": "[^"]*/)) pm=substr($0, RSTART+8, RLENGTH-8)
+				pm=substr(pm,1,160)
+				pt=t
+				pending=1
+				next
+			}
+			END {
+				if (pending) commit("fail")
+				if (n==0 && ni==0) exit
+				printf "\n  --- attempt %s ---\n", att
+				for (i=1;i<=n;i++) {
+					split(ord[i], p, "\t")
+					printf "  [%s] %s\n", p[1], p[2]
+					printf "        hosts: %s\n", hosts[ord[i]]
+					if (p[3] != "") printf "        msg  : %s\n", p[3]
+				}
+				if (n==0) printf "  (no failures — only tolerated errors below)\n"
+				if (ni>0) {
+					printf "\n  --- attempt %s: tolerated (ignored) errors, NOT why it failed ---\n", att
+					for (i=1;i<=ni;i++) {
+						split(iord[i], p, "\t")
+						printf "  [ignored %s] %s\n", p[1], p[2]
+						printf "        hosts: %s\n", ihosts[iord[i]]
+						if (p[3] != "") printf "        msg  : %s\n", p[3]
+					}
+				}
+			}' "$f"
+	done
+}
+
+ANSIBLE_START=$(date +%s)
+DEPLOY_RESULT="INCOMPLETE — interrupted mid-run"
+
 for i in $(seq 1 $MAX_ATTEMPTS); do
+	ATTEMPT_START=$(date +%s)
 	# Attempt 2 gets the retry-file scope IF the previous attempt actually
 	# produced one. If the file is missing (e.g. deploy exited on a global
 	# error before writing it), fall through to the full sweep.
+	# A CLEAN REPAIR PASS IS NOT A DEPLOYED RANGE. This deliberately never
+	# breaks out of the loop, however well it goes.
+	#
+	# The retry file lists the hosts that FAILED. Running site.yml limited to
+	# them repairs those hosts -- but every play whose targets were dropped
+	# when they failed still has not run. airfield 2026-09-15: bs-dc01 (sole
+	# member of [pdc_blackstone]) failed on an ADWS race in attempt 1, so
+	# Create Users, dns and BOTH domain joins lost their target, and the SO
+	# phases never started. Attempt 2 scoped to bs-dc01 fixed bs-dc01, passed,
+	# and deploy.sh reported "Success on attempt 2" over a range that had no
+	# domain joins and no Security Onion.
+	#
+	# So the repair pass is a REPAIR, and attempt 3's full sweep is what
+	# actually confirms the range. Eric caught this by re-running deploy.sh
+	# manually and watching it pass a full sweep -- this automates exactly
+	# that.
+	#
+	# Reachable only since 2026-09-15: before the RETRY_FILE path was fixed
+	# the -f guard never matched, so attempt 2 was always a full sweep and
+	# "success on attempt 2" really did mean a full sweep had passed.
 	if [ $i -eq 2 ] && [ -f "$RETRY_FILE" ]; then
-		echo "=== Attempt $i (retry-file scope — failed hosts only) ==="
-		if ansible-playbook $PLAYBOOK --forks $FORKS --limit @"$RETRY_FILE" "$@"; then
-			echo "Success on attempt $i (retry scope)"
-			break
+		echo "=== Attempt $i (retry-file scope — REPAIR PASS over failed hosts) ==="
+		# PIPESTATUS[0], NOT the pipeline status. A pipeline reports the exit
+		# code of its LAST command, which here is tee and is essentially always
+		# 0 -- so `if ansible-playbook ... | tee ...; then` would declare every
+		# deploy a success. The status must come from ansible-playbook itself.
+		ansible-playbook $PLAYBOOK --forks $FORKS --limit @"$RETRY_FILE" "$@" 2>&1 \
+			| tee "$ATTEMPT_LOG_DIR/deploy-attempt-$i.log"
+		ANSIBLE_RC=${PIPESTATUS[0]}
+		if [ "$ANSIBLE_RC" -eq 0 ]; then
+			echo "Repair pass clean after $(fmt_elapsed $(($(date +%s) - ATTEMPT_START)))"
+			echo "NOT declaring success — a full sweep must confirm the range"
+		else
+			echo "Attempt $i failed after $(fmt_elapsed $(($(date +%s) - ATTEMPT_START)))"
 		fi
-	else
-		echo "=== Attempt $i (full sweep) ==="
-		if ansible-playbook $PLAYBOOK --forks $FORKS "$@"; then
-			echo "Success on attempt $i"
-			break
-		fi
+		rm -f "$RETRY_FILE"
+		continue
 	fi
 
-	echo "Attempt $i failed"
+	echo "=== Attempt $i (full sweep) ==="
+	# See the PIPESTATUS note above: tee's exit code is not ansible's.
+	ansible-playbook $PLAYBOOK --forks $FORKS "$@" 2>&1 \
+		| tee "$ATTEMPT_LOG_DIR/deploy-attempt-$i.log"
+	ANSIBLE_RC=${PIPESTATUS[0]}
+	if [ "$ANSIBLE_RC" -eq 0 ]; then
+		echo "Success on attempt $i after $(fmt_elapsed $(($(date +%s) - ATTEMPT_START)))"
+		DEPLOY_RESULT="SUCCESS on attempt $i"
+		break
+	fi
+
+	echo "Attempt $i failed after $(fmt_elapsed $(($(date +%s) - ATTEMPT_START)))"
 
 	# Preserve the retry file between attempts 1 and 2 (that's how attempt 2
 	# knows which hosts to target). Clear it between 2 and 3 so a stale
@@ -217,6 +478,7 @@ for i in $(seq 1 $MAX_ATTEMPTS); do
 
 	if [ $i -eq $MAX_ATTEMPTS ]; then
 		echo "ERROR: Playbook failed after $MAX_ATTEMPTS attempts"
+		DEPLOY_RESULT="FAILED after $MAX_ATTEMPTS attempts"
 		exit 1
 	fi
 done

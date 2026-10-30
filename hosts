@@ -66,8 +66,8 @@ bs-proxy
 
 # Windows Engineering + SOC workstations joining blackstone.mil (per CLAUDE.md §4
 # best-judgment, confirmed 2026-06-25). Linux engineering (bs-eng05/06) +
-# Linux SOC servers (soc-elastic/soc-syslog/soc-tools) intentionally NOT
-# in these groups — they don't AD-join.
+# Linux SOC servers (the Security Onion grid/soc-syslog/soc-tools)
+# intentionally NOT in these groups — they don't AD-join.
 [blackstone_engineering]
 bs-eng01
 bs-eng02
@@ -96,6 +96,20 @@ blackstone_soc
 atc-radar
 atc-station
 atc-weather
+fops-flight01
+fops-flight02
+fops-flight03
+fops-flight04
+
+# ATC subsystem hosts (Linux). group_vars/atc.yml applies here. The flight
+# workstations above are Windows display consumers, NOT in [atc].
+[atc]
+atc-radar
+atc-station
+atc-weather
+
+# Flight workstations that get an ATC display shortcut/bookmark (Windows).
+[atc_display_clients]
 fops-flight01
 fops-flight02
 fops-flight03
@@ -198,21 +212,119 @@ soc-sift
 soc-openvas
 
 [soc_servers]
-soc-elastic
-soc-splunk
+soc-so-manager
+soc-so-search
+soc-sensor-corp
+soc-sensor-fops
+soc-sensor-ot
+soc-sensor-edge
 soc-syslog
 
-# Splunk indexer + search head (base splunk role from PowerPlant).
-# soc-splunk runs Splunk Enterprise Core; UFs ship to 172.31.7.19:9997.
-# See project memory `siem-choice`.
-[splunk]
-soc-splunk
+# ------------------------------------------------------------
+# Hosts that must NOT receive an endpoint agent
+# ------------------------------------------------------------
+# Elastic Agent placement in the OT chain follows the Purdue level, not the
+# subnet. The rule (Eric, 2026-08-11): an OT host gets an agent only if it is
+# used to MONITOR the process, not to run it.
+#
+#   ff-plc-1          L1   OpenPLC controller — runs the fuel process
+#   fuel-farm-sim     L0/1 pymodbus field simulation — it IS the plant
+#   control-room-hmi  L2   FUXA operator console — how the process is driven
+#
+# fuel-hist (L3 historian) and fuel-db (L3 audit DB) are NOT here: they record
+# and report, they are not in the control loop, and Level 3 is where endpoint
+# agents are routine. Neither are bs-eng01-06 / bs-ro-hist — the engineers'
+# own workstations sit on 172.31.8.0/24, IT-side of bs-ops-fw, and have always
+# been agent targets.
+#
+# control-room-hmi is the judgment call, and it is deliberate. Industry
+# practice increasingly DOES put EDR on Level 2 HMIs — Stuxnet, Industroyer
+# and TRITON all pivoted through operator or engineering consoles — but always
+# vendor-approved and detection-only. Excluding it here is the conservative
+# reading, and it is the better one for a TRAINING range: it leaves a real
+# endpoint-visibility gap in the OT enclave that trainees have to close with
+# network monitoring instead. soc-sensor-ot mirrors all three OT segments, so
+# the traffic is still fully visible on the wire. That is the compensating
+# control, and teaching it is the point.
+#
+# It is also a Purdue BRIDGE host (CLAUDE.md §8) forwarding between MTU and
+# Power-PLC, which is exactly the kind of box where an agent's failure mode is
+# worst.
+#
+# NAMED FOR WHAT IT MEANS. PowerPlant calls its equivalent [unmanaged], which
+# is wrong here: Ansible manages every one of these hosts and deploys their
+# software. The only thing they are excluded from is endpoint telemetry.
+[no_endpoint_agent]
+ff-plc-1
+fuel-farm-sim
+control-room-hmi
 
-# Reserved for future Elastic / Security Onion stack on soc-elastic.
-# Empty role-wise today -- the host gets baseline OS roles + GNOME wizard
-# suppression but NO splunk-forwarder (per the "leave bare" decision).
-[elastic]
-soc-elastic
+# ------------------------------------------------------------
+# Security Onion 2.4 distributed grid  (branch `security-onion`)
+# ------------------------------------------------------------
+# Group NAMES are load-bearing: the so_* roles are copied verbatim from
+# PowerPlant/ss-pp-ab and address these groups by name
+# (groups['so_manager'], groups['so_all'], groups['so_sensor']). Do not
+# rename them here without renaming them there.
+#
+# soc-so-manager is the former `soc-elastic` placeholder — same VM, same
+# addresses (172.31.7.15 / 10.255.240.131), renamed with blueprint additions
+# 2026-08-11. Its IMAGE changes from Ubuntu Server 24.04 to Ubuntu Desktop
+# 22.04.5; hence it moves from [ubuntu24] to [ubuntu22] below.
+[so_manager]
+soc-so-manager
+
+[so_search]
+soc-so-search
+
+# One sensor per mirrored router — see docs/security-onion/.
+#   corp → bs-core-rtr        Services, HQ, IT, Supply
+#   fops → bs-ops-rtr         Flight-Ops-Services, Flight-Control, Flight-Ops-Users
+#   ot   → bs-modbus-gateway  MTU /29, Fuel PLC /29, Fuel Sim /24
+#   edge → bs-edge-rtr        simulated internet, edge transit
+[so_sensor]
+soc-sensor-corp
+soc-sensor-fops
+soc-sensor-ot
+soc-sensor-edge
+
+[so_all:children]
+so_manager
+so_search
+so_sensor
+
+# Routers that mirror traffic into a sensor via GRE + tc mirred. NOT the same
+# set as [vyos]: membership here means "has vyos_mirror_* host_vars", and
+# bs-modbus-gateway earns its place as a mirror source independently of
+# whatever the vyos role does with it.
+[so_mirror_routers]
+bs-core-rtr
+bs-ops-rtr
+bs-modbus-gateway
+bs-edge-rtr
+
+# The controller itself. so_apt_mirror runs HERE, not on a grid node, and
+# group_vars/all/security_onion.yml derives so_mirror_host from this group's
+# first member — so the group must exist even though it holds one host that
+# is otherwise never a play target.
+[ansible_controller]
+# ansible_connection=local IS LOAD-BEARING, and its absence is not a subtle
+# failure -- it aborts the entire deploy.
+#
+# Without it the controller inherits the default ssh connection and Ansible
+# tries to SSH to 10.255.240.157 from 10.255.240.157. That host comes back
+# `unreachable=1`, and because this group holds exactly ONE host the play ends
+# with no active hosts -- which makes Ansible print "NO MORE HOSTS LEFT" and
+# stop the whole run at phase 10. Every phase after it (20-vyos, 30-prereqs,
+# 40-manager, 50-nodes, 60-verify, 70-analyst, 75-endpoint) silently never
+# executes, and the recap shows failed=0 on every host because nothing that
+# could fail was ever reached. Observed 2026-08-11, three attempts.
+#
+# `ansible_host` above it stays 10.255.240.157 and is still correct: it is
+# what group_vars/all/security_onion.yml derives so_mirror_host from, i.e. the
+# address the SO NODES fetch from. Connection-local and reachable-at-that-IP
+# are different facts about the same host.
+ansible ansible_connection=local
 
 [soc:children]
 soc_analysts
@@ -473,14 +585,21 @@ atc-weather
 fops-app01
 fops-app02
 fops-app03
-soc-splunk
 bs-proxy
+# Security Onion grid — Ubuntu Desktop 22.04.5. SO 2.4 at our pinned SHA
+# refuses noble outright (so-setup exits before Ansible gets a say) and only
+# tolerates jammy because so_base fakes it as focal.
+soc-so-manager
+soc-so-search
+soc-sensor-corp
+soc-sensor-fops
+soc-sensor-ot
+soc-sensor-edge
 
 [ubuntu24]
 bs-ftp
 bs-ns1
 bs-ro-hist
-soc-elastic
 soc-openvas
 soc-syslog
 control-room-hmi
@@ -503,7 +622,6 @@ ubuntu25
 atc-station
 bs-ro-hist
 soc-openvas
-soc-splunk
 bs-proxy
 bs-eng05
 bs-eng06
@@ -526,12 +644,13 @@ fops-wec01
 [syslog]
 soc-syslog
 
-# SIEM hosts have their own purpose-specific groups now: [splunk] for the
-# active SIEM (soc-splunk) and [elastic] for the future stack on soc-elastic.
-# A generic [siem] umbrella group is intentionally NOT defined because it
-# was previously used as a forwarder-exclusion ("hosts: linux:!siem") that
-# would silently start excluding soc-elastic once Elastic comes online.
-# Forwarder plays now use the explicit `linux:!splunk:!elastic` form.
+# The Security Onion grid has its own purpose-specific group, [so_all]. A
+# generic [siem] umbrella group is intentionally NOT defined: used as a host
+# exclusion ("hosts: linux:!siem") it silently changes meaning every time a
+# host joins it. Plays name [so_all] directly instead.
+#
+# [so_all] is the right exclusion, not just the manager: SO owns /opt/so and
+# runs its own Elastic Agent on every grid node.
 
 # Forensic / hunt tooling (do NOT receive baseline OS roles)
 [hunt]

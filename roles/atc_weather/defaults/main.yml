@@ -1,0 +1,7 @@
+---
+# atc_weather — METAR/TAF feed (sibling system). Minimal HTTP endpoint the FDP
+# and CWP poll. The full NEXRAD/TAF build is a separate sheet; this is just
+# enough for the ATC display + the weather-denial scenario to have a consumer.
+atc_weather_dir: "{{ atc_root }}/weather"
+atc_weather_requirements:
+  - flask

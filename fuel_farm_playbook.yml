@@ -2,9 +2,9 @@
 # fuel_farm_playbook.yml -- deploy the fuel farm OT subsystem per
 # systems/fuel_farm/fuel-farm-build-sheet.md.
 #
-# Runs standalone for now (per user direction on 2026-07-08). Merge into
-# site.yml later once the OT tier is generally ready to bolt onto the
-# core airfield deploy. Assumes the following are already in place:
+# Imported as the final tier of site.yml (after the network + SIEM tiers),
+# and also runnable on its own for OT-only iterations. Either way it assumes
+# the following are already in place:
 #   - site.yml has been run at least through pfSense + bs-modbus-gateway
 #     so that the L3.5 boundary (bs-ops-fw) and the OT gateway have their
 #     interfaces up. Otherwise Ansible can't reach these hosts over mgmt
@@ -79,6 +79,15 @@
   hosts: fuel-farm-sim
   gather_facts: false
   become: true
+  # pip reads HTTP_PROXY from its task environment, and the OT hosts have no
+  # direct outbound path -- without this the pymodbus/psycopg2/PyYAML install
+  # can't reach PyPI ("Temporary failure in name resolution"). Same per-play
+  # proxy scoping as fuel_db/fuel_historian (we no longer set /etc/environment).
+  environment:
+    HTTP_PROXY: "http://10.255.240.1:3128"
+    HTTPS_PROXY: "http://10.255.240.1:3128"
+    http_proxy: "http://10.255.240.1:3128"
+    https_proxy: "http://10.255.240.1:3128"
   roles:
     - fuel_sim
   tags:

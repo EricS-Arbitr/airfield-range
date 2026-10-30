@@ -1,0 +1,5 @@
+---
+# atc_inject — the synthetic ADS-B feed engine (runs on atc-radar).
+atc_feed_dir: "{{ atc_root }}/feed"
+atc_feed_mode: "beast"            # feed emits Beast DF17 (:30005) + SBS (:30003)
+atc_feed_requirements: []         # pip deps (none; stdlib only)

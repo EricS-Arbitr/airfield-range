@@ -13,7 +13,7 @@
 # management-plane contract.
 ansible_host: "10.255.240.181"
 
-# Blueprint omits `hostname` for this VM (same pattern as soc-splunk).
+# Blueprint omits `hostname` for this VM.
 # Set it explicitly via the common role.
 inventory_hostname_short: "bs-proxy"
 

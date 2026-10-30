@@ -1,0 +1,90 @@
+---
+# atc_playbook.yml — deploy the Air Traffic Control subsystem (Flight Control
+# Center, fops.blackstone.mil). Imported as a tier of site.yml after the SIEM
+# and fuel tiers; also runnable standalone for ATC-only iterations:
+#   ansible-playbook atc_playbook.yml
+#
+# Assumes site.yml has run far enough that the `common` role configured the ATC
+# hosts' dual-home NICs (eth0 mgmt / eth1 prod on Flight-Control-Center). Mgmt
+# IPs in 10.255.240.0/20 are always reachable via the platform fabric, so a
+# standalone run still lands the config even before the data plane converges.
+#
+# Sourcing is DEV for now (readsb/tar1090/tiles/pip from upstream via the
+# mgmt-plane proxy) — see group_vars/atc.yml for the Nexus/air-gap toggles.
+#
+# Deploy order on atc-radar is load-bearing: atc_inject (the Beast feed) before
+# atc_core (readsb connects out to that feed on 127.0.0.1:30005).
+
+- name: ATC — route apt/pip through the mgmt-plane proxy
+  hosts: atc
+  gather_facts: true
+  become: true
+  roles:
+    - platform_proxy
+  tags: [atc, platform_proxy]
+
+- name: ATC — service account + install root
+  hosts: atc-radar,atc-weather
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Create the atc service account
+      ansible.builtin.user:
+        name: "{{ atc_user }}"
+        system: true
+        shell: /usr/sbin/nologin
+        home: "{{ atc_root }}"
+        create_home: true
+  tags: [atc]
+
+- name: ATC — ADS-B feed + surveillance core (atc-radar)
+  hosts: atc-radar
+  gather_facts: true
+  become: true
+  roles:
+    - atc_inject       # Beast DF17 feed engine (listens first)
+    - atc_core         # readsb + tar1090 scope + Flight Data Processor
+  tags: [atc, atc_radar]
+
+- name: ATC — weather (METAR/TAF/ATIS) feed (atc-weather)
+  hosts: atc-weather
+  gather_facts: true
+  become: true
+  roles:
+    - atc_weather
+  tags: [atc, atc_weather]
+
+- name: ATC — controller working position kiosk (atc-station)
+  hosts: atc-station
+  gather_facts: true
+  become: true
+  roles:
+    - atc_cwp
+  tags: [atc, atc_cwp]
+
+# Flight workstations (Windows) get on-demand access to the displays via
+# all-users desktop shortcuts (owner decision: shortcut/bookmark, not kiosk).
+# IPs come from atc-radar's group_vars so nothing is hardcoded here.
+- name: ATC — display shortcuts on the flight workstations
+  hosts: atc_display_clients
+  gather_facts: false
+  vars:
+    _fdp_url: "http://{{ hostvars['atc-radar'].atc_radar_ip }}:{{ hostvars['atc-radar'].atc_fdp_port }}/"
+    _scope_url: "http://{{ hostvars['atc-radar'].atc_radar_ip }}/tar1090/"
+  tasks:
+    - name: ATC Operations shortcut (combined radar + strips + weather)
+      ansible.windows.win_copy:
+        dest: 'C:\Users\Public\Desktop\ATC Operations.url'
+        content: |
+          [InternetShortcut]
+          URL={{ _fdp_url }}
+          IconIndex=0
+
+    - name: ATC Radar Scope shortcut (tar1090)
+      ansible.windows.win_copy:
+        dest: 'C:\Users\Public\Desktop\ATC Radar Scope.url'
+        content: |
+          [InternetShortcut]
+          URL={{ _scope_url }}
+          IconIndex=0
+  tags: [atc, atc_display]

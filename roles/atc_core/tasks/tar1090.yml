@@ -1,0 +1,89 @@
+---
+# tar1090 — web radar scope on lighttpd, reading readsb's json. DEV installs
+# from upstream (wiedehopf); AIR-GAP vendors from Nexus ng_raw (toggle). No
+# community script is left to own config we care about: we render config.js.
+#
+# NOTE: tar1090's exact paths (config.js location, service name, html dir) are
+# worth confirming on the host the first time — vars make them overridable.
+
+- name: Install the web server
+  ansible.builtin.apt:
+    name: "{{ atc_tar1090_web }}"
+    state: present
+
+# --- DEV: upstream install (wiedehopf tar1090) ------------------------------
+- name: Fetch the upstream tar1090 installer (dev; range has egress)
+  ansible.builtin.get_url:
+    url: "{{ atc_tar1090_install_url }}"
+    dest: /usr/local/src/tar1090-install.sh
+    mode: "0755"
+  environment:
+    https_proxy: "{{ inet_proxy }}"
+    http_proxy: "{{ inet_proxy }}"
+  when: atc_tar1090_install_method == "upstream_script"
+
+- name: Install tar1090 from upstream (reads readsb json; idempotent via creates)
+  ansible.builtin.command: "bash /usr/local/src/tar1090-install.sh {{ atc_readsb_json_dir }}"
+  args:
+    creates: /usr/local/share/tar1090/html/index.html
+  environment:
+    https_proxy: "{{ inet_proxy }}"
+    http_proxy: "{{ inet_proxy }}"
+    DEBIAN_FRONTEND: noninteractive
+  when: atc_tar1090_install_method == "upstream_script"
+
+# --- AIR-GAP: vendor from Nexus ng_raw (TODO) -------------------------------
+- name: tar1090 air-gap vendoring placeholder
+  ansible.builtin.debug:
+    msg: "TODO: vendor tar1090 + offline tiles from Nexus ng_raw (atc_tar1090_tiles_url)."
+  when: atc_tar1090_install_method != "upstream_script"
+
+# --- Offline basemap tiles (served locally; hosts have no browser egress) ---
+# DEV fetches a bounded set via the proxy; AIR-GAP stages the same {z}/{x}/{y}
+# tree from Nexus (point atc_tiles_src at it). Served by tar1090's lighttpd at
+# /tar1090/tiles/.
+- name: Ensure the local tiles directory exists
+  ansible.builtin.file:
+    path: "{{ atc_tar1090_tiles_dir }}"
+    state: directory
+    mode: "0755"
+  when: atc_tar1090_offline_tiles | bool
+
+- name: Stage the tile fetcher
+  ansible.builtin.copy:
+    src: tiles/fetch_tiles.py
+    dest: /usr/local/src/fetch_tiles.py
+    mode: "0755"
+  when: atc_tar1090_offline_tiles | bool
+
+- name: Download the offline basemap tiles (one-time; idempotent via creates)
+  ansible.builtin.command: >-
+    /usr/bin/python3 /usr/local/src/fetch_tiles.py
+    --src "{{ atc_tiles_src }}" --out "{{ atc_tar1090_tiles_dir }}"
+    --lat-min {{ atc_tiles_bbox.lat_min }} --lat-max {{ atc_tiles_bbox.lat_max }}
+    --lon-min {{ atc_tiles_bbox.lon_min }} --lon-max {{ atc_tiles_bbox.lon_max }}
+    --zmin {{ atc_tiles_zoom_min }} --zmax {{ atc_tiles_zoom_max }}
+  args:
+    creates: "{{ atc_tar1090_tiles_dir }}/{{ atc_tiles_zoom_min }}"
+  environment:
+    https_proxy: "{{ inet_proxy }}"
+    http_proxy: "{{ inet_proxy }}"
+  when:
+    - atc_tar1090_offline_tiles | bool
+    - atc_tiles_src | length > 0
+
+# --- Config (Ansible-owned): center on the field + range rings --------------
+- name: Configure tar1090 site location + range rings
+  ansible.builtin.template:
+    src: tar1090-config.js.j2
+    dest: "{{ atc_tar1090_config }}"
+    mode: "0644"
+  notify: Restart tar1090
+  when: atc_tar1090_config | length > 0
+
+- name: Ensure tar1090 is enabled + running
+  ansible.builtin.systemd:
+    name: tar1090
+    enabled: true
+    state: started
+  failed_when: false

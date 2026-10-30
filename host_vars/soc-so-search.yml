@@ -1,0 +1,32 @@
+---
+# host_vars/soc-so-search.yml — Security Onion SEARCH NODE (Linux)
+# Image:   global/RDP_Ubuntu_Desktop_22.04.5:1.1.0
+# Prod:    SOC 172.31.7.20/24 → gw 172.31.7.1
+# Mgmt:    10.255.240.182/20 (position FIRST → eth0)
+ansible_host: "10.255.240.182"
+network_interfaces:
+  - name: "eth0"                     # mgmt (position FIRST)
+    ipv4:
+      type: "ethernet"
+      address: "10.255.240.182"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "eth1"                     # production — SOC 172.31.7.0/24
+    ipv4:
+      type: "ethernet"
+      address: "172.31.7.20"
+      netmask: "255.255.255.0"
+      gateway: "172.31.7.1"
+    dns:
+      - "172.31.2.7"
+      - "172.31.2.8"
+
+# --- Security Onion role contract ----------------------------------------
+so_role: "searchnode"
+so_hostname: "soc-so-search"
+so_prod_ip: "172.31.7.20"
+so_prod_prefix: 24
+so_prod_gateway: "172.31.7.1"
+so_prod_dns:
+  - "172.31.2.7"
+  - "172.31.2.8"

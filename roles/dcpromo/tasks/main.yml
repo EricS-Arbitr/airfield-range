@@ -25,11 +25,111 @@
   ansible.windows.win_feature:
     name: "rsat-ADDS"
     state: present
+  register: rsat_adds
 
 - name: Install RSAT DNS
   ansible.windows.win_feature:
     name: "rsat-DNS-Server"
     state: present
+  register: rsat_dns
+
+# DCPromo refuses to run while a servicing operation is pending, and says so:
+#
+#   Failed to install ADDSForest, DCPromo exited with 15: Role change is in
+#   progress or this computer needs to be restarted.
+#
+# The two feature installs above are what leave it pending. Until 2026-09-19
+# the only reboot-if-required task in this role was guarded
+# `parent_domain_name is defined`, so it ran on the CHILD path only -- the
+# forest root went straight from installing RSAT to promoting, with nothing
+# between them, and neither install even registered a result for anything to
+# check.
+#
+# This stayed invisible for as long as the base image happened to ship RSAT
+# pre-installed: both tasks were no-ops, nothing was pending, and the promotion
+# worked. The first image without it took the forest root down on all three
+# deploy.sh attempts in 40 minutes, and with the forest root gone nothing
+# downstream of AD could build.
+#
+# Registry keys, not just the module reports, because a pending reboot can also
+# arrive from the image or from an earlier play. PendingFileRenameOperations is
+# deliberately NOT checked -- it is set on most Windows hosts most of the time
+# and would reboot every DC on every deploy.
+# AD-Domain-Services is installed HERE, explicitly, for BOTH promotion paths.
+#
+# `microsoft.ad.domain` will auto-install the feature itself if it is missing
+# -- and that is the bug. It installs the feature and then runs DCPromo in the
+# SAME task, so DCPromo meets the role change its own module just created and
+# refuses:
+#
+#   Failed to install ADDSForest, DCPromo exited with 15: Role change is in
+#   progress or this computer needs to be restarted.
+#
+# The module then reports `reboot_required: true`, which is it saying it needed
+# a reboot partway through and had no way to take one. Nothing is pending
+# BEFORE the task, which is why probing for a pending reboot ahead of it finds
+# a clean host and changes nothing -- measured on 2026-09-19, twice.
+#
+# The child-domain path never hit this because it always installed the feature
+# explicitly first. The forest root relied on the auto-install. Installing it
+# here, for both, means the module is handed a host that already has the
+# feature and has rebooted, so it only ever has to promote.
+#
+# `include_management_tools: true` also brings the RSAT-ADDS bundle, a superset
+# of the `rsat-ADDS` install above -- idempotent, so double-installing is fine.
+- name: Install AD-Domain-Services + management tools
+  ansible.windows.win_feature:
+    name: AD-Domain-Services
+    state: present
+    include_management_tools: true
+  register: adds_feature_install
+
+# Reboot before promoting, and do NOT rely on detecting whether one is needed.
+#
+# Detection was tried on 2026-09-19 and did not work. The probe checked both
+# win_feature `reboot_required` reports and the pending-reboot registry keys;
+# every signal came back clean while DCPromo went on refusing with
+#
+#   Failed to install ADDSForest, DCPromo exited with 15: Role change is in
+#   progress or this computer needs to be restarted.
+#
+# ...and its own `reboot_required: true`. Windows knows a role change is
+# pending and does not expose it anywhere the probe was looking. Guessing
+# which flag it used is a game with no end: the ServerManager key alone is
+# `HKLM:\SOFTWARE\Microsoft\ServerManager\CurrentRebootAttemps`, spelled
+# wrong by Microsoft and in a different hive from where it reads.
+#
+# A reboot is cheap and it makes the state knowable rather than inferred. The
+# guard is the only thing that matters: reboot hosts that are about to be
+# promoted, and leave hosts that are already DCs alone, so re-deploys pay
+# nothing. DomainRole 4 and 5 are backup and primary DC respectively.
+- name: Determine whether this host is already a domain controller
+  ansible.windows.win_shell: |
+    $cs = Get-CimInstance Win32_ComputerSystem
+    if ($cs.DomainRole -ge 4) {
+      Write-Output "ALREADY_DC role=$($cs.DomainRole)"
+    } else {
+      Write-Output "NOT_DC role=$($cs.DomainRole)"
+    }
+  register: dcpromo_dc_state
+  changed_when: false
+
+- name: Reboot before promotion to clear any pending role change
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+  when: >-
+    (rsat_adds.reboot_required | default(false)) or
+    (rsat_dns.reboot_required | default(false)) or
+    (adds_feature_install.reboot_required | default(false)) or
+    ('NOT_DC' in (dcpromo_dc_state.stdout | default('')))
+
+- name: Report the pre-promotion reboot decision
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ dcpromo_dc_state.stdout | default('(no probe)') | trim }}
+      rsat_adds_reboot={{ rsat_adds.reboot_required | default(false) }}
+      rsat_dns_reboot={{ rsat_dns.reboot_required | default(false) }}
+      adds_feature_reboot={{ adds_feature_install.reboot_required | default(false) }}
 
 - name: local admin guest customization fix - Server 2019
   ansible.windows.win_shell: "net user administrator /passwordreq:yes"
@@ -67,32 +167,14 @@
     child_domain_label: "{{ domain_name | regex_replace('\\.' + (parent_domain_name | regex_escape) + '$', '') }}"
   when: parent_domain_name is defined
 
-# `Install-ADDSDomain` lives in the ADDSDeployment PowerShell module, which
-# only ships once the AD-Domain-Services Windows Feature is installed. The
-# forest-root path uses microsoft.ad.domain which auto-installs the feature;
-# the child-domain path uses win_powershell directly, so we have to install
-# it explicitly here. `include_management_tools: true` gives us the RSAT-ADDS
-# module bundle as well (superset of the `rsat-ADDS` install at the top of
-# this role, but idempotent -- ok to double-install).
-- name: Install AD-Domain-Services + management tools (child-domain path)
-  ansible.windows.win_feature:
-    name: AD-Domain-Services
-    state: present
-    include_management_tools: true
-  register: adds_feature_install
-  when: parent_domain_name is defined
-
-- name: Reboot if AD-Domain-Services install requires it
-  ansible.windows.win_reboot:
-  when:
-    - parent_domain_name is defined
-    - adds_feature_install.reboot_required | default(false)
-
 - name: Check if host is already a DC for {{ domain_name | default('') }}
   ansible.windows.win_shell: |
     $cs = Get-WmiObject Win32_ComputerSystem
     if ($cs.PartOfDomain -and $cs.Domain -eq '{{ domain_name }}') { 'ALREADY_JOINED' } else { 'NEEDS_PROMOTION' }
   register: child_dc_state
+  # no_log: the command embeds domain_admin_password. Pure probe -- its output
+  # drives a conditional and nothing reports it, so nothing is lost.
+  no_log: true
   changed_when: false
   when: parent_domain_name is defined
 
@@ -234,6 +316,11 @@
         Write-Output "STACK: $($_.ScriptStackTrace)"
       }
   register: dcpromo_child
+  # no_log: the command embeds domain_admin_password and Ansible echoes `cmd`
+  # on failure. Diagnosis is not lost -- this task writes its own transcript to
+  # C:\ProgramData\dcpromo-install.log, which the post-dcpromo snapshot play
+  # collects, and that log is where the useful detail already lived.
+  no_log: true
   # NO `notify: Reboot Windows`. The handler cannot authenticate after this
   # task -- that is the defect, not a timing quirk. The reboot is fired
   # in-session above.
@@ -257,10 +344,15 @@
     delay: 60
     sleep: 15
     timeout: 900
+  # `is not skipped`, not `is changed`. The promotion task reboots from inside
+  # its own session, so it can return unreachable or failed rather than
+  # changed -- and those are precisely the runs where waiting for the host to
+  # come back matters most. `is changed` skipped the wait in exactly the case
+  # it was written for.
   when:
     - parent_domain_name is defined
     - dcpromo_child is defined
-    - dcpromo_child is changed
+    - not (dcpromo_child is skipped)
 
 - name: Confirm AD services are actually running on the new child DC
   vars:
@@ -269,12 +361,77 @@
   ansible.windows.win_powershell:
     script: |
       $Ansible.Changed = $false
-      $svc = Get-Service ADWS, NTDS, Netlogon -ErrorAction SilentlyContinue
-      Write-Output ([string](($svc | Where-Object Status -ne 'Running').Count))
+      $want = @('ADWS', 'NTDS', 'Netlogon')
+      $bad = @()
+      foreach ($n in $want) {
+        $s = Get-Service -Name $n -ErrorAction SilentlyContinue
+        if (-not $s) {
+          $bad += "$n=MISSING"
+        } elseif ($s.Status -ne 'Running') {
+          $bad += "$n=$($s.Status)"
+        }
+      }
+      if ($bad.Count -eq 0) {
+        Write-Output "CHILD_DC_SERVICES_OK"
+      } else {
+        Write-Output ("CHILD_DC_SERVICES_BAD " + ($bad -join ' '))
+      }
   register: child_dc_services
-  changed_when: false
-  failed_when: (child_dc_services.output[0] | default('9') | int) != 0
+  # CHILD PATH ONLY. This task forces ansible_user to
+  # <SHORTDOMAIN>\Administrator, which is correct for a promoted child DC and
+  # wrong for the forest root: `microsoft.ad.domain` notifies the reboot
+  # handler, which does not run until the END of the play, so within the play
+  # bs-dc01 is promoted but NOT rebooted -- local SAM gone, domain not serving.
+  # Connecting as BLACKSTONE\Administrator there returns UNREACHABLE, and on
+  # 2026-09-19 that dropped the forest root out of attempt 1 entirely.
+  #
+  # ignore_unreachable because `until:` cannot retry an UNREACHABLE result and
+  # `failed_when: false` does not catch one either -- without this the host
+  # leaves the play silently and the gate below never gets to say why.
   when:
     - parent_domain_name is defined
     - dcpromo_child is defined
-    - dcpromo_child is changed
+    - not (dcpromo_child is skipped)
+  ignore_unreachable: true
+  # The old probe counted services whose Status was not Running. When
+  # Get-Service found NOTHING -- the services absent entirely, which is what a
+  # failed promotion actually looks like -- the count was 0 and the host was
+  # declared healthy. It reported the worst case as the best one. Name each
+  # service and distinguish MISSING from Stopped.
+  #
+  # Retries because this runs right after a reboot: NTDS and ADWS take time to
+  # start, and sampling once turns a slow start into a failure.
+  until: "'CHILD_DC_SERVICES_OK' in (child_dc_services.output | default([]) | join(' '))"
+  retries: 20
+  delay: 15
+  changed_when: false
+  # no_log: the command embeds domain_admin_password and Ansible echoes `cmd`
+  # on failure. The DIAGNOSIS is preserved by the task below, which prints the
+  # probe output and never the command -- same pattern as elastic_agent.
+  no_log: true
+  failed_when: false
+
+- name: Fail if AD services did not come up on the new child DC
+  ansible.builtin.fail:
+    msg: |
+      AD services are not running on {{ inventory_hostname }} after promotion.
+      probe output: {{ child_dc_services.output | default(['(none)']) | join(' ') }}
+
+      MISSING means the service does not exist on the host, which is what a
+      failed promotion looks like -- not a slow start. Check
+      C:\ProgramData\dcpromo-install.log, which the post-dcpromo snapshot
+      play collects.
+
+      The credential is not shown. Read the play if you need the command.
+  # ONE `when`, deliberately. This task carried two until 2026-09-18: a bare
+  # `when:` with the service condition, followed by a `when:` list with the
+  # guards. YAML keeps the last key and silently drops the first, so the
+  # service condition -- the entire point of the task -- was never evaluated,
+  # and `child_dc_services` was probed above and then read by nothing but the
+  # message string. Ansible reports this as a construction WARNING, which
+  # scrolls past in a 26,000-line deploy log.
+  when:
+    - parent_domain_name is defined
+    - dcpromo_child is defined
+    - not (dcpromo_child is skipped)
+    - "'CHILD_DC_SERVICES_OK' not in (child_dc_services.output | default([]) | join(' '))"

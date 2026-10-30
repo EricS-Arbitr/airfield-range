@@ -1,0 +1,135 @@
+---
+# =========================================================================
+# 70-analyst.yml — verify the analyst workstations can actually USE SO
+# =========================================================================
+# Phases 10-60 build and prove the grid. This one is about the humans: can
+# someone sitting at a SOC analyst box log into the SOC WebUI?
+#
+# Nothing here CHANGES anything. Both prerequisites are handled elsewhere:
+#
+#   * Network access — nothing to do. so-setup seeds ALLOW_CIDR from
+#     so_allow_cidr (172.31.7.0/24), so the `analyst` hostgroup already
+#     covers every host on the SOC subnet, which is where soc-analyst01..06
+#     (.31-.36) and soc-flare (.18) live.
+#
+#   * Clock — fixed range-wide by playbooks/05-time.yml.
+#
+# What remains is proving the two hold TOGETHER, because they fail in ways
+# that look nothing alike: a firewall problem gives a connection timeout, a
+# clock problem gives "This login form has expired" with no server-side error
+# at all. PowerPlant lost an afternoon to the second one.
+#
+# TARGET GROUP: [soc_analysts], not [hunt].
+# PowerPlant runs this against [hunt] because win-hunt-1 is its analyst box.
+# Here [hunt] is soc-flare / soc-sift / soc-openvas -- pre-built forensic
+# images, two of them LINUX, and every task below is win_powershell. The
+# analysts in this range are the six Win11 workstations in [soc_analysts].
+# =========================================================================
+
+- name: Analyst access — prove the SOC workstations can reach and log into SOC
+  hosts: soc_analysts
+  gather_facts: false
+  vars:
+    # Evaluated on the CONTROLLER, whose clock is correct.
+    range_utc: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+    soc_ip: "{{ hostvars[groups['so_manager'][0]]['so_prod_ip'] }}"
+  tasks:
+    # Layer 1: is there a network path at all. Necessary, NOT sufficient --
+    # this is a raw socket and ignores every browser setting.
+    - name: SOC WebUI is reachable on 443 (TCP)
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          Write-Output (Test-NetConnection -ComputerName '{{ soc_ip }}' -Port 443 -WarningAction SilentlyContinue).TcpTestSucceeded
+      register: soc_reach
+      changed_when: false
+      failed_when: not (soc_reach.output[0] | bool)
+
+    # Layer 2: WHAT PATH WOULD THE BROWSER TAKE. This is the check that was
+    # missing, and its absence hid a real outage.
+    #
+    # Windows auto-detects WPAD by default and the dns role publishes a `wpad`
+    # record, so analyst browsers load squid's PAC. Until 2026-08-13 that PAC
+    # marked 172.16.* DIRECT but not 172.31.*, so https://172.31.7.15 -- an IP
+    # literal, because the SO nodes have no DNS records -- fell through to
+    # "PROXY". Analysts could not open SOC while the TCP test above passed
+    # every time, because Test-NetConnection does not consult the proxy
+    # configuration at all.
+    #
+    # DefaultWebProxy reflects the live WinINET/WPAD resolution, so this asks
+    # the same question the browser asks.
+    - name: The browser path to SOC must be DIRECT, not via the proxy
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          $u  = [uri]'https://{{ soc_ip }}/'
+          $wp = [System.Net.WebRequest]::DefaultWebProxy
+          if ($null -eq $wp) { Write-Output 'DIRECT'; exit }
+          $via = $wp.GetProxy($u)
+          # GetProxy returns the ORIGINAL uri when no proxy applies.
+          if ($via.AbsoluteUri -eq $u.AbsoluteUri) { Write-Output 'DIRECT' }
+          else { Write-Output ([string]$via.AbsoluteUri) }
+      register: soc_path
+      changed_when: false
+      failed_when: soc_path.output[0] | default('') != 'DIRECT'
+
+    # Layer 3: does an actual HTTPS request succeed, over that path, with the
+    # self-signed cert SO generates. A 200 or a redirect to /login both mean
+    # the WebUI answered.
+    - name: SOC WebUI answers an HTTPS request
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          add-type @"
+          using System.Net; using System.Security.Cryptography.X509Certificates;
+          public class SoTrustAll : ICertificatePolicy {
+            public bool CheckValidationResult(ServicePoint s, X509Certificate c, WebRequest r, int p) { return true; }
+          }
+          "@
+          [System.Net.ServicePointManager]::CertificatePolicy = New-Object SoTrustAll
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          try {
+            $r = Invoke-WebRequest -Uri 'https://{{ soc_ip }}/' -UseBasicParsing -TimeoutSec 30
+            Write-Output ([string]$r.StatusCode)
+          } catch {
+            if ($_.Exception.Response) { Write-Output ([string][int]$_.Exception.Response.StatusCode) }
+            else { Write-Output ("ERR: " + $_.Exception.Message) }
+          }
+      register: soc_http
+      changed_when: false
+      failed_when: soc_http.output[0] | default('') not in ['200', '302', '303', '401']
+
+    # The clock check is the one that matters. kratos mints a login flow
+    # carrying `expires_at` and the BROWSER compares it against its own clock;
+    # flows live 60 minutes, so a client hours fast sees every fresh flow as
+    # already expired and loops forever with nothing in the server log.
+    - name: Clock is close enough to range UTC for kratos login flows
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          $target = [DateTime]::ParseExact(
+            '{{ range_utc }}', 'yyyy-MM-ddTHH:mm:ssZ',
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal -bor
+            [Globalization.DateTimeStyles]::AdjustToUniversal)
+          # Parentheses are load-bearing. `Write-Output [Math]::Abs(...)` parses
+          # in ARGUMENT mode and emits the literal string "[Math]::Abs(...)",
+          # which Jinja's `| float` silently turns into 0.0 -- so the drift
+          # check could never fail. .ToString() keeps it a plain scalar rather
+          # than a serialized object. See ss-pp-ab UPSTREAM_FIXES 2026-08-04
+          # (later 7).
+          Write-Output ([Math]::Abs(((Get-Date).ToUniversalTime() - $target).TotalSeconds).ToString())
+      register: drift
+      changed_when: false
+      failed_when: (drift.output[0] | float) > 120
+
+    - name: Report analyst readiness
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: SOC https://{{ soc_ip }} — TCP ok,
+          browser path {{ soc_path.output[0] }}, HTTP {{ soc_http.output[0] }},
+          clock {{ '%.0f' | format(drift.output[0] | float) }}s from range UTC.
+          Log in as {{ so_web_user }}.
+  tags:
+    - so
+    - analyst

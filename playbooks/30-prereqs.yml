@@ -1,0 +1,36 @@
+---
+# =========================================================================
+# 30-prereqs.yml — SO-specific prep on every grid node
+# =========================================================================
+# so_base layers what SO needs on top of the range baseline:
+#   - apt prereqs (curl, ca-certificates, python3-apt, wget, net-tools, jq)
+#   - system-wide HTTP/HTTPS proxy env + APT proxy for so-setup's fetches
+#   - /etc/hosts entries for every peer node, so MSRV resolves during join
+#   - the pinned SO source pulled from the controller's mirror
+#   - the snapshotted so-setup overlay (the answer-file mechanism)
+#   - UFW disabled, because SO manages iptables through so-firewall
+#
+# `common` and `init` are deliberately NOT listed here.
+#
+# site.yml's "Common Role" play already runs `common` against `windows,linux`,
+# and the six SO nodes are in [ubuntu22] -> [linux], so they are baselined
+# with everything else before this phase: netplan written from their
+# network_interfaces host_vars, cloud-init networking neutralised, apt
+# updated. Running it a second time here would repeat that work and risk a
+# second reboot cycle for nothing.
+#
+# so-setup rewrites netplan again afterwards, for its own bond/monitor
+# interfaces. That overlap is expected and is how PowerPlant runs -- the
+# ordering (range baseline, then so-setup) is what makes it safe. `init` is
+# Windows-only and has nothing to do here.
+# =========================================================================
+
+- name: SO grid node prep (so_base)
+  hosts: so_all
+  become: true
+  gather_facts: true
+  roles:
+    - so_base
+  tags:
+    - so
+    - so_prereqs
