@@ -82,16 +82,21 @@
   failed_when: false
   changed_when: false
 
-# Container's default network doesn't inherit the host's HTTP proxy
-# env, and OT hosts (including control-room-hmi) can only reach the
-# npm registry via the mgmt-plane proxy at 10.255.240.1:3128 -- pass
-# --proxy / --https-proxy explicitly so npm hits it from inside the
-# container's netns.
-- name: Install modbus-serial into FUXA container (npm install via mgmt proxy)
+# Pull modbus-serial (and its @serialport/* closure) from the in-platform
+# Nexus npm GROUP, not public npmjs -- Nexus proxies/caches upstream so the
+# range has no direct npm egress. One --registry covers the scoped deps too.
+# The container's default network doesn't inherit the host's HTTP proxy env,
+# and OT hosts (including control-room-hmi) reach Nexus only via the mgmt-plane
+# proxy at 10.255.240.1:3128 -- pass --proxy / --https-proxy explicitly so npm
+# hits it from inside the container's netns. --strict-ssl=false because Nexus
+# presents an internal-CA cert the stock FUXA image does not trust.
+- name: Install modbus-serial into FUXA container (from Nexus npm group via mgmt proxy)
   ansible.builtin.command:
     cmd: >-
       docker exec -w /usr/src/app/FUXA/server fuxa
       npm install modbus-serial --no-audit --no-fund --no-save
+      --registry https://nexus.dev.ng.simspace.lan/repository/npm/
+      --strict-ssl=false
       --proxy http://10.255.240.1:3128
       --https-proxy http://10.255.240.1:3128
   when: modbus_serial_check.rc != 0
