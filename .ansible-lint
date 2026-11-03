@@ -9,7 +9,7 @@
 #      internal-error. Point ANSIBLE_VAULT_PASSWORD_FILE at any readable file;
 #      syntax checking does not decrypt vault content.
 #   2. Many roles the playbooks call are base roles merged in at build time by
-#      build_tarball.sh and are NOT in source here. Extract them from ab_pp.tgz
+#      build_tarball.sh and are NOT in source here. Extract them from airfield_seconion.tgz
 #      to a path OUTSIDE the repo and add it to ANSIBLE_ROLES_PATH, so lint
 #      reports only on this repo's own roles.
 profile: production

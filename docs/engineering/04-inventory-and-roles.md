@@ -125,6 +125,7 @@ variant adds 11 (Splunk ×8, Malcolm ×2, `docker_engine`).
 | `dns` | AD-integrated zones + records; child-DC `DomainDnsZones` partition gate; record writes retry. |
 | `global_dns` | Scenario public-name resolution on `is-inet` for the simulated Internet. |
 | `create_users` / `ue` / `aue_agent` | Seed domain users; drive emulated-user activity. |
+| `drainhole` | Windows endpoint activity harness (`network_mgr.exe`), staged from Nexus and set to run at startup across the Windows fleet alongside the AUE agent. |
 | `fileserver` / `mapped_drive` | File servers and the mapped drives that reference them. |
 | `email` | Postfix + Dovecot + webmail on `is-inet`, multi-domain for both forests. |
 | `blackstone_www` | The public web presence on `bs-www`. |
@@ -144,7 +145,6 @@ variant adds 11 (Splunk ×8, Malcolm ×2, `docker_engine`).
 | `fuel_hmi` | FUXA operator console on `control-room-hmi` (`:1881`); the Modbus-serial driver installs into the container from the Nexus npm group. |
 | `fuel_historian` | Telegraf + InfluxDB 2.7 + Grafana on `fuel-hist`. |
 | `fuel_db` | PostgreSQL 16 + TimescaleDB audit DB on `fuel-db`. |
-| `drainhole` | Fuel-process support. |
 
 ### ATC roles
 
