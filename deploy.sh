@@ -219,7 +219,7 @@ fi
 
 if ! head -1 "$VAULT_FILE" | grep -q '^\$ANSIBLE_VAULT'; then
 	echo "ERROR: $VAULT_FILE is PLAINTEXT. Refusing to deploy."
-	echo "       It ships inside ab_mb.tgz. Encrypt it:"
+	echo "       It ships inside airfield_seconion.tgz. Encrypt it:"
 	echo "         ansible-vault encrypt $VAULT_FILE"
 	exit 1
 fi
@@ -230,7 +230,7 @@ fi
 # retry-dir chown in here.
 #
 # THE TRADE, STATED SO NOBODY REDISCOVERS IT LATER: the vault password now
-# ships inside ab_mb.tgz alongside the encrypted vault, so anyone holding the
+# ships inside airfield_seconion.tgz alongside the encrypted vault, so anyone holding the
 # tarball can decrypt it. What encryption still buys is real but narrower --
 # credentials stay out of the repo, out of `git log`, and out of a casual grep
 # of a checkout. It is NOT protection against someone with the artifact.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build ab_mb.tgz for deployment.
+# Build airfield_seconion.tgz for deployment.
 #
 # Per the airfield-range role-sourcing policy (memory:
 # project-airfield-role-sourcing), every role used by this project must
@@ -42,7 +42,7 @@ if [ -d "$AIRFIELD_RANGE/playbooks" ]; then
   while IFS= read -r pb; do PLAYBOOKS+=("$pb"); done \
     < <(find "$AIRFIELD_RANGE/playbooks" -maxdepth 1 -name '*.yml' | sort)
 fi
-ARCHIVE="$AIRFIELD_RANGE/ab_mb.tgz"
+ARCHIVE="$AIRFIELD_RANGE/airfield_seconion.tgz"
 STAGE_PARENT="$(mktemp -d)"
 STAGE="$STAGE_PARENT/abmb_build"
 
@@ -389,7 +389,7 @@ for entry in *; do
   for p in "${TAR_PATHS[@]}"; do [ "$p" = "$entry" ] && packed=1 && break; done
   if [ "$packed" -eq 0 ]; then
     echo "ERROR: '$entry' was staged but is not in TAR_PATHS -- it would be" >&2
-    echo "       silently missing from ab_mb.tgz. Add it to TAR_PATHS." >&2
+    echo "       silently missing from airfield_seconion.tgz. Add it to TAR_PATHS." >&2
     exit 1
   fi
 done

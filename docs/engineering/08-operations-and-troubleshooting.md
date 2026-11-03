@@ -125,8 +125,8 @@ a new tarball:
 1. Build, commit and push the tarball (see the build & deploy chapter); note the
    **full** commit SHA.
 2. Edit the platform blueprint → the `download-range-vars-script` `content:` →
-   replace the SHA in the `…/<full-sha>/<tarball>` raw URL (`ab_mb.tgz` on the
-   monitoring-only variant, `ab_mbs.tgz` on the stacked variant).
+   replace the SHA in the `…/<full-sha>/<tarball>` raw URL (`airfield_seconion.tgz` on the
+   monitoring-only variant, `airfield_full_stack.tgz` on the stacked variant).
 3. Confirm the blueprint references the SHA you pushed.
 4. A fresh range fetches that exact tarball via `wget … -e https_proxy=
    10.255.240.1:3128` (curl does **not** work through this proxy on the

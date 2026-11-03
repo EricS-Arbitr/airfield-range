@@ -3,7 +3,7 @@
 ## The deploy chain, end to end
 
 ```
-build_tarball.sh  ──▶  ab_mb.tgz (or ab_mbs.tgz, stacked)  ──▶  commit + push (pinned commit)
+build_tarball.sh  ──▶  airfield_seconion.tgz (or airfield_full_stack.tgz, stacked)  ──▶  commit + push (pinned commit)
                                                │
 blueprint download-range-vars-script: wget the tarball from the pinned raw URL
                                                │  (through mgmt proxy 10.255.240.1:3128)
@@ -16,7 +16,7 @@ blueprint deploy-script:  ./deploy.sh | tee /var/log/playbook_run.log
 
 The controller **deploys from the tarball, not a git pull**. The repo is just
 where the tarball is built and versioned; the running range only ever sees the
-tarball (`ab_mb.tgz` on the monitoring-only variant, `ab_mbs.tgz` on the
+tarball (`airfield_seconion.tgz` on the monitoring-only variant, `airfield_full_stack.tgz` on the
 stacked variant). Fetch files on the controller with `wget` through the mgmt
 proxy — `curl` does not work through it.
 
@@ -56,8 +56,8 @@ the controller deploys the tarball. After committing, **verify the committed
 artifact, not the working copy**:
 
 ```bash
-git show HEAD:ab_mb.tgz | tar tz | head                       # it is really in the commit
-git show HEAD:ab_mb.tgz | tar xzO ./hosts | grep -c <thing>   # spot-check content
+git show HEAD:airfield_seconion.tgz | tar tz | head                       # it is really in the commit
+git show HEAD:airfield_seconion.tgz | tar xzO ./hosts | grep -c <thing>   # spot-check content
 ```
 
 Hand over a **commit-pinned** raw URL (not a branch URL — branch URLs are

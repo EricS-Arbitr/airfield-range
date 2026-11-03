@@ -4,7 +4,7 @@
 # =========================================================================
 # Runs on the Ansible controller itself. so_apt_mirror unpacks the pinned SO
 # source tarball, the ETOPEN ruleset and the three airgap content repos out
-# of ab_mb.tgz and serves them over nginx :80 on the MANAGEMENT address.
+# of airfield_seconion.tgz and serves them over nginx :80 on the MANAGEMENT address.
 # Every SO node fetches from here during install (see the so_manager,
 # so_search and so_sensor roles), and 75-endpoint.yml later stages the
 # Elastic Agent installers into the same tree.

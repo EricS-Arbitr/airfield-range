@@ -55,7 +55,7 @@ so_upstream_proxy: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
 
 # --- In-range mirror (on the Ansible controller) -------------------------
 # nginx on the controller serving the pinned SO source, the ETOPEN tarball
-# and the airgap content repos, all shipped inside ab_mb.tgz.
+# and the airgap content repos, all shipped inside airfield_seconion.tgz.
 #
 # Derived, not restated. A hardcoded copy duplicates `ansible_host` in
 # host_vars/ansible.yml, so a range whose controller lands on a different

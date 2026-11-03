@@ -315,8 +315,8 @@ reachable over the management plane.
 
 ```
 cd /etc/ansible
-wget -q -O ab_mb.tgz <tarball URL for the pinned commit>
-tar -xzf ab_mb.tgz
+wget -q -O airfield_seconion.tgz <tarball URL for the pinned commit>
+tar -xzf airfield_seconion.tgz
 sudo ./deploy.sh
 ```
 

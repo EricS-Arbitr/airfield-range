@@ -235,7 +235,7 @@ Steps 5 and 7 are the ones most likely to be got wrong: pushing indexes to peers
 
 **Settle this before writing any role.**
 
-Enterprise Security is ~1 GB, plus the CIM add-on and every TA. These ranges target platforms with **no external access, not even a proxy**, so it cannot be fetched at deploy time. The current bundle (`ab_mb.tgz`) is 5.8 MB — adding a gigabyte-plus changes the delivery story entirely.
+Enterprise Security is ~1 GB, plus the CIM add-on and every TA. These ranges target platforms with **no external access, not even a proxy**, so it cannot be fetched at deploy time. The current bundle (`airfield_seconion.tgz`) is 5.8 MB — adding a gigabyte-plus changes the delivery story entirely.
 
 PowerPlant's `splunk-es` role already assumes the answer: it installs from `{{ ansible_installers }}/splunk/splunk-es.spl`, i.e. a file **pre-staged on the controller** at `/var/share/installers/`. That is the established pattern in this project, and the same one `group_vars/linux.yml` uses for the Splunk packages themselves (`splunk_server_installer` points at the in-platform Nexus with a pre-staged fallback).
 
