@@ -8,14 +8,14 @@
 # Hosts pending in blueprint (power-plc, power-sim).
 # ============================================================
 
-# --- Segments (CLAUDE.md §6) --------------------------------
+# --- Segments (BUILD_SPEC.md §6) --------------------------------
 ot_power_plc_cidr:      "172.16.47.8/29"
 ot_power_sim_cidr:      "172.16.49.0/24"
 ot_power_extra_cidr:    "172.16.48.0/24"
 
 # Power side has no L3 router — control-room-hmi (mtu) and power-plc /
 # power-sim bridge between adjacent segments. Gateways are bridge IPs,
-# not router IPs (CLAUDE.md §8 — OT bridge contract).
+# not router IPs (BUILD_SPEC.md §8 — OT bridge contract).
 ot_power_plc_bridge:    "172.16.47.9"        # control-room-hmi (Power-PLC IF)
 
 # --- DNP3 ---------------------------------------------------
@@ -33,7 +33,7 @@ influxdb_bucket_power: "power"
 postgres_db_power: "power_audit"
 postgres_password_power_rw: "{{ vault_power_db_password }}"
 
-# --- DNP3 library selection (CLAUDE.md §12 — pending) -------
+# --- DNP3 library selection (BUILD_SPEC.md §12 — pending) -------
 # Options: dnp3-python (Python wrapper on EOL opendnp3)
 #       or Step Function I/O `dnp3` (Rust, TLS, no Python binding)
 dnp3_library: "dnp3-python"        # placeholder — confirm with owner

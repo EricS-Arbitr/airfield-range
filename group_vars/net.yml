@@ -30,5 +30,5 @@ bgp_holdtime:  30
 
 # --- L3.5 boundary (default-deny at bs-ops-fw) -------------------
 # IT/Corp ↔ OT path runs ONLY through bs-modbus-gateway via static.
-# See CLAUDE.md §11 guardrails before adding any cross-boundary rule.
+# See BUILD_SPEC.md §11 guardrails before adding any cross-boundary rule.
 ot_umbrella_prefix: "172.16.0.0/16"

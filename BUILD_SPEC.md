@@ -1,10 +1,10 @@
-# CLAUDE.md — Blackstone Auxiliary Field Cyber Range
+# BUILD_SPEC.md — Blackstone Auxiliary Field Cyber Range
 
-Cross-cutting contract for building this project with Claude Code. Aligned to the **JCTE vCity Military Base
+Cross-cutting contract for building this project. Aligned to the **JCTE vCity Military Base
 network map (Baseline DEV v21, domains `blackstone.mil` / `fops.blackstone.mil`)**, with the project owner's decisions
 applied (see §3). The map is authoritative for topology/zones/production-addressing; this file encodes that
 plus the owner's overrides, conventions, and guardrails. Per-subsystem detail lives in `build-sheets/`.
-Authority order: **owner decisions (§3) → map → CLAUDE.md → build sheet**. Build sheets that predate these
+Authority order: **owner decisions (§3) → map → BUILD_SPEC.md → build sheet**. Build sheets that predate these
 decisions need a reconciliation pass (§12).
 
 ---
@@ -221,7 +221,7 @@ cloud-image default (`/etc/netplan/50-cloud-init.yaml`) so it doesn't override t
 
 ```
 airfield-range/
-├── CLAUDE.md
+├── BUILD_SPEC.md
 ├── ansible.cfg                   # ansible_host = management IP (10.255.240.0/20)
 ├── requirements.yml              # vyos.vyos, pfsensible.core, ansible.windows, microsoft.ad, community.*
 ├── site.yml                      # imports tier playbooks IN ORDER
@@ -293,7 +293,7 @@ ansible-vault edit group_vars/vault.yml
 in-enclave; Ubuntu 24.04 baseline; `.2` reserved; **routing model OSPF + eBGP + static (§3.8)**;
 **pfSense automation = `pfsensible.core` + `php -r` escape hatches, port `roles/pfsense_firewall` from
 PowerPlant (§3.9)**; **pfSense NIC position FIRST (§3.10)**; **AD trust direction = blackstone.mil TRUSTS
-fops.blackstone.mil, asymmetric access (CLAUDE.md §4 / `group_vars/fops.yml`)**; **role sourcing = copy
+fops.blackstone.mil, asymmetric access (BUILD_SPEC.md §4 / `group_vars/fops.yml`)**; **role sourcing = copy
 into `airfield-range/roles/` (memory `project_airfield_role_sourcing`)**.
 
 **Still to confirm / do:**

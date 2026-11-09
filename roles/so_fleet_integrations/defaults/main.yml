@@ -157,7 +157,7 @@ so_fleet_integrations:
     # natively, so it emits straight to the agent on loopback -- nothing on
     # the wire, and no syslog copy landing in system.syslog as unparsed text.
     # The matching squid.conf change is a post-play in site.yml (squid is a
-    # base role; workarounds are plays, not role forks -- CLAUDE.md).
+    # base role; workarounds are plays, not role forks -- BUILD_SPEC.md).
     #
     # Input key is <policy_template>-<input_type>, and squid's policy
     # template is named `log`, NOT `squid`. nginx happens to name its

@@ -431,7 +431,7 @@ check_pf_shell bs-proxy \
 # `docker exec is-inet nslookup <name> 8.8.8.8` -- 8.8.8.8 is a loopback
 # alias inside the is-inet container and unbound binds to it. Can't
 # query from soc-syslog: SOC (172.31.7.0/24) sits behind bs-ops-fw's
-# L3.5 default-deny boundary (CLAUDE.md §5), so packets to 8.8.8.8
+# L3.5 default-deny boundary (BUILD_SPEC.md §5), so packets to 8.8.8.8
 # never reach is-inet. Same for the apex/www checks below.
 check_pf_shell is-inet \
   'r=$(docker exec is-inet nslookup www.faa.gov 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "70.39.65.10" ] && echo "OK_$r" || echo "GOT_$r"' \

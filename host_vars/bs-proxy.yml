@@ -9,7 +9,7 @@
 # Users' browsers point at bs-proxy.blackstone.mil:3128 for lab-simulated
 # internet traffic. Distinct from `inet_proxy_addr` (10.255.240.1:3128)
 # which is the SimSpace platform's mgmt-plane egress used by Ansible for
-# nexus fetches -- never routed through bs-proxy per the CLAUDE.md
+# nexus fetches -- never routed through bs-proxy per the BUILD_SPEC.md
 # management-plane contract.
 ansible_host: "10.255.240.181"
 

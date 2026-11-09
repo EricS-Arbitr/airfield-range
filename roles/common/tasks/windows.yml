@@ -53,7 +53,7 @@
   # (adapter that doesn't exist on our hosts). Every airfield Windows host is
   # dual-homed with `Ethernet0` = mgmt (10.255.240.0/20) and `Ethernet1` =
   # production. Only the mgmt adapter should skip AD DNS registration --
-  # per CLAUDE.md §8 the mgmt plane is invisible in-scenario. See the
+  # per BUILD_SPEC.md §8 the mgmt plane is invisible in-scenario. See the
   # `Strip mgmt interface from AD DNS registration` overlay play in site.yml
   # for the belt-and-suspenders defense that also purges already-registered
   # A records on the PDC. Logged in UPSTREAM_FIXES.md 2026-07-01 entry.

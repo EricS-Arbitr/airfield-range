@@ -327,7 +327,7 @@ Test 7 is the one that matters. Tests 1–6 can all pass while ES produces nothi
 2. **Retention window.** Drives indexer disk; 1 TB each is a placeholder. Needs a stated window plus `maxTotalDataSizeMB` per index rather than defaults.
 3. **ES artifact source** — §8. **Gating.**
 4. **Which data models to accelerate** — §9 proposes five.
-5. **EDR product** (CrowdStrike vs SentinelOne) — still open from `CLAUDE.md` §12, and it determines whether the Malware data model has a feed at all.
+5. **EDR product** (CrowdStrike vs SentinelOne) — still open from `BUILD_SPEC.md` §12, and it determines whether the Malware data model has a feed at all.
 6. **RDP to the search head** — recommend dropping, which also allows the Server image.
 7. **Splunk/SO division of labour** — which questions each tool answers, now that both hold overlapping data.
 

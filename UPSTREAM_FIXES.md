@@ -2,7 +2,7 @@
 
 Running log of issues, gaps, and suggested improvements discovered while deploying `airfield-range`. Candidates for PRs or discussion with the `range-development-ansible` maintainers, or for re-copies from PowerPlant when an existing PowerPlant fix needs to be brought across.
 
-Per the [role-sourcing memory](../../.claude/projects/-Users-eric-starace-vCity/memory/project_airfield_role_sourcing.md): when an upstream fix is needed in airfield-range too, re-copy it explicitly **and log it here the same turn** (per the [UPSTREAM_FIXES feedback memory](../../.claude/projects/-Users-eric-starace-vCity/memory/feedback_upstream_fixes_log.md)).
+Per the role-sourcing policy: when an upstream fix is needed in airfield-range too, re-copy it explicitly **and log it here the same turn**.
 
 Severity key:
 - **bug** — role malfunctions or produces incorrect results
@@ -1544,7 +1544,7 @@ Bootstrap's idempotency check compares device name + type + view IDs — it does
 
 **Root cause.** The fuel_plc role uploaded and started an OpenPLC program on ff-plc-1 with proper %IX/%IW/%QX/%QW variable bindings — but the .st code has no polling logic and OpenPLC has no slave device configured to autonomously fetch data from fuel-farm-sim. So ff-plc-1's Modbus server on :502 was serving OpenPLC's internal memory image, which starts at zero and stayed zero because nothing writes to it. FUXA was reading a fully-functional, correctly-mapped, real Modbus port — just with all-zero values.
 
-CLAUDE.md §7 describes the intended field-bus wiring: OpenPLC as Modbus master polling fuel-farm-sim ("field bus"), exposing a curated image on its own :502 ("SCADA bus"). Build sheet §2. The role only implemented the SCADA-bus side; field-bus polling was never configured.
+BUILD_SPEC.md §7 describes the intended field-bus wiring: OpenPLC as Modbus master polling fuel-farm-sim ("field bus"), exposing a curated image on its own :502 ("SCADA bus"). Build sheet §2. The role only implemented the SCADA-bus side; field-bus polling was never configured.
 
 **Fix (overlay).** Extended `openplc_bootstrap.py` with an optional slave-device configuration step. After the runtime is Running with our program, the script:
 
@@ -1791,7 +1791,7 @@ Preceding task ("Point primary DNS at parent PDC before Install-ADDSDomain") log
 1. Tag-limited retry / snapshot-reverted baseline → no interface has DNS → filter returns nothing → `NO_IFACE_FOUND` → downstream Install-ADDSDomain gets a misleading "could not be contacted" error.
 2. Full deploy where `common` set DNS on both NICs → the mgmt NIC (Ethernet0, lower InterfaceIndex) wins → DNS gets written to an interface with no default route → SRV resolution still fails.
 
-**Fix (overlay).** Rewrote the interface-picker with a three-tier strategy: (1) prefer the interface carrying the IPv4 default route (== prod NIC per airfield contract — mgmt NIC has empty gateway), (2) fall back to "first with DNS set" (post-`common` steady state), (3) last-resort to any non-loopback/non-tunnel IPv4 interface. Also added `failed_when: "'NO_IFACE_FOUND' in ..."` so a genuine no-interface state fails loudly at the DNS-bootstrap task instead of masking behind Install-ADDSDomain's downstream error. Rationale for using default route as primary signal: it's the invariant enforced by the airfield host_vars contract (§8 of CLAUDE.md) — mgmt NICs always have `gateway: ""`, so the default route is always on the prod NIC.
+**Fix (overlay).** Rewrote the interface-picker with a three-tier strategy: (1) prefer the interface carrying the IPv4 default route (== prod NIC per airfield contract — mgmt NIC has empty gateway), (2) fall back to "first with DNS set" (post-`common` steady state), (3) last-resort to any non-loopback/non-tunnel IPv4 interface. Also added `failed_when: "'NO_IFACE_FOUND' in ..."` so a genuine no-interface state fails loudly at the DNS-bootstrap task instead of masking behind Install-ADDSDomain's downstream error. Rationale for using default route as primary signal: it's the invariant enforced by the airfield host_vars contract (§8 of BUILD_SPEC.md) — mgmt NICs always have `gateway: ""`, so the default route is always on the prod NIC.
 
 ---
 
@@ -1855,7 +1855,7 @@ extra_static_routes:
 ```
 Consumed by the customer `vyos` role's "Additional VyOS static routes" overlay play. Combines with bs-edge-fw's outbound NAT (see next entry) so return traffic finds its way home even without eBGP advertising corp routes.
 
-**Fix (upstream).** Either (a) fix the BGP route-map filtering on bs-edge-fw so corp routes actually get sent to bs-edge-rtr, or (b) leave this as a static-route belt-and-suspenders permanently. Static is arguably cleaner at this WAN edge — it works even if BGP goes sideways, and matches CLAUDE.md §3 (item 8) intent.
+**Fix (upstream).** Either (a) fix the BGP route-map filtering on bs-edge-fw so corp routes actually get sent to bs-edge-rtr, or (b) leave this as a static-route belt-and-suspenders permanently. Static is arguably cleaner at this WAN edge — it works even if BGP goes sideways, and matches BUILD_SPEC.md §3 (item 8) intent.
 
 ---
 
@@ -2064,7 +2064,7 @@ Ansible's default Jinja config sets `trim_blocks=True` + `lstrip_blocks=True`. W
 {% endif %}
 ```
 
-**Workaround (overlay).** Already applied in `airfield-range/roles/pfsense_firewall/handlers/main.yml`. Back-port the same fix into `PowerPlant/ss-pp-ab/roles/pfsense_firewall/handlers/main.yml` — `pp-external-firewall` defines both `pfsense_bgp` (eBGP to ISP) and `pfsense_ospf` (area 0 on DMZ + EDGE_TRANSIT), so the same bug should affect PowerPlant FRR convergence (consistent with the "FRR convergence pending verification" note in ss-pp-ab/CLAUDE.md).
+**Workaround (overlay).** Already applied in `airfield-range/roles/pfsense_firewall/handlers/main.yml`. Back-port the same fix into `PowerPlant/ss-pp-ab/roles/pfsense_firewall/handlers/main.yml` — `pp-external-firewall` defines both `pfsense_bgp` (eBGP to ISP) and `pfsense_ospf` (area 0 on DMZ + EDGE_TRANSIT), so the same bug should affect PowerPlant FRR convergence (consistent with the "FRR convergence pending verification" note in ss-pp-ab/BUILD_SPEC.md).
 
 ---
 
@@ -2307,7 +2307,7 @@ When any rebind fires, watch `/var/log/messages` on the pfSense for an `airfield
 
 **Root cause.** The watchdog script started with `if ($key === "lan" || $key === "wan") continue;` — intended to skip the management interface and the (non-existent on a transit firewall) WAN interface. But pfSense's `config.xml` assigns the key `wan` to whichever interface holds the **default gateway**. On `bs-ops-fw`, vmx1 is the default-gateway-facing interface (`GW_OPS_RTR` toward bs-ops-rtr), so pfSense keys it `wan`. The watchdog therefore deliberately skipped the very interface that keeps dropping.
 
-**Fix (overlay).** Changed the skip condition from `$key === "lan" || $key === "wan"` to `$phys === "vmx0"`. Per CLAUDE.md §3 row 10, vmx0 is the management NIC on every pfSense firewall in this build, so excluding by physical name (rather than by config-key) reliably skips only the mgmt plane while supervising all data-plane interfaces — including the default-gateway-facing one. The lan-vs-wan keying inside pfSense is irrelevant to whether an interface is data-plane.
+**Fix (overlay).** Changed the skip condition from `$key === "lan" || $key === "wan"` to `$phys === "vmx0"`. Per BUILD_SPEC.md §3 row 10, vmx0 is the management NIC on every pfSense firewall in this build, so excluding by physical name (rather than by config-key) reliably skips only the mgmt plane while supervising all data-plane interfaces — including the default-gateway-facing one. The lan-vs-wan keying inside pfSense is irrelevant to whether an interface is data-plane.
 
 ---
 

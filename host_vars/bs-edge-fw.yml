@@ -4,7 +4,7 @@
 # Mgmt:    10.255.240.132/20 (position FIRST → vmx0)
 # Data-plane: vmx1..vmx3 (3 NICs)
 #
-# Architecture (CLAUDE.md §3 row 8):
+# Architecture (BUILD_SPEC.md §3 row 8):
 #   - eBGP AS 65001 ↔ AS 65002 on SWITCH_0 (vmx1) to bs-edge-rtr
 #   - OSPF area 0 on SWITCH_1 (vmx3) toward bs-core-rtr — IGP
 #   - DMZ (vmx2) advertised into OSPF so corp learns the route to bs-www
@@ -54,7 +54,7 @@ pfsense_gateways:
     gateway: "172.31.1.6"           # bs-core-rtr
 
 # Lab-mode permit-any rules per data-plane interface. NO blocking ACLs
-# at this stage (CLAUDE.md ops decision — basic routing first, ACLs later).
+# at this stage (BUILD_SPEC.md ops decision — basic routing first, ACLs later).
 pfsense_rules:
   - name: "Allow any on SWITCH_0 (lab)"
     interface: "SWITCH_0"

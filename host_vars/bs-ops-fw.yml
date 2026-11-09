@@ -4,7 +4,7 @@
 # Mgmt:    10.255.240.155/20 (position FIRST → vmx0)
 # Data-plane: vmx1..vmx4 (4 NICs)
 #
-# Architecture (CLAUDE.md §3 row 8):
+# Architecture (BUILD_SPEC.md §3 row 8):
 #   - OSPF area 0 on SWITCH_3 (vmx1 → bs-ops-rtr) + ENGINEERING_CONTROL_CENTER
 #     (vmx2) + SWITCH_4 (vmx3 → bs-sec-rtr) — the corp IGP
 #   - STATIC-ONLY on SWITCH_5 (vmx4 → bs-modbus-gateway) — default-deny L3.5

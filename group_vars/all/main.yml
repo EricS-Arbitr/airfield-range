@@ -23,7 +23,7 @@ logon_user_password: "{{ domain_admin_password }}"
 # Referenced by the customer `squid` role's proxy.conf.j2 for downstream
 # hosts that want an in-scenario HTTP/HTTPS proxy. Distinct from
 # inet_proxy_addr (10.255.240.1:3128 -- SimSpace mgmt-plane egress used
-# only by Ansible/apt for nexus fetches, per CLAUDE.md §8).
+# only by Ansible/apt for nexus fetches, per BUILD_SPEC.md §8).
 proxy_server: "172.31.2.15"
 
 # --- Certs (customer Nexus) ----------------------------------
@@ -120,7 +120,7 @@ global_dns_records:
     value: "mail.fops.blackstone.mil"
     zone: "fops.blackstone.mil"
 
-# --- Time discipline (CLAUDE.md §3 — NTP server in-range) ----
+# --- Time discipline (BUILD_SPEC.md §3 — NTP server in-range) ----
 # bs-ntp is not yet in the blueprint; once added, every host's
 # chrony.conf / w32time points at this IP. PDC-emulator on each
 # domain syncs to bs-ntp and is authoritative for its domain.

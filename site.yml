@@ -10,7 +10,7 @@
 # Network plays (VyOS, pfSense) then bring the data plane up so the
 # foundation tier (NTP, AD, DNS, DHCP) and everything downstream can land.
 #
-# Deviates from CLAUDE.md §10's documented network-first order by design.
+# Deviates from BUILD_SPEC.md §10's documented network-first order by design.
 
 # THE SO MIRROR RUNS FIRST, ahead of the range baseline, for two reasons.
 #   (a) FAIL FAST. The mirror is a hard prerequisite for phases 30/40/50.
@@ -358,7 +358,7 @@
     - vyos
     - extra_static_routes_remove
 
-# Architectural shift (CLAUDE.md §3 row 8): corp IGP is OSPF area 0 + eBGP
+# Architectural shift (BUILD_SPEC.md §3 row 8): corp IGP is OSPF area 0 + eBGP
 # at the WAN edge only — no internal iBGP mesh. Setting `bgp: []` in
 # host_vars stops new pushes but doesn't remove BGP a prior run may have
 # left in the running config. This play deletes the entire `protocols bgp`
@@ -1577,7 +1577,7 @@
 # role (Ubuntu Desktop 22.04, 172.31.2.15:3128, Services subnet). Downstream
 # hosts that want an in-scenario proxy point at proxy.blackstone.mil:3128. Not
 # used for Ansible/apt egress -- that stays on the mgmt-plane
-# inet_proxy_addr (10.255.240.1:3128) per CLAUDE.md §8.
+# inet_proxy_addr (10.255.240.1:3128) per BUILD_SPEC.md §8.
 - name: squid — enterprise HTTP/HTTPS proxy on bs-proxy
   hosts: proxy
   gather_facts: true
@@ -1617,7 +1617,7 @@
 # rsyslog forward. Only the ACCESS log stops going there.
 #
 # A play, not a role edit: squid is a customer base role and workarounds are
-# plays (CLAUDE.md role-sourcing policy).
+# plays (BUILD_SPEC.md role-sourcing policy).
 - name: Squid — send access log to the Elastic agent instead of files/syslog
   hosts: proxy
   gather_facts: false
@@ -1750,7 +1750,7 @@
 # Management plane carries NO AD traffic — enforced, not assumed
 # =============================================================================
 # REQUIREMENT (Eric, 2026-08-17): no range-generated AD/LDAP traffic may cross
-# 10.255.240.0/20. CLAUDE.md §8 already says the management plane is
+# 10.255.240.0/20. BUILD_SPEC.md §8 already says the management plane is
 # out-of-band and invisible in-scenario; this play makes that enforceable.
 #
 # WHY A SECOND PASS. "Strip mgmt interface from AD DNS registration" and
@@ -1824,7 +1824,7 @@
           Clients resolving a DC name get both its production and its
           10.255.240.x address and round-robin between them, so roughly half of
           all Kerberos/LDAP/RPC traffic crosses the management plane. That
-          violates CLAUDE.md §8 and exposes out-of-scenario infrastructure to
+          violates BUILD_SPEC.md §8 and exposes out-of-scenario infrastructure to
           anyone hunting in the SIEM.
 
           A record that comes BACK after being deleted is being re-registered,

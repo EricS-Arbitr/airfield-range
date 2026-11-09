@@ -2,7 +2,7 @@
 # ============================================================
 # soc.yml — SOC enclave (172.31.7.0/24)
 # ============================================================
-# Domain membership TBD (CLAUDE.md §4 — best-judgment blackstone.mil).
+# Domain membership TBD (BUILD_SPEC.md §4 — best-judgment blackstone.mil).
 # Hosts split into:
 #   [soc_analysts]  — Win11 analyst workstations
 #   [soc_servers]   — soc-syslog and the Security Onion grid

@@ -10,7 +10,7 @@ A working Ansible overlay (`airfield-range`) that provisions the **JCTE vCity Mi
 
 ### Phase 0 — Scoping & decisions (2026-06-18 → 2026-06-24)
 
-- CLAUDE.md owner-decision table populated (control plane `10.255.240.0/20`; pfSense firewalls; DNP3 power; segmented OT; in-enclave historian; Ubuntu 24.04 baseline; `.2` reserved; OSPF + eBGP-edge + static-at-L3.5; pfSense automation = `pfsensible.core` + `php -r`; pfSense NIC position FIRST; AD trust = vcab.lan TRUSTS flightops.lan).
+- BUILD_SPEC.md owner-decision table populated (control plane `10.255.240.0/20`; pfSense firewalls; DNP3 power; segmented OT; in-enclave historian; Ubuntu 24.04 baseline; `.2` reserved; OSPF + eBGP-edge + static-at-L3.5; pfSense automation = `pfsensible.core` + `php -r`; pfSense NIC position FIRST; AD trust = vcab.lan TRUSTS flightops.lan).
 - Network blueprint `WORK_DIR/ARBITR_MB_011.yml` built and iterated — 80 `VmInstance`s including the `ansible` control node, `bs-modbus-gateway` with full 4-NIC Purdue chain, every host with a `managementInterface` block, name/hostname cleanup.
 - Inventory (`hosts`) drafted, 79 production VmInstances accounted for across 52 host-list groups + 14 `:children` roll-ups (the `ansible` host is platform-managed and lives in `[infrastructure]`).
 - `group_vars/` and `host_vars/` scaffolded (13 group files, 79 per-host files generated from the blueprint).
@@ -27,7 +27,7 @@ A working Ansible overlay (`airfield-range`) that provisions the **JCTE vCity Mi
 
 ### Phase 3+ — Enterprise / Flight ops / SOC / PACS / OT / Injection (planned)
 
-Per CLAUDE.md §10 deployment-order tiers.
+Per BUILD_SPEC.md §10 deployment-order tiers.
 
 ---
 
@@ -197,7 +197,7 @@ transport rather than the outcome. All six checks now assert the end state.
 3. DC management-plane A records — `bs-dc01`/`bs-dc02` resolve to both their
    production and `10.255.240.x` addresses, so roughly half of Kerberos/LDAP
    traffic crosses the management plane. Diagnosed 2026-08-13, not fixed.
-   Violates CLAUDE.md §8.
+   Violates BUILD_SPEC.md §8.
 4. `syslog_source_ip_map` entries for `bs-ops-fw` (172.31.1.14) and `bs-www`
    (FQDN vs short name) — proposed, not applied; changes Splunk's `host=` too.
 5. Per-analyst accounts in both SIEMs; everyone shares one admin login.

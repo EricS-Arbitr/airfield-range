@@ -4,7 +4,7 @@
 # Mgmt:    10.255.240.109/20 (position LAST → eth4; SimSpace-managed)
 #
 # Role: head of the OT Purdue chain. STATIC-ONLY at the L3.5 boundary
-# (CLAUDE.md §3 row 8). No OSPF — never advertise OT prefixes into the
+# (BUILD_SPEC.md §3 row 8). No OSPF — never advertise OT prefixes into the
 # corp IGP. No BGP. The corp side reaches OT via the static back-stop on
 # bs-ops-fw (`172.16.0.0/16 → 172.31.1.18`); this router only needs a
 # default back out toward bs-ops-fw.

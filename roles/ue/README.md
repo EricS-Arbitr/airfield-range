@@ -38,4 +38,4 @@ The role creates and modifies the following registry settings:
 - Typically applied to hosts in the "ue" inventory group
 - Often used in conjunction with autologin role for fully automated workstations
 - These settings should never be applied to production systems
-- Changes ensure workstations remain accessible for training scenarios and automated testingRetryClaude can make mistakes. Please double-check responses.
+- Changes ensure workstations remain accessible for training scenarios and automated testing

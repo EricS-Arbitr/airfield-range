@@ -64,7 +64,7 @@ bs-file02
 bs-wec
 bs-proxy
 
-# Windows Engineering + SOC workstations joining blackstone.mil (per CLAUDE.md §4
+# Windows Engineering + SOC workstations joining blackstone.mil (per BUILD_SPEC.md §4
 # best-judgment, confirmed 2026-06-25). Linux engineering (bs-eng05/06) +
 # Linux SOC servers (the Security Onion grid/soc-syslog/soc-tools)
 # intentionally NOT in these groups — they don't AD-join.
@@ -169,7 +169,7 @@ fops_workstations
 fops_services
 
 # ------------------------------------------------------------
-# Engineering Control Center — domain membership TBD (CLAUDE.md §4)
+# Engineering Control Center — domain membership TBD (BUILD_SPEC.md §4)
 # ------------------------------------------------------------
 [engineering_workstations]
 bs-eng01
@@ -179,7 +179,7 @@ bs-eng04
 bs-eng05
 bs-eng06
 
-# bs-ro-hist: read-only InfluxDB replica of the OT historian (CLAUDE.md §3.5)
+# bs-ro-hist: read-only InfluxDB replica of the OT historian (BUILD_SPEC.md §3.5)
 [engineering_servers]
 bs-ro-hist
 
@@ -247,7 +247,7 @@ soc-syslog
 # the traffic is still fully visible on the wire. That is the compensating
 # control, and teaching it is the point.
 #
-# It is also a Purdue BRIDGE host (CLAUDE.md §8) forwarding between MTU and
+# It is also a Purdue BRIDGE host (BUILD_SPEC.md §8) forwarding between MTU and
 # Power-PLC, which is exactly the kind of box where an agent's failure mode is
 # worst.
 #
@@ -339,7 +339,7 @@ bs-ftp
 bs-ns1
 
 # ------------------------------------------------------------
-# OT / RVIN — segmented Purdue chain (CLAUDE.md §6, §7)
+# OT / RVIN — segmented Purdue chain (BUILD_SPEC.md §6, §7)
 # ------------------------------------------------------------
 [ot_mtu]
 control-room-hmi
@@ -575,7 +575,7 @@ win11
 winserver2022
 
 # ------------------------------------------------------------
-# Linux OS groups (Ubuntu — baseline = 24.04 LTS, see CLAUDE.md §3.6)
+# Linux OS groups (Ubuntu — baseline = 24.04 LTS, see BUILD_SPEC.md §3.6)
 # ------------------------------------------------------------
 [ubuntu22]
 bs-www

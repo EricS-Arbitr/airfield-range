@@ -61,7 +61,7 @@
       land it needs an explicit pfsense_rules entry in host_vars/bs-ops-fw.yml
       permitting OT to reach the SOC subnet on Fleet's ports — a deliberate
       change to the range's security posture, not something this role should
-      make on its own. CLAUDE.md §11: ask before adding any cross-boundary rule.
+      make on its own. BUILD_SPEC.md §11: ask before adding any cross-boundary rule.
 
       Otherwise check the elastic_agent_endpoint hostgroup on
       {{ groups['so_manager'][0] }}: `so-firewall` state and `iptables -S`.

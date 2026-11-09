@@ -4,7 +4,7 @@
 # ============================================================
 # Build sheet: systems/fuel_farm/fuel-farm-build-sheet.md
 # Purdue chain: MTU /29 + Fuel-PLC /29 + Fuel-Sim /24
-# OT not domain-joined (CLAUDE.md §4).
+# OT not domain-joined (BUILD_SPEC.md §4).
 # ============================================================
 
 # --- Segments ------------------------------------------------
@@ -34,7 +34,7 @@ fuxa_admin_password: "{{ vault_fuxa_admin_password | default('Simspace1!Simspace
 fuxa_plc_device_uuid: "c39d10a0-fue1-4fa2-8000-000000000001"
 
 # --- InfluxDB 2.7 (fuel-hist) — pin major version ------------
-influxdb_image: "influxdb:2.7"               # NEVER :latest (CLAUDE.md §9)
+influxdb_image: "influxdb:2.7"               # NEVER :latest (BUILD_SPEC.md §9)
 influxdb_org: "airfield"
 influxdb_bucket_fuel: "fuel"
 influxdb_admin_token: "{{ vault_influxdb_admin_token | default('Simspace1SimspaceFuelHistorianAdminToken') }}"

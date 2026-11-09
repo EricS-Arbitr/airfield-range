@@ -4,7 +4,7 @@
 # ============================================================
 # Applies to: [blackstone] (workstations + services) + any other hosts
 # later explicitly joined to blackstone.mil (Engineering / SOC per
-# CLAUDE.md §4).
+# BUILD_SPEC.md §4).
 #
 # Blackstone Auxiliary Field runs a SINGLE AD forest with:
 #   - blackstone.mil        (forest root -- this file)

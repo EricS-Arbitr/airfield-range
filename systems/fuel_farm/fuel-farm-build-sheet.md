@@ -386,7 +386,7 @@ Why this subsystem is a strong range target, and where to point detection:
 
 ## 13. Build-time version checklist
 
-Verify these against current releases before/while building with Claude Code — this ecosystem moves:
+Verify these against current releases before/while building — this ecosystem moves:
 
 - **OS baseline:** Ubuntu 24.04 LTS Server — PostgreSQL 16 is native (no PGDG repo needed); point the InfluxData, Grafana, and TimescaleDB apt repos and Docker at the `noble` codename. The `common` role must neutralize cloud-init networking (override/remove `/etc/netplan/50-cloud-init.yaml`) so the dual-home config doesn't collide; netplan itself is native on Ubuntu.
 - **OpenPLC:** v4 (Autonomy-Logic) is current and ships a containerized runtime plus OPC-UA/S7comm; v3 is more battle-tested specifically for Modbus remote-slave (master) I/O config. Confirm the remote-I/O workflow in whichever you pick; pin the version.

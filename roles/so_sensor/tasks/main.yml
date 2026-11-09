@@ -463,7 +463,7 @@
 #   so-functions generate_interface_vars():  INTERFACE=${BNICS[0]} = tun0
 #
 # detect_cloud() keys off a bare file test (`[ -f /etc/SOCLOUD ]`), so we
-# opt in without patching any SO script — CLAUDE.md §8 prefers this over
+# opt in without patching any SO script — BUILD_SPEC.md §8 prefers this over
 # editing SO's own files. Sensor-only: manager/search have no monitor
 # interface and should keep stock behavior.
 - name: Force so-setup cloud interface path (makes BNICS=tun0 actually apply)
