@@ -166,7 +166,8 @@ told to trust or skip-verify that host:
 | Fuel-farm Python packages | `ng_pypi` | `pip --index-url … --trusted-host …` |
 | HMI npm closure (`modbus-serial`) | `npm` group | `npm --registry … --strict-ssl=false`, via the mgmt proxy |
 | Splunk packages | `ng_raw` | staged `.deb` (stacked) |
-| **apt packages + `docker-ce`** | **Ubuntu archive / `download.docker.com`** | **NOT Nexus.** `ng-apt` serves several Ubuntu releases from one index; no pin can safely prefer the right one, so apt stays on upstream through the proxy. |
+| apt packages + fuel DB stack + `docker-ce` | `ng-apt-jammy-prod` / `ng-apt-noble-prod` (`range-registry`) | `nexus_apt` writes a per-release deb822 source (GPG `Signed-By`, pinned above `archive.ubuntu.com` which stays a fallback) + a per-host TLS-verify skip. Covers base packages, the fuel `postgresql-16`/`timescaledb-2-postgresql-16`/`telegraf`, and `docker-ce`. |
+| ATC `readsb` + `tar1090` | **not in Nexus** | `atc-radar` still fetches these from the internet (upstream install scripts); pending staging into Nexus. |
 
 Before cutting a blueprint over to a Nexus-sourced tarball, confirm Nexus is
 populated and reachable through the proxy for that range — otherwise the deploy

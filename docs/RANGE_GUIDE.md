@@ -340,12 +340,22 @@ The build pulls its install media from the in-platform Nexus
 | Ansible Galaxy collections | `ng_raw/galaxy` |
 | Fuel-farm Python packages | `ng_pypi` |
 | HMI `modbus-serial` npm closure | `npm` group |
+| Ubuntu apt packages + fuel DB stack + `docker-ce` | `ng-apt-jammy-prod` / `ng-apt-noble-prod` (`range-registry`) |
 
-apt is the exception: base packages and `docker-ce` install from the Ubuntu
-archive and `download.docker.com` through the proxy, because the Nexus apt repo
-serves several Ubuntu releases from one index and no apt pin can safely prefer
-the right one. Nexus presents an internal-CA certificate, so each fetcher that
-reaches it is configured to trust or skip-verify that host specifically.
+Ubuntu apt packages install from the per-release Nexus repos
+(`ng-apt-jammy-prod` / `ng-apt-noble-prod`, keyed to each host's codename) via
+the `nexus_apt` role, with `archive.ubuntu.com` as a lower-priority fallback.
+That includes the fuel stack's `postgresql-16`, `timescaledb-2-postgresql-16`
+and `telegraf`, and `docker-ce` — all from the Nexus repos rather than their
+vendor repos. The repos are GPG-signed and `range-registry` presents the
+internal CA, so apt skips TLS verification for that host only — integrity still
+comes from the signature. Each other fetcher that reaches Nexus (`get_url`,
+`skopeo`, `ansible-galaxy`, `pip`, `npm`, dockerd) is likewise configured to
+trust or skip-verify that host specifically.
+
+One ATC exception remains: `readsb` and `tar1090` are not yet in Nexus, so
+`atc-radar` still fetches them from the internet (see UPSTREAM_FIXES) until they
+are staged.
 
 ### Verifying
 

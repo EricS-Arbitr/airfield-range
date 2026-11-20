@@ -148,8 +148,10 @@ The range has no general internet egress. Install artifacts come from the
 in-platform **Nexus** (`nexus.dev.ng.simspace.lan`), reached through the
 management proxy: the Security Onion source + container registry, Malcolm's
 source + images, the Ansible Galaxy collections, the Splunk packages (on the
-stacked variant), the fuel-farm Python packages, and the HMI's npm closure.
-**apt is the exception** — base packages and `docker-ce` install from the Ubuntu
-archive and `download.docker.com` through the proxy, because the Nexus apt repo
-serves several Ubuntu releases from one index and no pin can safely prefer the
-right one. Detail in the build & deploy chapter.
+stacked variant), the fuel-farm Python packages, the HMI's npm closure, and the
+base Ubuntu packages and `docker-ce` — the last from the per-release Nexus apt
+repos (`ng-apt-jammy-prod` / `ng-apt-noble-prod`) via the `nexus_apt` role, with
+`archive.ubuntu.com` as a fallback; this also covers the fuel stack's
+`postgresql-16`, `timescaledb-2-postgresql-16` and `telegraf`. The one remaining
+internet fetch is ATC's `readsb` / `tar1090`, not yet staged in Nexus. Detail in
+the build & deploy chapter.

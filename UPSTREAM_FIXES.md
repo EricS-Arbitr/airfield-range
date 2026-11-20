@@ -2415,3 +2415,24 @@ fatal: [bs-ops-fw]: FAILED! => {"cmd": "set +e\npkill -f 'dhclient.*vmx[1-9]'...
      adding a new entry, place it at the top under a "newest first" convention until the
      next phase break; then the whole run becomes historical and stays in place. -->
 
+
+## 2026-11-20 · enhancement · base image ships stale apt sources that break any early `apt-get update`
+
+**Symptom.** After pointing apt at the per-release Nexus repos, `nexus_apt`'s
+cache refresh (`ansible.builtin.apt` `update_cache: true`) failed on **every**
+Ubuntu host with the opaque `Failed to update apt cache: unknown reason`.
+
+**Cause (customer image, not our overlay).** The `RC_NG_Ansible` image ships
+stale `apt.puppet.com` / `apt.puppetlabs.com` sources with expired signing
+keys. `apt-get update` returns non-zero on those and the Ansible apt module
+surfaces it as the generic "unknown reason". `roles/so_base` and
+`roles/so_apt_mirror` already document this; `nexus_apt` hit it as the first
+*unconditional* `apt-get update` in the deploy.
+
+**Workaround (`roles/nexus_apt`).** Refresh the cache with a tolerant shell
+`apt-get update` (the `so_base` pattern) after an apt/dpkg lock wait, with
+`failed_when` scoped to an `Err:` line for `range-registry` — tolerate the
+unrelated stale sources, still fail loudly on a real Nexus-source error.
+
+**Upstream ask.** The base image should not ship third-party apt sources with
+expired keys; any consumer that runs `apt-get update` early inherits this.

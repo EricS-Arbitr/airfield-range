@@ -203,3 +203,27 @@ transport rather than the outcome. All six checks now assert the end state.
 5. Per-analyst accounts in both SIEMs; everyone shares one admin login.
 6. Distributed Splunk + Enterprise Security design, if that goes ahead.
 
+
+## 2026-11-20 — Ubuntu apt + fuel stack + Docker CE moved to the Nexus per-release repos
+
+The platform published per-release apt proxy repos `ng-apt-jammy-prod` /
+`ng-apt-noble-prod` on `range-registry.dev.ng.simspace.lan` (GPG-signed, key
+fp `94B0 39FE … 0B01 32DD`), carrying the archive closure + Docker CE 29.8.1 +
+the fuel stack. Changes:
+
+- New `roles/nexus_apt` + `playbooks/12-nexus-apt.yml` (imported after
+  `10-mirror`): installs the bundled fingerprint-verified key, writes a
+  per-release deb822 source, pins it above `archive.ubuntu.com` (kept as a
+  fallback), and skips TLS-verify for `range-registry` only.
+- `fuel_db` no longer adds the PGDG / TimescaleDB repos; `fuel_historian` no
+  longer adds InfluxData — `postgresql-16`, `timescaledb-2-postgresql-16` and
+  `telegraf` come from Nexus. `fuel_plc`/`historian`/`hmi`: `docker.io` →
+  `docker-ce`. `atc_cwp` no longer `apt install`s firefox (uses the image's
+  browser).
+- First deploy failed on every Ubuntu host at `nexus_apt`'s cache refresh
+  ("Failed to update apt cache: unknown reason") — the apt module's
+  `update_cache` hard-failing on the image's stale puppet apt sources. Fixed to
+  the tolerant shell `apt-get update` (see UPSTREAM_FIXES), `failed_when` scoped
+  to a `range-registry` error.
+
+Still internet-bound: ATC `readsb` / `tar1090` (not yet in Nexus).
