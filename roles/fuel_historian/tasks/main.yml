@@ -3,10 +3,20 @@
 # CRITICAL: pin influxdb:2.7 (build sheet §13). `:latest` = InfluxDB 3
 # Core (recent-data engine, ~72h window). Wrong for a historian.
 
-- name: Install docker + python bindings
+# Docker CE from the Nexus per-release apt repo (configured by nexus_apt).
+# docker.io is NOT in the Nexus repos; docker-ce is. Remove any distro docker.io
+# first so the two do not conflict.
+- name: Remove distro docker.io if present (conflicts with docker-ce)
+  ansible.builtin.apt:
+    name: docker.io
+    state: absent
+
+- name: Install Docker CE + python bindings
   ansible.builtin.apt:
     name:
-      - docker.io
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
       - python3-docker
       - curl
       - ca-certificates
@@ -66,25 +76,14 @@
 
 # --- Telegraf (polls ff-plc-1's SCADA-bus Modbus TCP server) ----------
 
-- name: Install telegraf apt key + repo
-  ansible.builtin.get_url:
-    url: https://repos.influxdata.com/influxdata-archive.key
-    dest: /etc/apt/keyrings/influxdata.asc
-    mode: '0644'
-
-# InfluxData repo uses "stable main" which is codename-agnostic --
-# works on jammy AND noble (verified 2026-07-16 on jammy SimSpace image).
-- name: Add InfluxData apt repo (codename-agnostic)
-  ansible.builtin.apt_repository:
-    repo: "deb [signed-by=/etc/apt/keyrings/influxdata.asc] https://repos.influxdata.com/debian stable main"
-    state: present
-    filename: influxdata
-    update_cache: yes
-
-- name: Install telegraf
+# telegraf is served by the Nexus per-release apt repo (configured by nexus_apt).
+# The InfluxData (repos.influxdata.com) internet repo is no longer added here --
+# an airgapped range has no path to it, and the Nexus repo carries telegraf.
+- name: Install telegraf (from the Nexus apt repo)
   ansible.builtin.apt:
     name: telegraf
     state: present
+    update_cache: yes
 
 - name: Render telegraf.conf with modbus input + influxdb v2 output
   ansible.builtin.template:

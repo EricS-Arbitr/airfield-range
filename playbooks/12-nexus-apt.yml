@@ -1,0 +1,21 @@
+---
+# 12-nexus-apt.yml — point every managed Ubuntu host's apt at the in-platform
+# per-release Nexus repos (ng-apt-jammy-prod / ng-apt-noble-prod).
+#
+# The `nexus_apt` role installs the bundled, fingerprint-verified signing key,
+# writes the matching per-release deb822 source for the host's codename, pins it
+# above archive.ubuntu.com (archive kept as a lower-priority fallback), and skips
+# TLS verify for range-registry only (internal CA; integrity via the GPG
+# Signed-By). Moves base Ubuntu apt + the fuel stack's packages off the public
+# internet (PostgreSQL 16 / TimescaleDB / telegraf / Docker CE all live in the
+# per-release repos).
+#
+# Runs right after the controller mirror and before any Ubuntu apt install.
+- name: Configure Nexus per-release apt source on all managed Ubuntu hosts
+  hosts: linux
+  gather_facts: true
+  become: true
+  tags:
+    - nexus_apt
+  roles:
+    - nexus_apt

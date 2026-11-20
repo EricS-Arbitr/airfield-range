@@ -25,6 +25,13 @@
 # Must still precede 30: so_base fetches the pinned SO source from it.
 - import_playbook: playbooks/10-mirror.yml
 
+# Point every managed Ubuntu host's apt at the in-platform per-release Nexus
+# repos before anything installs a package, so base apt and the fuel stack
+# (PostgreSQL 16 / TimescaleDB / telegraf / Docker CE) come from Nexus rather
+# than archive.ubuntu.com / PGDG / packagecloud / InfluxData / download.docker.com.
+# archive.ubuntu.com stays as a lower-priority fallback.
+- import_playbook: playbooks/12-nexus-apt.yml
+
 # Preflight -- runs BEFORE init because if a prior deploy attempt
 # half-joined fops-dc01 via Install-ADDSDomain, unqualified `simspace`
 # NTLM is rejected and init's win_ping times out for 30 min per attempt.

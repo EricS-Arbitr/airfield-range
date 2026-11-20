@@ -11,10 +11,20 @@
 # fuxa_bootstrap.py imports the project via /api/project because FUXA
 # doesn't auto-load bind-mounted JSON files on startup.
 
-- name: Install docker + python bindings + requests (for bootstrap)
+# Docker CE from the Nexus per-release apt repo (configured by nexus_apt).
+# docker.io is NOT in the Nexus repos; docker-ce is. Remove any distro docker.io
+# first so the two do not conflict.
+- name: Remove distro docker.io if present (conflicts with docker-ce)
+  ansible.builtin.apt:
+    name: docker.io
+    state: absent
+
+- name: Install Docker CE + python bindings + requests (for bootstrap)
   ansible.builtin.apt:
     name:
-      - docker.io
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
       - python3-docker
       - python3-requests
     state: present

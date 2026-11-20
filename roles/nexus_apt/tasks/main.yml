@@ -1,0 +1,118 @@
+---
+# nexus_apt — configure apt to install from the in-platform per-release Nexus
+# repos (ng-apt-<release>-prod on range-registry.dev.ng.simspace.lan).
+#
+# HISTORY. The original single `ng-apt` repo held jammy+noble+plucky debs in one
+# dist=simspace; apt chose by version across releases and pulled wrong-release
+# packages, so a prior version of playbooks/12-nexus-apt.yml STRIPPED any ng-apt
+# source and left every host on archive.ubuntu.com. The platform has since
+# published per-release proxy repos (jammy/noble), so this role now points apt
+# AT them instead of removing them. Keyed off each host's own codename, so one
+# role serves both releases.
+#
+# TRANSPORT. apt reaches range-registry through the range's existing mgmt-plane
+# proxy (so_base / platform_proxy apt.conf), the same path the working nexus.*
+# get_url tasks use. No proxy config here.
+
+- name: Remove the old (mixed-release) ng-apt source / pin / proxy drop-in if present
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/nexus.list
+    - /etc/apt/preferences.d/99-nexus-ng-apt
+    - /etc/apt/apt.conf.d/99nexus
+  register: nexus_apt_old_cleanup
+
+- name: Ensure apt keyrings directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the Simspace Nexus apt signing key (bundled; no deploy-time fetch)
+  ansible.builtin.copy:
+    src: "{{ nexus_apt_key_file }}"
+    dest: "{{ nexus_apt_keyring }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: nexus_apt_key
+
+# Assert the bundled key is the expected one BEFORE apt is told to trust it.
+# gpg is present on the Ubuntu base image (gnupg). --with-colons gives a stable
+# `fpr:::::::::<FP>:` line to match on.
+- name: Read the installed key's fingerprint
+  ansible.builtin.command: "gpg --show-keys --with-colons {{ nexus_apt_keyring }}"
+  register: nexus_apt_key_show
+  changed_when: false
+
+- name: Assert the key fingerprint matches the expected value
+  ansible.builtin.assert:
+    that:
+      - nexus_apt_key_fingerprint in (nexus_apt_key_show.stdout | regex_findall('fpr:+([0-9A-F]+):'))
+    fail_msg: >-
+      Bundled apt signing key fingerprint does not match
+      {{ nexus_apt_key_fingerprint }} — refusing to configure the Nexus apt source.
+    success_msg: "Nexus apt signing key verified ({{ nexus_apt_key_fingerprint }})."
+
+- name: Write the per-release Nexus apt source (deb822)
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/ng-apt-prod.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (nexus_apt). In-platform per-release apt repo.
+      X-Repolib-Name: ng-apt-prod
+      Types: deb
+      URIs: {{ nexus_apt_base_url }}/{{ nexus_apt_repo }}/
+      Suites: {{ nexus_apt_suite }}
+      Components: {{ nexus_apt_components }}
+      Architectures: {{ nexus_apt_arch }}
+      Signed-By: {{ nexus_apt_keyring }}
+  register: nexus_apt_source
+
+- name: Prefer the Nexus repo over archive.ubuntu.com (archive stays as fallback)
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/99-ng-apt-prod
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (nexus_apt). Prefer the in-platform Nexus mirror;
+      # archive.ubuntu.com (default priority 500) remains a fallback.
+      Package: *
+      Pin: origin {{ nexus_apt_registry_host }}
+      Pin-Priority: {{ nexus_apt_pin_priority }}
+  register: nexus_apt_pin
+
+- name: Skip TLS verification for the Nexus host only (internal CA; integrity via Signed-By)
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/99-ng-apt-tls
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      // Managed by Ansible (nexus_apt). range-registry presents the Simspace
+      // internal CA, which apt cannot verify; package integrity is still
+      // enforced by the repo's GPG Signed-By key. Scoped to this host only.
+      Acquire::https::{{ nexus_apt_registry_host }}::Verify-Peer "false";
+      Acquire::https::{{ nexus_apt_registry_host }}::Verify-Host "false";
+  when: nexus_apt_skip_tls_verify | bool
+  register: nexus_apt_tls
+
+- name: Refresh apt cache after configuring the Nexus source # noqa: no-handler
+  ansible.builtin.apt:
+    update_cache: true
+    lock_timeout: 600
+  register: nexus_apt_update
+  until: nexus_apt_update is succeeded
+  retries: 3
+  delay: 10
+  when: >-
+    nexus_apt_old_cleanup is changed or nexus_apt_key is changed
+    or nexus_apt_source is changed or nexus_apt_pin is changed
+    or (nexus_apt_tls is defined and nexus_apt_tls is changed)

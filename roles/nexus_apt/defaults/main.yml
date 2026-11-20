@@ -1,0 +1,35 @@
+---
+# nexus_apt — point every managed Ubuntu host's apt at the in-platform
+# per-release Nexus repos (ng-apt-<release>-prod), replacing the old single
+# mixed-release ng-apt repo that was unusable (see tasks/main.yml).
+#
+# Single owner of the ng-apt apt source: docker_engine (and anything else that
+# needs docker-ce / archive packages air-gapped) relies on this having run.
+
+# The in-platform caching-proxy host that fronts the apt repos.
+nexus_apt_registry_host: "range-registry.dev.ng.simspace.lan"
+nexus_apt_base_url: "https://{{ nexus_apt_registry_host }}/repository"
+
+# Per-release prod repo, keyed off THIS host's own codename (jammy / noble).
+# suite = codename, single component `main` (confirmed from the repo's Release).
+nexus_apt_repo: "ng-apt-{{ ansible_facts['distribution_release'] }}-prod"
+nexus_apt_suite: "{{ ansible_facts['distribution_release'] }}"
+nexus_apt_components: "main"
+nexus_apt_arch: "amd64"
+
+# Repo signing key — BUNDLED in files/ (no deploy-time fetch) and
+# fingerprint-asserted before apt is allowed to trust it.
+nexus_apt_key_file: "simspace-apt-central.asc"
+nexus_apt_keyring: "/etc/apt/keyrings/simspace-apt-central.asc"
+nexus_apt_key_fingerprint: "94B039FE2E15E2936ED1AB4664591A0D0B0132DD"
+
+# Prefer Nexus over archive.ubuntu.com, but LEAVE archive in place as a fallback
+# (Eric, 2026-11-19). Archive's default priority is 500, so 600 wins when both
+# carry a package, while archive still covers anything Nexus does not.
+nexus_apt_pin_priority: 600
+
+# range-registry presents the Simspace internal CA, which apt cannot verify —
+# exactly like every nexus.* get_url in this repo, which use validate_certs:no.
+# Skip TLS verification for THIS host only; package integrity is still enforced
+# by the repo's GPG signature via Signed-By.
+nexus_apt_skip_tls_verify: true
