@@ -33,3 +33,8 @@ nexus_apt_pin_priority: 600
 # Skip TLS verification for THIS host only; package integrity is still enforced
 # by the repo's GPG signature via Signed-By.
 nexus_apt_skip_tls_verify: true
+
+# Boot-time apt/dpkg lock wait for the cache refresh (Ubuntu's first-boot
+# unattended-upgrades holds the lock for minutes). tries * delay = max seconds.
+nexus_apt_lock_tries: 60
+nexus_apt_lock_delay: 10

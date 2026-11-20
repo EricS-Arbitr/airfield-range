@@ -104,15 +104,48 @@
   when: nexus_apt_skip_tls_verify | bool
   register: nexus_apt_tls
 
-- name: Refresh apt cache after configuring the Nexus source # noqa: no-handler
-  ansible.builtin.apt:
-    update_cache: true
-    lock_timeout: 600
+# Ubuntu's first-boot unattended-upgrades holds the apt/dpkg lock for minutes,
+# and nexus_apt runs very early -- wait it out before touching apt.
+- name: Wait for boot-time apt/dpkg locks to clear
+  ansible.builtin.shell: |
+    set -o pipefail
+    for i in $(seq 1 {{ nexus_apt_lock_tries }}); do
+      busy=0
+      if command -v fuser >/dev/null 2>&1; then
+        for f in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock \
+                 /var/lib/apt/lists/lock /var/cache/apt/archives/lock; do
+          fuser "$f" >/dev/null 2>&1 && busy=1
+        done
+      else
+        pgrep -f "unattended-upgr|apt-get|aptitude|dpkg" >/dev/null 2>&1 && busy=1
+      fi
+      [ "$busy" -eq 0 ] && { echo "APT_LOCK_FREE after $((i-1)) check(s)"; exit 0; }
+      sleep {{ nexus_apt_lock_delay }}
+    done
+    echo "APT_LOCK_HELD"; exit 1
+  args:
+    executable: /bin/bash
+  register: nexus_apt_lock
+  changed_when: false
+  failed_when: "'APT_LOCK_FREE' not in nexus_apt_lock.stdout"
+
+# `apt-get update` via shell, NOT the apt module's update_cache: the
+# RC_NG_Ansible image ships stale apt.puppet.com / apt.puppetlabs.com sources
+# with expired signing keys, so apt-get update returns non-zero and the apt
+# module reports the opaque "Failed to update apt cache: unknown reason"
+# (it did, on every Ubuntu host, 2026-11-20). Tolerate those unrelated
+# third-party errors -- the rest of this repo (so_base, so_apt_mirror) does the
+# same -- but FAIL LOUDLY if the error is on OUR Nexus source, so a broken flip
+# is never swallowed. An `Err:` line for range-registry is the signal.
+- name: Refresh apt cache (tolerate stale third-party sources; fail on a Nexus-source error)  # noqa: command-instead-of-module
+  # Deliberate shell, not ansible.builtin.apt update_cache: the apt module fails
+  # hard on the image's stale puppet sources; shell lets failed_when target only
+  # our own Nexus source.
+  ansible.builtin.shell: |
+    set -o pipefail
+    apt-get update 2>&1
+  args:
+    executable: /bin/bash
   register: nexus_apt_update
-  until: nexus_apt_update is succeeded
-  retries: 3
-  delay: 10
-  when: >-
-    nexus_apt_old_cleanup is changed or nexus_apt_key is changed
-    or nexus_apt_source is changed or nexus_apt_pin is changed
-    or (nexus_apt_tls is defined and nexus_apt_tls is changed)
+  changed_when: "'Fetched' in nexus_apt_update.stdout"
+  failed_when: nexus_apt_update.stdout is search('Err.*' ~ nexus_apt_registry_host)
