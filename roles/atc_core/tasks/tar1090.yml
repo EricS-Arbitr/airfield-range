@@ -96,10 +96,11 @@
   when: atc_tar1090_install_method == "bundled"
 
 # --- Offline basemap tiles (served locally; hosts have no browser egress) ---
-# NOTE: unchanged by Option B. If atc_tar1090_offline_tiles is true and
-# atc_tiles_src points at the internet (ArcGIS), this still needs egress; point
-# atc_tiles_src at a staged tree for full air-gap. Not part of the readsb/tar1090
-# bundling.
+# Two methods (atc_tiles_method):
+#   bundled (DEFAULT, air-gap): unpack the {z}/{x}/{y}.png tree bundled in
+#     files/offline/tiles.tar.gz (ArcGIS World Imagery for the field's bbox,
+#     staged 2026-11-20). No internet.
+#   fetch (dev): download the tree from atc_tiles_src (ArcGIS) via the proxy.
 - name: Ensure the local tiles directory exists
   ansible.builtin.file:
     path: "{{ atc_tar1090_tiles_dir }}"
@@ -107,14 +108,25 @@
     mode: "0755"
   when: atc_tar1090_offline_tiles | bool
 
-- name: Stage the tile fetcher
+- name: Unpack the bundled basemap tiles (air-gap; idempotent via creates)
+  ansible.builtin.unarchive:
+    src: offline/tiles.tar.gz
+    dest: "{{ atc_tar1090_tiles_dir }}/"
+    creates: "{{ atc_tar1090_tiles_dir }}/{{ atc_tiles_zoom_min }}"
+  when:
+    - atc_tar1090_offline_tiles | bool
+    - atc_tiles_method == "bundled"
+
+- name: Stage the tile fetcher (dev fetch path)
   ansible.builtin.copy:
     src: tiles/fetch_tiles.py
     dest: /usr/local/src/fetch_tiles.py
     mode: "0755"
-  when: atc_tar1090_offline_tiles | bool
+  when:
+    - atc_tar1090_offline_tiles | bool
+    - atc_tiles_method == "fetch"
 
-- name: Download the offline basemap tiles (one-time; idempotent via creates)
+- name: Download the offline basemap tiles (dev fetch; idempotent via creates)
   ansible.builtin.command: >-
     /usr/bin/python3 /usr/local/src/fetch_tiles.py
     --src "{{ atc_tiles_src }}" --out "{{ atc_tar1090_tiles_dir }}"
@@ -128,6 +140,7 @@
     http_proxy: "{{ inet_proxy }}"
   when:
     - atc_tar1090_offline_tiles | bool
+    - atc_tiles_method == "fetch"
     - atc_tiles_src | length > 0
 
 # --- Config (Ansible-owned): center on the field + range rings --------------

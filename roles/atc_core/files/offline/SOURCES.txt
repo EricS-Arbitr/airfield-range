@@ -6,3 +6,7 @@ debs/       : jammy amd64 build/runtime deps NOT in ng-apt-*-prod
               (libusb-1.0-0[-dev], libncurses-dev, ncurses-bin, zlib1g-dev,
                libzstd-dev, librtlsdr0/-dev, pkg-config, lighttpd).
               build-essential/git + the rest of the closure come from Nexus apt.
+
+tiles.tar.gz: ESRI World Imagery basemap tiles (satellite; (c) Esri/Maxar),
+              staged 2026-11-20 from server.arcgisonline.com for the field bbox
+              lat 37.0-40.0 / lon -80.0--77.0, zoom 6-11 = 575 tiles ({z}/{x}/{y}.png).

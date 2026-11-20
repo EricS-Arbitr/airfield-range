@@ -69,10 +69,13 @@ atc_tar1090_default_zoom: 11
 atc_tar1090_range_rings_nm: [10, 20, 40]
 # Offline basemap: ATC hosts have no browser egress, so OSM won't load. tar1090's
 # built-in offline layer serves tiles from the dir below (lighttpd ALIASes
-# /tar1090/osm_tiles_offline/ to it). DEV fetches a bounded tileset via the proxy;
-# AIR-GAP stages the same {z}/{x}/{y}.png tree from ng_raw and points atc_tiles_src
-# at it. ESRI World Imagery is the keyless dev source (satellite; © Esri/Maxar).
+# /tar1090/osm_tiles_offline/ to it).
+# atc_tiles_method: bundled (DEFAULT, air-gap) unpacks the {z}/{x}/{y}.png tree
+#   bundled in roles/atc_core/files/offline/tiles.tar.gz; fetch (dev) downloads
+#   it from atc_tiles_src via the proxy. ESRI World Imagery (satellite;
+#   © Esri/Maxar) for the field bbox below, zoom 6–11.
 atc_tar1090_offline_tiles: true
+atc_tiles_method: "bundled"   # bundled (air-gap) | fetch (dev, via proxy)
 atc_tar1090_tiles_dir: "/usr/local/share/osm_tiles_offline"
 atc_tar1090_tiles_url: "/tar1090/osm_tiles_offline/{z}/{x}/{y}.png"
 atc_tiles_src: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
