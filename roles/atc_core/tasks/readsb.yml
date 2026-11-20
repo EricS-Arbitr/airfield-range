@@ -1,8 +1,12 @@
 ---
-# readsb — network-only decoder pulling the local feed. Ansible owns the
-# config in BOTH paths. DEV installs from upstream over the internet (the range
-# has egress); AIR-GAP installs a pinned .deb from Nexus ng_raw. Toggle with
-# atc_readsb_install_method.
+# readsb — network-only decoder pulling the local feed. Ansible owns the config
+# in every path. Three install methods (atc_readsb_install_method):
+#   upstream_script — DEV, builds from wiedehopf's installer over the internet.
+#   nexus_deb       — installs a pinned .deb from Nexus ng_raw (if ever staged).
+#   bundled         — AIR-GAP, DEFAULT: builds from the source bundled in this
+#                     role (files/offline/) using build deps that are bundled
+#                     (files/offline/debs/) or come from the Nexus apt repo.
+#                     No internet, nothing added to Nexus. Jammy/amd64.
 
 # --- DEV: upstream install (wiedehopf readsb installer) ---------------------
 - name: Fetch the upstream readsb installer (dev; range has egress)
@@ -25,7 +29,7 @@
     DEBIAN_FRONTEND: noninteractive
   when: atc_readsb_install_method == "upstream_script"
 
-# --- AIR-GAP: pinned .deb from Nexus ng_raw ---------------------------------
+# --- AIR-GAP (deb): pinned .deb from Nexus ng_raw ---------------------------
 - name: Stage the readsb .deb from Nexus ng_raw (air-gap)
   ansible.builtin.get_url:
     url: "{{ atc_readsb_deb_url }}"
@@ -45,6 +49,76 @@
     - atc_readsb_install_method == "nexus_deb"
     - _readsb_deb is defined and _readsb_deb is changed
 
+# --- AIR-GAP (bundled): compile from bundled source, deps bundled + Nexus ----
+# build-essential + git come from the Nexus apt repo (nexus_apt ran earlier);
+# the headers/libs NOT in Nexus (libusb/ncurses/zlib/zstd/rtlsdr -dev,
+# pkg-config) are the bundled .debs. `apt-get install ./*.deb` resolves their
+# remaining deps from Nexus. update_cache:no — nexus_apt already refreshed it
+# (and the apt module's update hard-fails on the image's stale puppet sources).
+- name: ATC readsb (bundled) — toolchain from Nexus apt
+  ansible.builtin.apt:
+    name: [build-essential, git]
+    state: present
+    update_cache: false
+  when: atc_readsb_install_method == "bundled"
+
+- name: ATC readsb (bundled) — stage the bundled build/runtime .debs
+  ansible.builtin.copy:
+    src: offline/debs/
+    dest: /usr/local/src/atc-debs/
+    mode: "0644"
+  when: atc_readsb_install_method == "bundled"
+
+- name: ATC readsb (bundled) — install the bundled .debs (deps resolved from Nexus)  # noqa: command-instead-of-module
+  ansible.builtin.shell: |
+    set -o pipefail
+    apt-get install -y --allow-downgrades /usr/local/src/atc-debs/*.deb 2>&1 | tail -20
+  args:
+    executable: /bin/bash
+  register: atc_readsb_deb_install
+  changed_when: "'0 newly installed' not in atc_readsb_deb_install.stdout"
+  when: atc_readsb_install_method == "bundled"
+
+- name: ATC readsb (bundled) — unpack the source
+  ansible.builtin.unarchive:
+    src: offline/readsb-src.tar.gz
+    dest: /usr/local/src/
+    creates: /usr/local/src/readsb-master
+  when: atc_readsb_install_method == "bundled"
+
+- name: ATC readsb (bundled) — compile (network-only decoder)
+  ansible.builtin.command:
+    cmd: "make -j{{ [ansible_processor_vcpus | default(2) | int, 1] | max }} RTLSDR=yes OPTIMIZE=-O2"
+    chdir: /usr/local/src/readsb-master
+    creates: /usr/local/src/readsb-master/readsb
+  when: atc_readsb_install_method == "bundled"
+
+- name: ATC readsb (bundled) — install the readsb + viewadsb binaries
+  ansible.builtin.copy:
+    src: "/usr/local/src/readsb-master/{{ item }}"
+    dest: "/usr/bin/{{ item }}"
+    remote_src: true
+    mode: "0755"
+  loop: [readsb, viewadsb]
+  when: atc_readsb_install_method == "bundled"
+
+- name: ATC readsb (bundled) — install the systemd unit shipped in the source
+  ansible.builtin.copy:
+    src: /usr/local/src/readsb-master/debian/readsb.service
+    dest: /lib/systemd/system/readsb.service
+    remote_src: true
+    mode: "0644"
+  when: atc_readsb_install_method == "bundled"
+  register: atc_readsb_unit
+
+- name: ATC readsb (bundled) — create the readsb system user
+  ansible.builtin.user:
+    name: readsb
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+  when: atc_readsb_install_method == "bundled"
+
 # --- Config (always Ansible-owned) ------------------------------------------
 - name: Write /etc/default/readsb (network-only, pull the local feed)
   ansible.builtin.template:
@@ -58,4 +132,5 @@
     name: readsb
     enabled: true
     state: started
+    daemon_reload: true
   failed_when: false

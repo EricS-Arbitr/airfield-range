@@ -1,15 +1,20 @@
 ---
-# tar1090 — web radar scope on lighttpd, reading readsb's json. DEV installs
-# from upstream (wiedehopf); AIR-GAP vendors from Nexus ng_raw (toggle). No
-# community script is left to own config we care about: we render config.js.
-#
-# NOTE: tar1090's exact paths (config.js location, service name, html dir) are
-# worth confirming on the host the first time — vars make them overridable.
+# tar1090 — web radar scope on lighttpd, reading readsb's json. Config (config.js)
+# is always Ansible-owned. Three install methods (atc_tar1090_install_method):
+#   upstream_script — DEV, runs wiedehopf's installer over the internet.
+#   bundled         — AIR-GAP, DEFAULT: runs that SAME upstream installer, but
+#                     entirely offline — the app source is bundled in this role
+#                     and passed as its local-source arg, the aircraft DB is
+#                     pre-staged, and the one network version-check is patched to
+#                     read the staged DB. lighttpd is a bundled .deb; git/jq/curl
+#                     come from the Nexus apt repo. Jammy/amd64.
+#   (any other)     — legacy placeholder, no-op.
 
-- name: Install the web server
+- name: Install the web server (dev path; bundled path installs it from the bundle)
   ansible.builtin.apt:
     name: "{{ atc_tar1090_web }}"
     state: present
+  when: atc_tar1090_install_method == "upstream_script"
 
 # --- DEV: upstream install (wiedehopf tar1090) ------------------------------
 - name: Fetch the upstream tar1090 installer (dev; range has egress)
@@ -32,16 +37,69 @@
     DEBIAN_FRONTEND: noninteractive
   when: atc_tar1090_install_method == "upstream_script"
 
-# --- AIR-GAP: vendor from Nexus ng_raw (TODO) -------------------------------
-- name: tar1090 air-gap vendoring placeholder
-  ansible.builtin.debug:
-    msg: "TODO: vendor tar1090 + offline tiles from Nexus ng_raw (atc_tar1090_tiles_url)."
-  when: atc_tar1090_install_method != "upstream_script"
+# --- AIR-GAP (bundled): run the upstream installer fully offline ------------
+- name: ATC tar1090 (bundled) — git/jq/curl from Nexus apt (installer needs them present)
+  ansible.builtin.apt:
+    name: [git, jq, curl]
+    state: present
+    update_cache: false
+  when: atc_tar1090_install_method == "bundled"
+
+- name: ATC tar1090 (bundled) — stage the bundled .debs (lighttpd + readsb libs)
+  ansible.builtin.copy:
+    src: offline/debs/
+    dest: /usr/local/src/atc-debs/
+    mode: "0644"
+  when: atc_tar1090_install_method == "bundled"
+
+- name: ATC tar1090 (bundled) — ensure lighttpd from the bundle (deps from Nexus)  # noqa: command-instead-of-module
+  ansible.builtin.shell: |
+    set -o pipefail
+    apt-get install -y /usr/local/src/atc-debs/lighttpd_*.deb 2>&1 | tail -10
+  args:
+    executable: /bin/bash
+  register: atc_tar1090_lighttpd
+  changed_when: "'0 newly installed' not in atc_tar1090_lighttpd.stdout"
+  when: atc_tar1090_install_method == "bundled"
+
+- name: ATC tar1090 (bundled) — unpack the app source
+  ansible.builtin.unarchive:
+    src: tar1090-src.tar.gz
+    dest: /usr/local/src/
+    creates: /usr/local/src/tar1090-master
+  when: atc_tar1090_install_method == "bundled"
+
+# Neutralise the ONE online version-check (the app fetch is skipped via the
+# local-source arg; the DB getGIT already has `|| true`). Reading the staged
+# DB's version makes DB_VERSION_NEW == staged, so the installer stays offline.
+- name: ATC tar1090 (bundled) — patch the DB version-check to read the staged DB
+  ansible.builtin.replace:
+    path: /usr/local/src/tar1090-master/install.sh
+    regexp: '^(\s*)DB_VERSION_NEW=\$\(curl .*\)$'
+    replace: '\1DB_VERSION_NEW=$(cat "$gpath/git-db/version" 2>/dev/null || echo local)'
+  when: atc_tar1090_install_method == "bundled"
+
+- name: ATC tar1090 (bundled) — pre-stage the aircraft DB where the installer expects it
+  ansible.builtin.unarchive:
+    src: tar1090-db.tar.gz
+    dest: /usr/local/share/tar1090/git-db/
+    extra_opts: ['--strip-components=1']
+    creates: /usr/local/share/tar1090/git-db/version
+  when: atc_tar1090_install_method == "bundled"
+
+- name: ATC tar1090 (bundled) — run the upstream installer offline (local source + staged DB)
+  ansible.builtin.command:
+    cmd: "bash /usr/local/src/tar1090-master/install.sh {{ atc_readsb_json_dir }} tar1090 /usr/local/share/tar1090 /usr/local/src/tar1090-master"
+    creates: /usr/local/share/tar1090/html/index.html
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: atc_tar1090_install_method == "bundled"
 
 # --- Offline basemap tiles (served locally; hosts have no browser egress) ---
-# DEV fetches a bounded set via the proxy; AIR-GAP stages the same {z}/{x}/{y}
-# tree from Nexus (point atc_tiles_src at it). Served by tar1090's lighttpd at
-# /tar1090/tiles/.
+# NOTE: unchanged by Option B. If atc_tar1090_offline_tiles is true and
+# atc_tiles_src points at the internet (ArcGIS), this still needs egress; point
+# atc_tiles_src at a staged tree for full air-gap. Not part of the readsb/tar1090
+# bundling.
 - name: Ensure the local tiles directory exists
   ansible.builtin.file:
     path: "{{ atc_tar1090_tiles_dir }}"
@@ -86,4 +144,5 @@
     name: tar1090
     enabled: true
     state: started
+    daemon_reload: true
   failed_when: false

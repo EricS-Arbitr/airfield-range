@@ -49,16 +49,19 @@ atc_feed_rate_hz: 1
 atc_primary_radar_enabled: false
 
 # --- readsb -----------------------------------------------------------------
-# DEV installs readsb from upstream over the proxy; AIR-GAP flips to nexus_deb
-# + a pinned ng_raw .deb. Ansible owns /etc/default/readsb in both paths.
-atc_readsb_install_method: "upstream_script"   # upstream_script (dev) | nexus_deb (air-gap)
+# bundled (DEFAULT, air-gap): compile from the source bundled in roles/atc_core/
+# files/offline/ with bundled + Nexus build deps — no internet, no Nexus adds.
+# upstream_script (dev): build from wiedehopf's installer over the proxy.
+# nexus_deb: a pinned ng_raw .deb (if ever staged). Ansible owns
+# /etc/default/readsb in every path. Set to upstream_script to revert.
+atc_readsb_install_method: "bundled"   # bundled (air-gap) | upstream_script (dev) | nexus_deb
 atc_readsb_install_url: "https://github.com/wiedehopf/adsb-scripts/raw/master/readsb-install.sh"
 atc_readsb_deb_url: ""            # air-gap: the ng_raw .deb URL once staged
 atc_readsb_net_connector: "127.0.0.1,{{ atc_feed_beast_port }},beast_in"
 atc_readsb_disable_aircraft_db: true   # AE… hex codes must NOT map to real airframes
 
 # --- tar1090 ----------------------------------------------------------------
-atc_tar1090_install_method: "upstream_script"   # upstream_script (dev) | nexus (air-gap)
+atc_tar1090_install_method: "bundled"   # bundled (air-gap, runs upstream installer offline) | upstream_script (dev)
 atc_tar1090_install_url: "https://github.com/wiedehopf/tar1090/raw/master/install.sh"
 atc_tar1090_web: "lighttpd"
 atc_tar1090_config: "/usr/local/share/tar1090/html/config.js"

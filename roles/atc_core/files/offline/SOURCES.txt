@@ -1,0 +1,8 @@
+Offline ATC build artifacts (bundled 2026-11-20; jammy/22.04 amd64).
+readsb      source: github.com/wiedehopf/readsb       @ 88877b96dff8 (master)
+tar1090     source: github.com/wiedehopf/tar1090      @ 706397369b7c (master)
+tar1090-db  source: github.com/wiedehopf/tar1090-db   @ f767f7d85aa2 (master)
+debs/       : jammy amd64 build/runtime deps NOT in ng-apt-*-prod
+              (libusb-1.0-0[-dev], libncurses-dev, ncurses-bin, zlib1g-dev,
+               libzstd-dev, librtlsdr0/-dev, pkg-config, lighttpd).
+              build-essential/git + the rest of the closure come from Nexus apt.
