@@ -74,6 +74,7 @@
       Architectures: {{ nexus_apt_arch }}
       Signed-By: {{ nexus_apt_keyring }}
   register: nexus_apt_source
+  when: ansible_facts['distribution_release'] in nexus_apt_supported_releases
 
 - name: Prefer the Nexus repo over archive.ubuntu.com (archive stays as fallback)
   ansible.builtin.copy:
@@ -88,6 +89,7 @@
       Pin: origin {{ nexus_apt_registry_host }}
       Pin-Priority: {{ nexus_apt_pin_priority }}
   register: nexus_apt_pin
+  when: ansible_facts['distribution_release'] in nexus_apt_supported_releases
 
 - name: Skip TLS verification for the Nexus host only (internal CA; integrity via Signed-By)
   ansible.builtin.copy:
@@ -103,6 +105,21 @@
       Acquire::https::{{ nexus_apt_registry_host }}::Verify-Host "false";
   when: nexus_apt_skip_tls_verify | bool
   register: nexus_apt_tls
+
+# A host on a release with no ng-apt-<release>-prod repo (e.g. plucky/25.04)
+# has nothing to point apt at. Remove any Nexus source/pin a prior run left
+# behind — otherwise `apt-get update` 404s on range-registry and the failed_when
+# below fails the host, skipping its Elastic Agent install (which comes from the
+# mirror, not apt) and tripping the Fleet gate. These hosts keep their default
+# apt config.
+- name: Remove the Nexus apt source + pin on releases with no Nexus repo
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/ng-apt-prod.sources
+    - /etc/apt/preferences.d/99-ng-apt-prod
+  when: ansible_facts['distribution_release'] not in nexus_apt_supported_releases
 
 # Range hosts have NO direct DNS/egress: range-registry (and archive.ubuntu.com)
 # resolve + reach ONLY through the mgmt-plane proxy. nexus_apt runs before

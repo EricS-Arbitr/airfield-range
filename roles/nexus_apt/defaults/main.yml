@@ -17,6 +17,17 @@ nexus_apt_suite: "{{ ansible_facts['distribution_release'] }}"
 nexus_apt_components: "main"
 nexus_apt_arch: "amd64"
 
+# Releases that actually have an ng-apt-<release>-prod repo published in Nexus.
+# A host on any other release (e.g. a non-LTS desktop image like plucky/25.04)
+# has nothing to point apt at, so the role does NOT write a Nexus source for it
+# and removes any stale one — pointing apt at a non-existent suite 404s on
+# range-registry and fails the host. Nothing in the deploy installs packages on
+# those hosts via apt (the Elastic Agent comes from the mirror via get_url).
+# Add a release here once its ng-apt-<release>-prod repo exists in Nexus.
+nexus_apt_supported_releases:
+  - jammy
+  - noble
+
 # Repo signing key — BUNDLED in files/ (no deploy-time fetch) and
 # fingerprint-asserted before apt is allowed to trust it.
 nexus_apt_key_file: "simspace-apt-central.asc"
