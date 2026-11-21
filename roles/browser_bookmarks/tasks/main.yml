@@ -1,0 +1,52 @@
+---
+# Managed bookmarks = a toplevel folder object followed by the {name,url} items.
+# Same structure for Chrome (Windows) and Firefox (Linux) ManagedBookmarks.
+- name: Assemble the managed-bookmarks structure
+  ansible.builtin.set_fact:
+    _managed_bookmarks: "{{ [{'toplevel_name': browser_bookmarks_folder}] + browser_bookmarks }}"
+  when: browser_bookmarks | length > 0
+
+# --- Windows: Chrome ManagedBookmarks policy (HKLM, applies to every user) ---
+- name: Ensure the Chrome policy key exists (Windows)
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Google\Chrome
+    state: present
+  when:
+    - browser_bookmarks | length > 0
+    - ansible_os_family == "Windows"
+
+- name: Write Chrome ManagedBookmarks (Windows)
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Google\Chrome
+    name: ManagedBookmarks
+    data: "{{ _managed_bookmarks | to_json }}"
+    type: string
+  when:
+    - browser_bookmarks | length > 0
+    - ansible_os_family == "Windows"
+
+# --- Ubuntu: Firefox policies.json (the desktop image's default browser) -----
+# /etc/firefox/policies/policies.json is read by both the deb and snap Firefox.
+- name: Ensure the Firefox managed-policy directory (Ubuntu)
+  ansible.builtin.file:
+    path: /etc/firefox/policies
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  when:
+    - browser_bookmarks | length > 0
+    - ansible_os_family != "Windows"
+
+- name: Write Firefox ManagedBookmarks policy (Ubuntu)
+  ansible.builtin.copy:
+    dest: /etc/firefox/policies/policies.json
+    content: "{{ {'policies': {'ManagedBookmarks': _managed_bookmarks}} | to_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when:
+    - browser_bookmarks | length > 0
+    - ansible_os_family != "Windows"

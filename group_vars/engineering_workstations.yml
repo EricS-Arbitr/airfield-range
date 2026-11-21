@@ -1,0 +1,10 @@
+---
+# Engineering Control Center workstations (bs-eng01..06) — managed bookmarks to
+# the fuel-farm OT systems. bs-eng01..04 Windows (Chrome), bs-eng05/06 Ubuntu
+# (Firefox); the browser_bookmarks role handles both.
+browser_bookmarks_folder: "OT Systems"
+browser_bookmarks:
+  - { name: "Fuel HMI (FUXA)", url: "http://172.16.45.3:1881" }             # control-room-hmi
+  - { name: "Fuel Dashboards (Grafana)", url: "http://172.16.46.18:3000" }  # fuel-hist
+  - { name: "Fuel PLC (OpenPLC)", url: "http://172.16.45.10:8080" }         # ff-plc-1
+  - { name: "Fuel Historian (InfluxDB)", url: "http://172.16.46.18:8086" }  # fuel-hist

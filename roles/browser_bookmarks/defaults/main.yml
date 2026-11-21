@@ -1,0 +1,14 @@
+---
+# browser_bookmarks — push a managed bookmark folder to a workstation's browser
+# so operators/analysts land on the range's web systems without typing IPs.
+#
+# Set per group (group_vars/<group>.yml):
+#   browser_bookmarks        — list of { name, url }
+#   browser_bookmarks_folder — the managed folder's display name
+#
+# Delivery: Windows -> Chrome ManagedBookmarks policy (HKLM, all users);
+# Ubuntu -> Firefox policies.json (the desktop image's default browser). Both
+# are enterprise managed-bookmark policies: no per-user profile needed, and the
+# folder is read-only in the browser's bookmark bar.
+browser_bookmarks: []
+browser_bookmarks_folder: "Range Systems"

@@ -1526,6 +1526,19 @@
     - chrome
     - autologin
 
+# Managed browser bookmarks: SOC analysts get the security suite (Security
+# Onion); the Engineering Control Center workstations get the fuel-farm OT
+# systems. Windows hosts via Chrome policy, the two Ubuntu eng boxes via
+# Firefox policy. gather_facts so browser_bookmarks can key on ansible_os_family.
+- name: Analyst + OT workstation browser bookmarks
+  hosts: soc_analysts:engineering_workstations
+  gather_facts: true
+  roles:
+    - browser_bookmarks
+  tags:
+    - browser_bookmarks
+    - bookmarks
+
 # =============================================================================
 # Infrastructure services — internet-simulator DNS + enterprise squid proxy
 # =============================================================================

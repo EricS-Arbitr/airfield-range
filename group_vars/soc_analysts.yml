@@ -1,0 +1,6 @@
+---
+# SOC analyst workstations (soc-analyst01..06) — managed Chrome bookmarks to the
+# security suite. airfield-range is Security Onion only.
+browser_bookmarks_folder: "Security Suite"
+browser_bookmarks:
+  - { name: "Security Onion", url: "https://172.31.7.15" }   # soc-so-manager SOC web
