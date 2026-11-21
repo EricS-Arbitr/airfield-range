@@ -84,13 +84,20 @@
   when: so_airgap_artifact_base | length == 0
 
 - name: Airgap content — smoke test each tarball is served over HTTP
+  # Self-test from the controller over loopback, exactly like the SO-source
+  # smoke test in main.yml. so_mirror_url is the node-facing mgmt address; on
+  # the controller a HEAD to it either routes through the mgmt proxy or is not
+  # a local bind, so it returns connection-refused even while nginx is serving
+  # the staged tarball locally. 127.0.0.1 is the mirror host itself and bypasses
+  # the proxy (loopback is marked DIRECT in 95so-proxy).
   ansible.builtin.uri:
-    url: "{{ so_mirror_url }}/so-source/{{ item.name }}.tar.gz"
+    url: "http://127.0.0.1:{{ so_mirror_port }}/so-source/{{ item.name }}.tar.gz"
     method: HEAD
     status_code: 200
   loop: "{{ so_airgap_repos }}"
   loop_control:
     label: "{{ item.name }}"
+  changed_when: false
 
 - name: Airgap content — report
   ansible.builtin.debug:
