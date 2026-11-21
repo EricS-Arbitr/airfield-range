@@ -104,6 +104,30 @@
   when: nexus_apt_skip_tls_verify | bool
   register: nexus_apt_tls
 
+# Range hosts have NO direct DNS/egress: range-registry (and archive.ubuntu.com)
+# resolve + reach ONLY through the mgmt-plane proxy. nexus_apt runs before
+# platform_proxy/so_base configure apt's proxy, so without this the very first
+# `apt-get update` fails to resolve range-registry (confirmed on a jammy host
+# 2026-11-20: NO_DNS direct, HTTP 200 via the proxy). Set the apt proxy here;
+# later SO-node drop-ins (so_base 95so-proxy) override it where needed.
+- name: Point apt at the mgmt-plane proxy so it can resolve + reach the Nexus host
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/95-nexus-apt-proxy
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      // Managed by Ansible (nexus_apt). Range hosts reach range-registry and the
+      // Ubuntu archive only via the mgmt-plane egress proxy.
+      Acquire::http::Proxy "{{ nexus_apt_proxy }}";
+      Acquire::https::Proxy "{{ nexus_apt_proxy }}";
+      Acquire::http::Proxy::localhost "DIRECT";
+      Acquire::https::Proxy::localhost "DIRECT";
+      Acquire::http::Proxy::127.0.0.1 "DIRECT";
+      Acquire::https::Proxy::127.0.0.1 "DIRECT";
+  when: nexus_apt_proxy | length > 0
+  register: nexus_apt_proxyconf
+
 # Ubuntu's first-boot unattended-upgrades holds the apt/dpkg lock for minutes,
 # and nexus_apt runs very early -- wait it out before touching apt.
 - name: Wait for boot-time apt/dpkg locks to clear

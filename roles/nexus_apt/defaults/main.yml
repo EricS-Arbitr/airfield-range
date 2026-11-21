@@ -34,6 +34,12 @@ nexus_apt_pin_priority: 600
 # by the repo's GPG signature via Signed-By.
 nexus_apt_skip_tls_verify: true
 
+# Range hosts resolve/reach range-registry (and archive.ubuntu.com) ONLY through
+# the SimSpace mgmt-plane egress proxy, and this role runs before any other apt
+# proxy is configured — so it sets its own. "" to disable (e.g. a range with
+# direct DNS/egress). 10.255.240.1:3128 is the universal mgmt-plane proxy.
+nexus_apt_proxy: "http://{{ inet_proxy_addr | default('10.255.240.1') }}:{{ inet_proxy_port | default('3128') }}"
+
 # Boot-time apt/dpkg lock wait for the cache refresh (Ubuntu's first-boot
 # unattended-upgrades holds the lock for minutes). tries * delay = max seconds.
 nexus_apt_lock_tries: 60
