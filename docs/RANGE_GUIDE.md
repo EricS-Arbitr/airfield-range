@@ -11,6 +11,9 @@ source on the range reports to it. (A sibling build adds a distributed Splunk
 cluster and a Malcolm OT appliance alongside Security Onion; that variant has
 its own reference.)
 
+For scenario framing, cyber key-terrain tiering and the intentional-vulnerability
+catalogue, see [`SCENARIO_AND_KEY_TERRAIN.md`](SCENARIO_AND_KEY_TERRAIN.md).
+
 ---
 
 ## At a glance
