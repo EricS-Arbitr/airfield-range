@@ -1,6 +1,6 @@
 ---
 # host_vars/bs-eng05.yml — Linux (Ubuntu)
-# Image:   global/RDP_Ubuntu_Desktop_25:1.1.0
+# Image:   global/RDP_Ubuntu_Desktop_24.04:1.2.4
 # Mgmt:    10.255.240.121/20 (position FIRST → eth0)
 ansible_host: "10.255.240.121"
 network_interfaces:

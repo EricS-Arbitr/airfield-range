@@ -1,0 +1,16 @@
+---
+# ============================================================
+# ubuntu24_124.yml — Ubuntu Desktop 24.04 image 1.2.4 account override
+# ============================================================
+# bs-eng05, bs-eng06. The RDP_Ubuntu_Desktop_24.04:1.2.4 image ships
+# xadmin / PocketFullofShellCod3! — NOT the simspace/simspace1 that
+# group_vars/linux.yml defaults to for the 1.1.0 images (including the
+# other [ubuntu24] hosts, which run 24.04:1.1.0). SimSpace stock-image
+# credentials track the image BUILD (1.2.x → xadmin), not the OS release,
+# so these two hosts need their own override even though they are 24.04
+# like [ubuntu24]. [ubuntu24_124] is a child of [linux], so it overrides
+# only the account; ansible_connection and ansible_become_method still
+# come from linux.yml.
+ansible_user: xadmin
+ansible_ssh_pass: 'PocketFullofShellCod3!'
+ansible_become_pass: 'PocketFullofShellCod3!'

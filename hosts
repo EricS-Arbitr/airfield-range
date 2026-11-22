@@ -608,14 +608,14 @@ fuel-farm-sim
 fuel-hist
 fuel-db
 
-[ubuntu25]
+[ubuntu24_124]
 bs-eng05
 bs-eng06
 
 [linux:children]
 ubuntu22
 ubuntu24
-ubuntu25
+ubuntu24_124
 
 # Ubuntu Desktop variants (GNOME initial-setup wizard needs suppression)
 [linux_desktop]
