@@ -602,15 +602,15 @@ bs-ns1
 bs-ro-hist
 soc-openvas
 soc-syslog
+
+[ubuntu24_124]
+bs-eng05
+bs-eng06
 control-room-hmi
 ff-plc-1
 fuel-farm-sim
 fuel-hist
 fuel-db
-
-[ubuntu24_124]
-bs-eng05
-bs-eng06
 
 [linux:children]
 ubuntu22
