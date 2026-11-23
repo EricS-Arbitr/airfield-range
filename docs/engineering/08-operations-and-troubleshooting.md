@@ -9,11 +9,14 @@ the per-group `group_vars`. The values below are the current range **defaults** 
 rotate them before any deployment that is not a lab.
 
 The two variants are built on **different platform image generations**, which is
-the one credential difference that bites: the monitoring-only variant runs the
-1.1.x images (Windows local admin `simspace`), the Splunk-stacked variant the
-1.2.x images (Windows local admin `xadmin`). Using the wrong account for the
-image generation does not fail fast — it retries to timeout and looks like an
-unbooted host.
+the one credential difference that bites: the monitoring-only variant's Windows
+hosts run the 1.1.x images (local admin `simspace`), the Splunk-stacked
+variant's the 1.2.x images (local admin `xadmin`). Independently of the variant,
+the Engineering Linux hosts (`bs-eng05`, `bs-eng06`) and the five fuel-farm hosts
+run the noble `RDP_Ubuntu_Desktop_24.04:1.2.4` image (local admin `xadmin`) — the
+only 24.04 platform tag that genuinely boots noble; the `*_24.04:1.1.0` Server
+and Desktop tags boot jammy. Using the wrong account for the image generation
+does not fail fast — it retries to timeout and looks like an unbooted host.
 
 | System | Access | Username | Password |
 |---|---|---|---|
@@ -22,8 +25,8 @@ unbooted host.
 | Domain admin (both domains) | `blackstone.mil` / `fops.blackstone.mil` | `simspace` *(mon-only)* · `xadmin` *(stacked)* | `Simspace1!Simspace1!` *(mon-only)* · `ConfigingInTheNameOf1!` *(stacked)* |
 | Domain users | both domains | seeded identities | (the domain-admin password) |
 | Windows hosts | RDP / WinRM | `simspace` *(1.1.x)* · `xadmin` *(1.2.x)* | `Simspace1!Simspace1!` · `ConfigingInTheNameOf1!` |
-| Linux hosts | SSH | `simspace` | `simspace1` |
-| Ubuntu Desktop 25 *(stacked)* | SSH / console | `xadmin` | `PocketFullofShellCod3!` |
+| Linux hosts (jammy / 1.1.0 images) | SSH | `simspace` | `simspace1` |
+| Engineering Linux + fuel farm (`ubuntu24_124`, noble `RDP_Ubuntu_Desktop_24.04:1.2.4`) | SSH / console | `xadmin` | `PocketFullofShellCod3!` |
 | pfSense firewalls | SSH / web | `admin` | `simspace1` |
 | VyOS routers | SSH | `vyos` | `Simspace1!` |
 | OpenPLC / FUXA / InfluxDB / fuel audit DB | OT | role accounts | (vault; default `Simspace1!…`) |

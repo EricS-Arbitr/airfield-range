@@ -26,7 +26,7 @@ Platform / OS groups:
 | Group | Size | Meaning |
 |---|---|---|
 | `windows` | 48 | all Windows VMs (`:children` of `win10` 15 / `win11` 23 / `winserver2022` 10) |
-| `linux` | 26 (30 stacked) | `:children` of `ubuntu22` / `ubuntu24` / `ubuntu25`; the stacked variant adds the four Splunk VMs |
+| `linux` | 26 (30 stacked) | `:children` of `ubuntu22` / `ubuntu24` / `ubuntu24_124`; the stacked variant adds the four Splunk VMs |
 | `vyos` | 5 | `bs-edge-rtr`, `bs-core-rtr`, `bs-ops-rtr`, `bs-sec-rtr`, `bs-modbus-gateway` |
 | `pfsense` | 2 | `bs-edge-fw`, `bs-ops-fw` |
 
@@ -95,8 +95,10 @@ fetch the in-range mirror from that IP.
    registry, subnets, airgap + Nexus source URLs), `vault.yml` (encrypted
    secrets).
 2. `group_vars/<group>.yml` — `windows.yml`, `linux.yml`, `vyos.yml`,
-   `pfsense.yml`, `blackstone.yml`, `fops.yml`, `fuel.yml`, `atc.yml`, and (on
-   the stacked variant) `ubuntu25.yml`, `malcolm.yml`, `splunk_indexer.yml`,
+   `pfsense.yml`, `blackstone.yml`, `fops.yml`, `fuel.yml`, `atc.yml`,
+   `ubuntu24_124.yml` (the noble `RDP_Ubuntu_Desktop_24.04:1.2.4` hosts —
+   Engineering Linux + the five fuel-farm hosts — which use the `xadmin`
+   account), and (on the stacked variant) `malcolm.yml`, `splunk_indexer.yml`,
    `splunk_search_head.yml`.
 3. `host_vars/<host>.yml` — per-host IPs, interfaces, role-specific tuning.
 4. Inline play vars in `site.yml`.

@@ -432,15 +432,20 @@ any" rules; a cross-boundary reachability test that succeeds is expected for now
 | Domain admin | both domains | `simspace` | (see `group_vars`) |
 | Domain users | both domains | seeded identities | (see `group_vars`) |
 | Windows hosts | RDP / WinRM | `simspace` | (see `group_vars`) |
-| Linux hosts | SSH | `simspace` | (see `group_vars`) |
+| Linux hosts (jammy / 1.1.0 images) | SSH | `simspace` | (see `group_vars`) |
+| Engineering Linux + fuel farm (`ubuntu24_124`, noble `RDP_Ubuntu_Desktop_24.04:1.2.4`) | SSH / console | `xadmin` | (see `group_vars`) |
 | pfSense firewalls | SSH / web | `admin` | (see `group_vars`) |
 | VyOS routers | SSH | `vyos` | (see `group_vars`) |
 | OpenPLC / FUXA / InfluxDB / fuel audit DB | OT | role accounts | (vault) |
 | SO node join secret | — | — | (vault) |
 
-Workstation and server local accounts are the 1.1.x platform image's `simspace`
-account on this variant. Using the wrong account for the image generation does
-not fail fast; it retries until timeout and looks like an unbooted host.
+Most workstation and server local accounts are the 1.1.x platform image's
+`simspace` account on this variant. The exceptions are the Engineering Linux
+hosts (`bs-eng05`, `bs-eng06`) and the five fuel-farm hosts, which run the noble
+`RDP_Ubuntu_Desktop_24.04:1.2.4` image and use `xadmin` — the only 24.04 tag
+that genuinely boots noble (the `*_24.04:1.1.0` tags boot jammy). Using the wrong
+account for the image generation does not fail fast; it retries until timeout and
+looks like an unbooted host.
 
 ---
 
